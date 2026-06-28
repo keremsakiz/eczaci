@@ -1,0 +1,1010 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>Eczacı</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: #2b2233;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-user-select: none; user-select: none;
+    touch-action: none;
+  }
+  #game {
+    display: block;
+    position: absolute;
+    top: 0; left: 0;
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+"use strict";
+
+// =====================================================================
+//  CONFIG — tüm sayısal ayarlar burada
+// =====================================================================
+const CONFIG = {
+  startMoney: 0,
+  startReputation: 50,
+  maxReputation: 100,
+  minReputation: 0,
+
+  pricePerMedicine: 10,     // doğru servis başına her ilaç değeri (₺)
+  repGainCorrect: 2,        // doğru serviste itibar artışı
+  repLossWrong: 5,          // yanlış serviste itibar kaybı
+
+  prescriptionChance: 0.5,  // %50 reçeteli, %50 semptomlu
+  minPrescriptionItems: 1,
+  maxPrescriptionItems: 3,
+
+  feedbackDuration: 0.8,    // feedback gösterim süresi (sn)
+  patientEnterTime: 0.35,   // hasta giriş animasyon süresi (sn)
+
+  // --- Faz 1: gün / zaman ---
+  dayDuration: 90,          // bir günün uzunluğu (sn) — zaman çubuğu dolunca gün biter
+  dailyGoal: 150,           // gün başı hedef para (gerçek hedef = dailyGoal * gün no)
+
+  // --- Faz 1: hasta sırası (kuyruk) ---
+  maxQueue: 3,              // ekranda aynı anda max hasta
+  spawnInterval: 4,         // yeni hasta gelme aralığı (sn) — gün başı
+  minSpawnInterval: 1.5,    // gün sonuna doğru alt sınır
+
+  // --- Faz 1: sabır ---
+  basePatience: 12,         // hasta sabrı (sn)
+  angryRepLoss: 8,          // sabrı biten hasta küserse itibar kaybı
+  queuePatienceMultiplier: 0.5, // sırada bekleyenlerin sabır azalma hızı (aktife göre)
+
+  // tasarım referans çözünürlüğü (9:16)
+  designW: 540,
+  designH: 960,
+
+  // renk paleti
+  colors: {
+    bg: "#f3ecf7",
+    bgTop: "#e7d9f0",
+    hudBg: "#ffffff",
+    hudShadow: "rgba(120,90,150,0.18)",
+    text: "#4a3b58",
+    textSoft: "#8a7a99",
+    accent: "#a779d6",
+    accentDark: "#8a5cc0",
+    counterBg: "#ece2f5",
+    bubble: "#ffffff",
+    serveBtn: "#5ec48a",
+    serveBtnDark: "#3da76d",
+    serveBtnDisabled: "#c4bccd",
+    good: "#5ec48a",
+    bad: "#e8736b",
+    repBar: "#f6c453",
+    timeBar: "#79c0e8",
+    patGood: "#5ec48a",
+    patMid: "#f6c453",
+    patBad: "#e8736b"
+  }
+};
+
+// =====================================================================
+//  İLAÇ VERİSİ — 6 ilaç
+// =====================================================================
+const MEDICINES = [
+  { id: "agriban",   name: "Ağrıban",     emoji: "💊", color: "#f08a8a", category: "ağrı",       assetKey: "med_agriban" },
+  { id: "oksurmez",  name: "Öksürmez",    emoji: "🍯", color: "#f4b160", category: "öksürük",    assetKey: "med_oksurmez" },
+  { id: "nezleson",  name: "Nezleson",    emoji: "🤧", color: "#7fb4e8", category: "nezle",      assetKey: "med_nezleson" },
+  { id: "cvitamin",  name: "C-Vitamin+",  emoji: "🍊", color: "#f6d35b", category: "bağışıklık", assetKey: "med_cvitamin" },
+  { id: "miderahat", name: "Miderahat",   emoji: "🌿", color: "#86cf9a", category: "mide",       assetKey: "med_miderahat" },
+  { id: "bandajix",  name: "Bandajix",    emoji: "🩹", color: "#f3a8c4", category: "yara",       assetKey: "med_bandajix" }
+];
+
+// semptom emojileri -> kategori eşleşmesi (semptomlu hastalar için)
+const SYMPTOMS = [
+  { emoji: "🤕", category: "ağrı",       label: "Başım ağrıyor" },
+  { emoji: "😷", category: "öksürük",    label: "Öksürüyorum" },
+  { emoji: "🤧", category: "nezle",      label: "Nezle oldum" },
+  { emoji: "🥶", category: "bağışıklık", label: "Hâlsizim" },
+  { emoji: "🤢", category: "mide",       label: "Midem bulanıyor" },
+  { emoji: "🩸", category: "yara",       label: "Yaralandım" }
+];
+
+const PATIENT_AVATARS = [
+  { emoji: "👵", assetKey: "patient_granny" },
+  { emoji: "👨", assetKey: "patient_man" },
+  { emoji: "🧑", assetKey: "patient_youth" },
+  { emoji: "🤰", assetKey: "patient_woman" }
+];
+
+// =====================================================================
+//  ASSET KATMANI — sonradan PNG giydirmek için soyutlama
+//  (şu an hiçbir dosya yüklenmiyor; images boş => her zaman fallback çizilir)
+// =====================================================================
+const Assets = {
+  images: {},   // key -> yüklenmiş Image
+  loaded: 0,
+  total: 0,
+  // Image objesi oluşturur, onload'da images[key] doldurur. Şimdilik çağrılmıyor.
+  load(key, src) {
+    this.total++;
+    const img = new Image();
+    img.onload = () => { this.images[key] = img; this.loaded++; };
+    img.onerror = () => { this.loaded++; };
+    img.src = src;
+    return img;
+  }
+};
+
+const Sprite = {
+  // Asset yüklüyse onu çizer; değilse fallback(ctx,x,y,w,h) ile mevcut çizimi yapar.
+  draw(ctx, key, x, y, w, h, fallback) {
+    const img = Assets.images[key];
+    if (img && img.complete && img.naturalWidth > 0) {
+      ctx.drawImage(img, x, y, w, h);
+    } else if (fallback) {
+      fallback(ctx, x, y, w, h);
+    }
+  }
+};
+
+// =====================================================================
+//  STATE MACHINE
+// =====================================================================
+const STATE = { MENU: "MENU", PLAYING: "PLAYING", DAYEND: "DAYEND", GAMEOVER: "GAMEOVER" };
+
+const game = {
+  state: STATE.PLAYING,   // şimdilik direkt PLAYING aktif
+  money: CONFIG.startMoney,
+  reputation: CONFIG.startReputation,
+
+  // gün / zaman
+  dayNumber: 1,
+  dayTime: 0,             // 0..dayDuration
+  spawnTimer: 0,          // yeni hasta sayacı
+  dayStats: { served: 0, correct: 0, wrong: 0, angry: 0, money: 0 },
+
+  // kuyruk
+  queue: [],              // hasta dizisi; queue[0] = aktif hasta
+  counter: [],            // tezgaha konan ilaç id'leri (aktif hastaya)
+  feedback: null,         // { ok, angry, text, t }
+
+  clock: 0                // global animasyon saati
+};
+
+// runtime layout
+let layout = {
+  scale: 1, w: 0, h: 0,
+  shelfButtons: [],
+  counterSlots: [],
+  serveBtn: { x: 0, y: 0, w: 0, h: 0 },
+  nextDayBtn: { x: 0, y: 0, w: 0, h: 0 }
+};
+
+// =====================================================================
+//  CANVAS / RETINA KURULUMU
+// =====================================================================
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+let DPR = 1;
+
+function resize() {
+  DPR = window.devicePixelRatio || 1;
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  canvas.style.width = w + "px";
+  canvas.style.height = h + "px";
+  canvas.width = Math.round(w * DPR);
+  canvas.height = Math.round(h * DPR);
+  layout.w = w;
+  layout.h = h;
+  computeLayout();
+}
+window.addEventListener("resize", resize);
+window.addEventListener("orientationchange", resize);
+
+// =====================================================================
+//  LAYOUT HESABI
+// =====================================================================
+function computeLayout() {
+  const w = layout.w, h = layout.h;
+  const padX = w * 0.05;
+  const hudY = (window.__safeTop || 0) + h * 0.015;
+  const hudH = h * 0.085;
+
+  // --- İlaç rafı (2x3) ---
+  const shelfTop = h * 0.55;
+  const shelfBottom = h * 0.80;
+  const cols = 3, rows = 2;
+  const gap = w * 0.03;
+  const cellW = (w - padX * 2 - gap * (cols - 1)) / cols;
+  const cellH = (shelfBottom - shelfTop - gap * (rows - 1)) / rows;
+
+  layout.shelfButtons = [];
+  for (let i = 0; i < MEDICINES.length; i++) {
+    const r = Math.floor(i / cols);
+    const c = i % cols;
+    layout.shelfButtons.push({
+      id: MEDICINES[i].id,
+      x: padX + c * (cellW + gap),
+      y: shelfTop + r * (cellH + gap),
+      w: cellW,
+      h: cellH
+    });
+  }
+
+  // --- Servis butonu ---
+  const btnH = h * 0.085;
+  const btnY = h - btnH - h * 0.02 - (window.__safeBottom || 0);
+  layout.serveBtn = { x: padX, y: btnY, w: w - padX * 2, h: btnH };
+
+  // --- Tezgah alanı ---
+  layout._counterArea = {
+    x: padX,
+    y: shelfBottom + h * 0.012,
+    w: w - padX * 2,
+    h: btnY - (shelfBottom + h * 0.012) - h * 0.012
+  };
+
+  layout._hud = { x: padX, y: hudY, w: w - padX * 2, h: hudH };
+
+  layout._patientArea = {
+    x: 0,
+    y: layout._hud.y + layout._hud.h,
+    w: w,
+    h: shelfTop - (layout._hud.y + layout._hud.h)
+  };
+
+  rebuildCounterSlots();
+}
+
+function rebuildCounterSlots() {
+  const area = layout._counterArea;
+  if (!area) return;
+  layout.counterSlots = [];
+  const n = game.counter.length;
+  if (n === 0) return;
+  const slotMax = layout.w * 0.13;
+  const slot = Math.min(slotMax, area.h * 0.9);
+  const gap = layout.w * 0.02;
+  const totalW = n * slot + (n - 1) * gap;
+  let sx = area.x + (area.w - totalW) / 2;
+  const sy = area.y + (area.h - slot) / 2;
+  for (let i = 0; i < n; i++) {
+    layout.counterSlots.push({ id: game.counter[i], idx: i, x: sx, y: sy, w: slot, h: slot });
+    sx += slot + gap;
+  }
+}
+
+// =====================================================================
+//  OYUN MANTIĞI
+// =====================================================================
+function getMedicine(id) { return MEDICINES.find(m => m.id === id); }
+function rand(n) { return Math.floor(Math.random() * n); }
+function pick(arr) { return arr[rand(arr.length)]; }
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+function activePatient() { return game.queue.length ? game.queue[0] : null; }
+
+function goalForDay() { return CONFIG.dailyGoal * game.dayNumber; }
+
+// yeni hasta üret ve kuyruğa ekle
+function spawnPatient() {
+  if (game.queue.length >= CONFIG.maxQueue) return;
+
+  const avatarDef = pick(PATIENT_AVATARS);
+  const isPrescription = Math.random() < CONFIG.prescriptionChance;
+
+  let request;
+  if (isPrescription) {
+    const count = CONFIG.minPrescriptionItems +
+      rand(CONFIG.maxPrescriptionItems - CONFIG.minPrescriptionItems + 1);
+    const pool = MEDICINES.slice();
+    const wanted = [];
+    for (let i = 0; i < count && pool.length; i++) {
+      wanted.push(pool.splice(rand(pool.length), 1)[0].id);
+    }
+    request = { type: "prescription", medicineIds: wanted };
+  } else {
+    const symptom = pick(SYMPTOMS);
+    request = { type: "symptom", symptom };
+  }
+
+  const patient = {
+    avatar: avatarDef.emoji,
+    avatarKey: avatarDef.assetKey,
+    request,
+    maxPatience: CONFIG.basePatience,
+    patience: CONFIG.basePatience,
+    enterT: 0,
+    posCurrent: game.queue.length + 0.85  // sağdan kayarak girsin
+  };
+  game.queue.push(patient);
+}
+
+// aktif hastanın beklediği doğru ilaç id seti
+function expectedMedicineIds() {
+  const p = activePatient();
+  if (!p) return [];
+  if (p.request.type === "prescription") {
+    return p.request.medicineIds.slice();
+  } else {
+    return MEDICINES.filter(m => m.category === p.request.symptom.category).map(m => m.id);
+  }
+}
+
+function tapMedicine(id) {
+  if (game.feedback || !activePatient()) return;
+  game.counter.push(id);
+  rebuildCounterSlots();
+}
+
+function removeFromCounter(idx) {
+  if (game.feedback) return;
+  game.counter.splice(idx, 1);
+  rebuildCounterSlots();
+}
+
+function checkOrder() {
+  const p = activePatient();
+  if (game.feedback || !p) return;
+  if (game.counter.length === 0) return;
+
+  const expected = expectedMedicineIds();
+  const given = game.counter.slice();
+
+  let correct = false;
+  if (p.request.type === "prescription") {
+    correct = expected.length === given.length &&
+      expected.every(id => given.includes(id)) &&
+      given.every(id => expected.includes(id));
+  } else {
+    correct = given.length === 1 && expected.includes(given[0]);
+  }
+
+  game.dayStats.served++;
+  if (correct) {
+    const earn = given.length * CONFIG.pricePerMedicine;
+    game.money += earn;
+    game.dayStats.money += earn;
+    game.dayStats.correct++;
+    game.reputation = clamp(game.reputation + CONFIG.repGainCorrect, CONFIG.minReputation, CONFIG.maxReputation);
+    game.feedback = { ok: true, angry: false, text: "✓ Teşekkürler!  +" + earn + "₺", t: 0 };
+  } else {
+    game.dayStats.wrong++;
+    game.reputation = clamp(game.reputation - CONFIG.repLossWrong, CONFIG.minReputation, CONFIG.maxReputation);
+    game.feedback = { ok: false, angry: false, text: "✗ Yanlış ilaç!", t: 0 };
+  }
+}
+
+// feedback bitince aktif hasta çıkar, sıra kayar
+function onFeedbackEnd() {
+  game.queue.shift();
+  game.counter = [];
+  game.feedback = null;
+  rebuildCounterSlots();
+}
+
+function endDay() {
+  game.state = STATE.DAYEND;
+  game.feedback = null;
+  game.dayResult = {
+    goal: goalForDay(),
+    met: game.dayStats.money >= goalForDay()
+  };
+}
+
+function startNextDay() {
+  game.dayNumber++;
+  game.dayTime = 0;
+  game.spawnTimer = CONFIG.spawnInterval; // ilk hasta hemen, sonrakiler aralıkla
+  game.queue = [];
+  game.counter = [];
+  game.feedback = null;
+  game.dayStats = { served: 0, correct: 0, wrong: 0, angry: 0, money: 0 };
+  rebuildCounterSlots();
+  game.state = STATE.PLAYING;
+  spawnPatient();
+}
+
+// =====================================================================
+//  UPDATE
+// =====================================================================
+function update(dt) {
+  game.clock += dt;
+  if (game.state !== STATE.PLAYING) return;
+
+  // gün zamanı
+  game.dayTime += dt;
+  if (game.dayTime >= CONFIG.dayDuration) {
+    game.dayTime = CONFIG.dayDuration;
+    endDay();
+    return;
+  }
+
+  // hasta spawn (gün ilerledikçe aralık kısalır)
+  game.spawnTimer += dt;
+  const prog = game.dayTime / CONFIG.dayDuration;
+  const interval = lerp(CONFIG.spawnInterval, CONFIG.minSpawnInterval, prog);
+  if (game.spawnTimer >= interval && game.queue.length < CONFIG.maxQueue) {
+    game.spawnTimer = 0;
+    spawnPatient();
+  }
+
+  // pozisyon + giriş animasyonları
+  for (let i = 0; i < game.queue.length; i++) {
+    const p = game.queue[i];
+    p.posCurrent += (i - p.posCurrent) * Math.min(1, dt * 10);
+    if (p.enterT < CONFIG.patientEnterTime) p.enterT += dt;
+  }
+
+  // sabır + feedback
+  if (game.feedback) {
+    game.feedback.t += dt;
+    if (game.feedback.t >= CONFIG.feedbackDuration) onFeedbackEnd();
+  } else {
+    for (let i = 0; i < game.queue.length; i++) {
+      const rate = i === 0 ? 1 : CONFIG.queuePatienceMultiplier;
+      game.queue[i].patience -= dt * rate;
+    }
+    const act = activePatient();
+    if (act && act.patience <= 0) {
+      act.patience = 0;
+      game.reputation = clamp(game.reputation - CONFIG.angryRepLoss, CONFIG.minReputation, CONFIG.maxReputation);
+      game.dayStats.angry++;
+      game.feedback = { ok: false, angry: true, text: "😠 Çok beklettin!", t: 0 };
+    }
+  }
+}
+
+// =====================================================================
+//  RENDER YARDIMCILARI
+// =====================================================================
+function roundRect(x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+function fillRoundRect(x, y, w, h, r, color) {
+  roundRect(x, y, w, h, r);
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+function text(str, x, y, size, color, align, weight) {
+  ctx.fillStyle = color;
+  ctx.textAlign = align || "left";
+  ctx.textBaseline = "middle";
+  ctx.font = (weight || "600") + " " + size + "px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+  ctx.fillText(str, x, y);
+}
+
+// =====================================================================
+//  RENDER — bölümler
+// =====================================================================
+function drawBackground() {
+  const w = layout.w, h = layout.h;
+  Sprite.draw(ctx, "bg_pharmacy", 0, 0, w, h, (ctx, x, y, bw, bh) => {
+    const g = ctx.createLinearGradient(0, 0, 0, bh);
+    g.addColorStop(0, CONFIG.colors.bgTop);
+    g.addColorStop(0.5, CONFIG.colors.bg);
+    g.addColorStop(1, CONFIG.colors.bg);
+    ctx.fillStyle = g;
+    ctx.fillRect(x, y, bw, bh);
+  });
+}
+
+function drawHUD() {
+  const hud = layout._hud;
+  const c = CONFIG.colors;
+
+  ctx.save();
+  ctx.shadowColor = c.hudShadow;
+  ctx.shadowBlur = 14;
+  ctx.shadowOffsetY = 4;
+  fillRoundRect(hud.x, hud.y, hud.w, hud.h, hud.h * 0.24, c.hudBg);
+  ctx.restore();
+
+  const rowY = hud.y + hud.h * 0.30;
+  const fs = hud.h * 0.28;
+
+  // 💰 Para (sol)
+  text("💰 " + game.money + "₺", hud.x + hud.w * 0.04, rowY, fs, c.text, "left", "700");
+  // 📅 Gün (orta)
+  text("📅 Gün " + game.dayNumber, hud.x + hud.w * 0.5, rowY, fs, c.text, "center", "700");
+  // ⭐ İtibar (sağ)
+  text("⭐ " + Math.round(game.reputation), hud.x + hud.w * 0.96, rowY, fs, c.text, "right", "700");
+
+  // alt satır: itibar barı + gün zaman çubuğu
+  const barY = hud.y + hud.h * 0.64;
+  const barH = hud.h * 0.18;
+
+  const repX = hud.x + hud.w * 0.04;
+  const repW = hud.w * 0.42;
+  fillRoundRect(repX, barY, repW, barH, barH / 2, "#eee3d2");
+  const repFill = repW * (game.reputation / CONFIG.maxReputation);
+  if (repFill > 1) fillRoundRect(repX, barY, repFill, barH, barH / 2, c.repBar);
+
+  const timeX = hud.x + hud.w * 0.54;
+  const timeW = hud.w * 0.42;
+  fillRoundRect(timeX, barY, timeW, barH, barH / 2, "#dfeaf3");
+  const timeFill = timeW * (game.dayTime / CONFIG.dayDuration);
+  if (timeFill > 1) fillRoundRect(timeX, barY, timeFill, barH, barH / 2, c.timeBar);
+  text("🕐", timeX - hud.w * 0.005, barY + barH / 2, barH * 1.5, c.text, "right", "400");
+}
+
+// ---- kuyruk yerleşimi: pozisyon değerini ekran koordinatına çevir ----
+function slotLayout(i) {
+  const area = layout._patientArea;
+  if (i <= 0) {
+    return {
+      x: area.x + area.w * 0.5,
+      y: area.y + area.h * 0.66,
+      size: Math.min(area.w * 0.30, area.h * 0.40),
+      alpha: 1,
+      active: 1
+    };
+  }
+  const small = Math.min(area.w * 0.13, area.h * 0.17);
+  const startX = area.x + area.w * 0.40;
+  return {
+    x: startX + (i - 1) * (small * 1.35),
+    y: area.y + area.h * 0.18,
+    size: small,
+    alpha: 0.55,
+    active: 0
+  };
+}
+function getPatientLayout(pos) {
+  const i0 = Math.floor(pos), f = pos - i0;
+  const a = slotLayout(i0), b = slotLayout(i0 + 1);
+  return {
+    x: lerp(a.x, b.x, f),
+    y: lerp(a.y, b.y, f),
+    size: lerp(a.size, b.size, f),
+    alpha: lerp(a.alpha, b.alpha, f),
+    active: lerp(a.active, b.active, f)
+  };
+}
+
+function drawPatienceBar(cx, cy, w, ratio, alpha) {
+  const c = CONFIG.colors;
+  const h = w * 0.13;
+  ctx.globalAlpha = alpha;
+  fillRoundRect(cx - w / 2, cy, w, h, h / 2, "#e6dcef");
+  const col = ratio > 0.5 ? c.patGood : ratio > 0.25 ? c.patMid : c.patBad;
+  if (ratio > 0.02) fillRoundRect(cx - w / 2, cy, w * ratio, h, h / 2, col);
+  ctx.globalAlpha = 1;
+}
+
+function drawOnePatient(p) {
+  const c = CONFIG.colors;
+  const L = getPatientLayout(p.posCurrent);
+  const enter = clamp(p.enterT / CONFIG.patientEnterTime, 0, 1);
+  const ease = 1 - Math.pow(1 - enter, 3);
+  const alpha = L.alpha * ease;
+
+  const ratio = clamp(p.patience / p.maxPatience, 0, 1);
+  // sabır azaldıkça titreme (kızgınlık)
+  let dx = 0;
+  if (ratio < 0.35) dx = Math.sin(game.clock * 24) * L.size * 0.05 * (1 - ratio / 0.35);
+
+  const cx = L.x + dx;
+  const cy = L.y;
+
+  // avatar (zemin dairesi + emoji) — asset varsa onunla, yoksa fallback
+  ctx.globalAlpha = alpha;
+  const av = L.size * 0.62;
+  Sprite.draw(ctx, p.avatarKey, cx - av, cy - av, av * 2, av * 2, () => {
+    ctx.beginPath();
+    ctx.arc(cx, cy, L.size * 0.62, 0, Math.PI * 2);
+    ctx.fillStyle = "#ffffff";
+    ctx.save();
+    ctx.shadowColor = c.hudShadow;
+    ctx.shadowBlur = 14;
+    ctx.shadowOffsetY = 4;
+    ctx.fill();
+    ctx.restore();
+    text(p.avatar, cx, cy, L.size, "#000", "center", "400");
+  });
+  ctx.globalAlpha = 1;
+
+  // sabır barı (avatarın altında)
+  drawPatienceBar(cx, cy + L.size * 0.62, L.size * 0.95, ratio, alpha);
+}
+
+function drawActiveBubble(p) {
+  const area = layout._patientArea;
+  const c = CONFIG.colors;
+  const L = getPatientLayout(p.posCurrent);
+  if (L.active < 0.12) return;
+
+  const enter = clamp(p.enterT / CONFIG.patientEnterTime, 0, 1);
+  const a = L.active * (1 - Math.pow(1 - enter, 3));
+
+  const bubbleW = Math.min(area.w * 0.78, area.w * 0.74);
+  const bubbleH = area.h * 0.30;
+  const bubbleX = area.x + area.w / 2 - bubbleW / 2;
+  const bubbleY = area.y + area.h * 0.02;
+
+  ctx.globalAlpha = a;
+  drawSpeechBubble(bubbleX, bubbleY, bubbleW, bubbleH, area.x + area.w / 2, bubbleY + bubbleH);
+  if (p.request.type === "prescription") {
+    drawPrescription(p.request.medicineIds, bubbleX, bubbleY, bubbleW, bubbleH);
+  } else {
+    drawSymptom(p.request.symptom, bubbleX, bubbleY, bubbleW, bubbleH);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawQueue() {
+  const area = layout._patientArea;
+  if (game.queue.length === 0) {
+    text("🚪 Müşteri bekleniyor...", area.x + area.w / 2, area.y + area.h * 0.6,
+      area.h * 0.06, CONFIG.colors.textSoft, "center", "600");
+    return;
+  }
+  // arkadakiler önce, aktif en üstte
+  for (let i = game.queue.length - 1; i >= 1; i--) drawOnePatient(game.queue[i]);
+  drawOnePatient(game.queue[0]);
+  // aktif hasta balonu hepsinin üstünde
+  drawActiveBubble(game.queue[0]);
+}
+
+function drawSpeechBubble(x, y, w, h, tailX, tailBaseY) {
+  const c = CONFIG.colors;
+  ctx.save();
+  ctx.shadowColor = c.hudShadow;
+  ctx.shadowBlur = 14;
+  ctx.shadowOffsetY = 4;
+  fillRoundRect(x, y, w, h, h * 0.22, c.bubble);
+  ctx.beginPath();
+  ctx.moveTo(tailX - w * 0.06, tailBaseY - 2);
+  ctx.lineTo(tailX + w * 0.02, tailBaseY + h * 0.14);
+  ctx.lineTo(tailX + w * 0.06, tailBaseY - 2);
+  ctx.closePath();
+  ctx.fillStyle = c.bubble;
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawPrescription(ids, x, y, w, h) {
+  const c = CONFIG.colors;
+  text("📋 Reçete", x + w / 2, y + h * 0.20, h * 0.16, c.textSoft, "center", "700");
+  const n = ids.length;
+  const iconMax = h * 0.42;
+  const gap = w * 0.04;
+  const iconSize = Math.min(iconMax, (w * 0.82 - gap * (n - 1)) / n);
+  const totalW = n * iconSize + (n - 1) * gap;
+  let ix = x + (w - totalW) / 2;
+  const iy = y + h * 0.58;
+  for (const id of ids) {
+    const m = getMedicine(id);
+    fillRoundRect(ix, iy - iconSize / 2, iconSize, iconSize, iconSize * 0.26, m.color);
+    text(m.emoji, ix + iconSize / 2, iy, iconSize * 0.6, "#000", "center", "400");
+    ix += iconSize + gap;
+  }
+}
+
+function drawSymptom(symptom, x, y, w, h) {
+  const c = CONFIG.colors;
+  text("💬", x + w / 2, y + h * 0.22, h * 0.16, c.textSoft, "center", "700");
+  text(symptom.emoji, x + w / 2, y + h * 0.55, h * 0.42, "#000", "center", "400");
+  text(symptom.label, x + w / 2, y + h * 0.85, h * 0.135, c.textSoft, "center", "600");
+}
+
+function drawShelf() {
+  const c = CONFIG.colors;
+  for (const btn of layout.shelfButtons) {
+    const m = getMedicine(btn.id);
+    const disabled = !!game.feedback || !activePatient();
+    ctx.globalAlpha = disabled ? 0.55 : 1;
+
+    Sprite.draw(ctx, m.assetKey, btn.x, btn.y, btn.w, btn.h, () => {
+      ctx.save();
+      ctx.shadowColor = c.hudShadow;
+      ctx.shadowBlur = 10;
+      ctx.shadowOffsetY = 3;
+      fillRoundRect(btn.x, btn.y, btn.w, btn.h, btn.h * 0.22, "#ffffff");
+      ctx.restore();
+
+      fillRoundRect(btn.x, btn.y, btn.w, btn.h * 0.58, btn.h * 0.22, m.color);
+      ctx.fillStyle = m.color;
+      ctx.fillRect(btn.x, btn.y + btn.h * 0.30, btn.w, btn.h * 0.28);
+
+      text(m.emoji, btn.x + btn.w / 2, btn.y + btn.h * 0.30, btn.h * 0.36, "#000", "center", "400");
+      text(m.name, btn.x + btn.w / 2, btn.y + btn.h * 0.78, btn.h * 0.155, c.text, "center", "700");
+    });
+
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawCounter() {
+  const c = CONFIG.colors;
+  const area = layout._counterArea;
+  if (!area) return;
+  Sprite.draw(ctx, "counter", area.x, area.y, area.w, area.h, () => {
+    fillRoundRect(area.x, area.y, area.w, area.h, area.h * 0.22, c.counterBg);
+  });
+
+  if (game.counter.length === 0) {
+    text("Tezgah boş — raftan ilaç seç", area.x + area.w / 2, area.y + area.h / 2,
+      area.h * 0.22, c.textSoft, "center", "600");
+    return;
+  }
+  for (const slot of layout.counterSlots) {
+    const m = getMedicine(slot.id);
+    ctx.save();
+    ctx.shadowColor = c.hudShadow;
+    ctx.shadowBlur = 8;
+    ctx.shadowOffsetY = 2;
+    fillRoundRect(slot.x, slot.y, slot.w, slot.h, slot.w * 0.24, m.color);
+    ctx.restore();
+    text(m.emoji, slot.x + slot.w / 2, slot.y + slot.h * 0.42, slot.w * 0.5, "#000", "center", "400");
+    text("✕", slot.x + slot.w * 0.82, slot.y + slot.h * 0.16, slot.w * 0.22, "rgba(74,59,88,0.55)", "center", "700");
+  }
+}
+
+function drawServeButton() {
+  const c = CONFIG.colors;
+  const b = layout.serveBtn;
+  const enabled = game.counter.length > 0 && !game.feedback;
+
+  Sprite.draw(ctx, "btn_serve", b.x, b.y, b.w, b.h, () => {
+    ctx.save();
+    if (enabled) {
+      ctx.shadowColor = "rgba(61,167,109,0.45)";
+      ctx.shadowBlur = 14;
+      ctx.shadowOffsetY = 5;
+    }
+    fillRoundRect(b.x, b.y, b.w, b.h, b.h * 0.32, enabled ? c.serveBtn : c.serveBtnDisabled);
+    ctx.restore();
+  });
+  text("SERVİS ET", b.x + b.w / 2, b.y + b.h / 2, b.h * 0.34,
+    enabled ? "#ffffff" : "#f0ecf4", "center", "800");
+}
+
+function drawFeedback() {
+  if (!game.feedback) return;
+  const c = CONFIG.colors;
+  const f = game.feedback;
+  const w = layout.w, h = layout.h;
+
+  const t = clamp(f.t / CONFIG.feedbackDuration, 0, 1);
+  const pop = t < 0.25 ? (t / 0.25) : 1;
+  const fade = t > 0.75 ? (1 - (t - 0.75) / 0.25) : 1;
+  const scale = 0.7 + 0.3 * pop;
+
+  ctx.save();
+  ctx.globalAlpha = fade;
+  const cx = w / 2;
+  const cy = layout._patientArea.y + layout._patientArea.h * 0.58;
+  ctx.translate(cx, cy);
+  ctx.scale(scale, scale);
+  ctx.translate(-cx, -cy);
+
+  const boxW = w * 0.74;
+  const boxH = h * 0.10;
+  const col = f.ok ? c.good : c.bad;
+
+  ctx.shadowColor = "rgba(0,0,0,0.18)";
+  ctx.shadowBlur = 20;
+  ctx.shadowOffsetY = 6;
+  fillRoundRect(cx - boxW / 2, cy - boxH / 2, boxW, boxH, boxH * 0.32, col);
+  ctx.shadowColor = "transparent";
+  text(f.text, cx, cy, boxH * 0.32, "#ffffff", "center", "800");
+  ctx.restore();
+}
+
+// ---- Gün sonu özet kartı ----
+function drawDayEnd() {
+  const w = layout.w, h = layout.h, c = CONFIG.colors;
+  const s = game.dayStats;
+  const res = game.dayResult || { goal: goalForDay(), met: s.money >= goalForDay() };
+
+  // hafif karartma
+  ctx.fillStyle = "rgba(60,40,80,0.28)";
+  ctx.fillRect(0, 0, w, h);
+
+  const cardW = w * 0.82;
+  const cardH = h * 0.56;
+  const cardX = (w - cardW) / 2;
+  const cardY = (h - cardH) / 2;
+
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.25)";
+  ctx.shadowBlur = 26;
+  ctx.shadowOffsetY = 8;
+  fillRoundRect(cardX, cardY, cardW, cardH, cardW * 0.08, "#ffffff");
+  ctx.restore();
+
+  // başlık şeridi
+  fillRoundRect(cardX, cardY, cardW, cardH * 0.18, cardW * 0.08, c.accent);
+  ctx.fillStyle = c.accent;
+  ctx.fillRect(cardX, cardY + cardH * 0.09, cardW, cardH * 0.09);
+  text("🌙 Gün " + game.dayNumber + " Bitti", cardX + cardW / 2, cardY + cardH * 0.09,
+    cardH * 0.06, "#ffffff", "center", "800");
+
+  // satırlar
+  const lx = cardX + cardW * 0.12;
+  const rx = cardX + cardW * 0.88;
+  let ly = cardY + cardH * 0.30;
+  const step = cardH * 0.095;
+  const fs = cardH * 0.05;
+  const row = (icon, label, val) => {
+    text(icon + " " + label, lx, ly, fs, c.text, "left", "600");
+    text(val, rx, ly, fs, c.text, "right", "800");
+    ly += step;
+  };
+  row("👥", "Servis edilen", String(s.served));
+  row("✓", "Doğru", String(s.correct));
+  row("✗", "Yanlış", String(s.wrong));
+  row("😠", "Küsen müşteri", String(s.angry));
+  row("💰", "Günlük kazanç", s.money + "₺");
+
+  // hedef durumu
+  const goalY = cardY + cardH * 0.745;
+  const goalCol = res.met ? c.good : c.bad;
+  const goalTxt = res.met
+    ? "🎯 Hedef tuttu! (" + res.goal + "₺)"
+    : "⚠️ Hedef tutmadı (" + res.goal + "₺)";
+  fillRoundRect(cardX + cardW * 0.08, goalY, cardW * 0.84, cardH * 0.09, cardH * 0.045, res.met ? "#e7f6ee" : "#fbe8e6");
+  text(goalTxt, cardX + cardW / 2, goalY + cardH * 0.045, cardH * 0.045, goalCol, "center", "800");
+
+  // Sonraki Gün butonu
+  const bW = cardW * 0.7, bH = cardH * 0.12;
+  const bX = cardX + (cardW - bW) / 2;
+  const bY = cardY + cardH * 0.86 - bH / 2;
+  layout.nextDayBtn = { x: bX, y: bY, w: bW, h: bH };
+  ctx.save();
+  ctx.shadowColor = "rgba(61,167,109,0.45)";
+  ctx.shadowBlur = 14;
+  ctx.shadowOffsetY = 5;
+  fillRoundRect(bX, bY, bW, bH, bH * 0.34, c.serveBtn);
+  ctx.restore();
+  text("Sonraki Gün →", bX + bW / 2, bY + bH / 2, bH * 0.36, "#ffffff", "center", "800");
+}
+
+function render() {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.clearRect(0, 0, layout.w, layout.h);
+  drawBackground();
+
+  if (game.state === STATE.PLAYING) {
+    drawHUD();
+    drawQueue();
+    drawShelf();
+    drawCounter();
+    drawServeButton();
+    drawFeedback();
+  } else if (game.state === STATE.DAYEND) {
+    // arka planda son kareyi koru + kart
+    drawHUD();
+    drawShelf();
+    drawCounter();
+    drawServeButton();
+    drawDayEnd();
+  } else if (game.state === STATE.MENU) {
+    drawMenuPlaceholder();
+  } else if (game.state === STATE.GAMEOVER) {
+    drawGameOverPlaceholder();
+  }
+}
+
+function drawMenuPlaceholder() {
+  text("ECZACI", layout.w / 2, layout.h * 0.4, 48, CONFIG.colors.text, "center", "800");
+  text("(MENU — yakında)", layout.w / 2, layout.h * 0.5, 18, CONFIG.colors.textSoft, "center", "600");
+}
+function drawGameOverPlaceholder() {
+  text("Oyun Bitti", layout.w / 2, layout.h * 0.4, 40, CONFIG.colors.text, "center", "800");
+  text("(GAMEOVER — yakında)", layout.w / 2, layout.h * 0.5, 18, CONFIG.colors.textSoft, "center", "600");
+}
+
+// =====================================================================
+//  DOKUNMA / TIKLAMA GİRİŞİ
+// =====================================================================
+function pointInRect(px, py, r) {
+  return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
+}
+
+function handleTap(px, py) {
+  if (game.state === STATE.DAYEND) {
+    if (pointInRect(px, py, layout.nextDayBtn)) startNextDay();
+    return;
+  }
+  if (game.state !== STATE.PLAYING) return;
+  if (game.feedback) return;
+
+  if (pointInRect(px, py, layout.serveBtn)) { checkOrder(); return; }
+
+  for (const slot of layout.counterSlots) {
+    if (pointInRect(px, py, slot)) { removeFromCounter(slot.idx); return; }
+  }
+  for (const btn of layout.shelfButtons) {
+    if (pointInRect(px, py, btn)) { tapMedicine(btn.id); return; }
+  }
+}
+
+function getEventPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  let clientX, clientY;
+  if (e.changedTouches && e.changedTouches.length) {
+    clientX = e.changedTouches[0].clientX;
+    clientY = e.changedTouches[0].clientY;
+  } else {
+    clientX = e.clientX;
+    clientY = e.clientY;
+  }
+  return { x: clientX - rect.left, y: clientY - rect.top };
+}
+
+canvas.addEventListener("touchstart", (e) => {
+  e.preventDefault();
+  const p = getEventPos(e);
+  handleTap(p.x, p.y);
+}, { passive: false });
+
+canvas.addEventListener("mousedown", (e) => {
+  const p = getEventPos(e);
+  handleTap(p.x, p.y);
+});
+
+// =====================================================================
+//  ANA DÖNGÜ (60 FPS)
+// =====================================================================
+let lastTime = performance.now();
+function loop(now) {
+  let dt = (now - lastTime) / 1000;
+  lastTime = now;
+  if (dt > 0.1) dt = 0.1;
+  update(dt);
+  render();
+  requestAnimationFrame(loop);
+}
+
+// =====================================================================
+//  TEST CHEAT'LERİ
+// =====================================================================
+window.cheats = {
+  addMoney(n) { game.money += (n || 0); },
+  setReputation(n) { game.reputation = clamp(n, CONFIG.minReputation, CONFIG.maxReputation); },
+  skipDay() { if (game.state === STATE.PLAYING) endDay(); },
+  setPatience(n) { const p = activePatient(); if (p) p.patience = n; },
+  clearQueue() { game.queue = []; game.counter = []; game.feedback = null; rebuildCounterSlots(); },
+  newPatient() { spawnPatient(); },
+  assetStatus() {
+    const keys = ["bg_pharmacy", "counter", "btn_serve"]
+      .concat(MEDICINES.map(m => m.assetKey))
+      .concat(PATIENT_AVATARS.map(a => a.assetKey));
+    const out = {};
+    for (const k of keys) out[k] = Assets.images[k] ? "yüklü" : "boş";
+    out._summary = Assets.loaded + " / " + Assets.total + " yüklendi";
+    return out;
+  },
+  state() {
+    return JSON.parse(JSON.stringify({
+      day: game.dayNumber, money: game.money, reputation: game.reputation,
+      dayTime: Math.round(game.dayTime), queue: game.queue.length,
+      counter: game.counter, expected: expectedMedicineIds(),
+      dayStats: game.dayStats
+    }));
+  }
+};
+
+// =====================================================================
+//  BAŞLAT
+// =====================================================================
+resize();
+game.spawnTimer = CONFIG.spawnInterval;
+spawnPatient();
+requestAnimationFrame(loop);
+
+</script>
+</body>
+</html>
