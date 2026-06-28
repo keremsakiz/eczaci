@@ -55,9 +55,9 @@ const CONFIG = {
   minSpawnInterval: 1.5,    // gün sonuna doğru alt sınır
 
   // --- Faz 1: sabır ---
-  basePatience: 12,         // hasta sabrı (sn)
+  basePatience: 38,         // hasta sabrı (sn) — rahat tempo
   angryRepLoss: 8,          // sabrı biten hasta küserse itibar kaybı
-  queuePatienceMultiplier: 0.5, // sırada bekleyenlerin sabır azalma hızı (aktife göre)
+  queuePatienceMultiplier: 0.2, // sırada bekleyenlerin sabır azalma hızı (aktife göre)
 
   // tasarım referans çözünürlüğü (9:16)
   designW: 540,
@@ -128,6 +128,16 @@ const SYMPTOMS = [
   { emoji: "🤧", category: "alerji",     label: "Alerjim azdı" },
   { emoji: "👁️", category: "goz",        label: "Gözüm yanıyor" },
   { emoji: "😴", category: "uyku",       label: "Uyuyamıyorum" }
+];
+
+// reçetelerde görünecek kurgusal doktorlar
+const DOCTORS = [
+  { name: "Dr. Ayşe Yılmaz",  sig: "AYılmaz" },
+  { name: "Dr. Mehmet Demir", sig: "MDemir" },
+  { name: "Dr. Zeynep Kaya",  sig: "ZKaya" },
+  { name: "Dr. Can Öztürk",   sig: "CÖztürk" },
+  { name: "Dr. Elif Şahin",   sig: "EŞahin" },
+  { name: "Dr. Burak Aslan",  sig: "BAslan" }
 ];
 
 const PATIENT_AVATARS = [
@@ -377,11 +387,23 @@ function spawnPatient() {
     const count = CONFIG.minPrescriptionItems +
       rand(CONFIG.maxPrescriptionItems - CONFIG.minPrescriptionItems + 1);
     const pool = MEDICINES.slice();
-    const wanted = [];
+    const items = [];
     for (let i = 0; i < count && pool.length; i++) {
-      wanted.push(pool.splice(rand(pool.length), 1)[0].id);
+      const m = pool.splice(rand(pool.length), 1)[0];
+      const roll = Math.random();             // adet: çoğu ×1, bazıları ×2/×3
+      const qty = roll < 0.70 ? 1 : roll < 0.92 ? 2 : 3;
+      items.push({ id: m.id, qty });
     }
-    request = { type: "prescription", medicineIds: wanted };
+    // reçete üst bilgisi (bir kez atanır, sabit kalır)
+    const doc = pick(DOCTORS);
+    const dd = String(((game.dayNumber * 3 + 11) % 28) + 1).padStart(2, "0");
+    request = {
+      type: "prescription",
+      items,
+      doctor: doc.name,
+      sig: doc.sig,
+      date: dd + ".06"
+    };
   } else {
     const symptom = pick(SYMPTOMS);
     request = { type: "symptom", symptom };
@@ -399,15 +421,26 @@ function spawnPatient() {
   game.queue.push(patient);
 }
 
-// aktif hastanın beklediği doğru ilaç id seti
+// aktif hastanın beklediği ilaç çoklu-kümesi (adetli => id tekrarlı liste)
 function expectedMedicineIds() {
   const p = activePatient();
   if (!p) return [];
   if (p.request.type === "prescription") {
-    return p.request.medicineIds.slice();
+    const out = [];
+    for (const it of p.request.items) for (let i = 0; i < it.qty; i++) out.push(it.id);
+    return out;
   } else {
     return MEDICINES.filter(m => m.category === p.request.symptom.category).map(m => m.id);
   }
+}
+
+// iki listeyi çoklu-küme olarak karşılaştır (sıra önemsiz, adet önemli)
+function sameMultiset(a, b) {
+  if (a.length !== b.length) return false;
+  const m = {};
+  for (const x of a) m[x] = (m[x] || 0) + 1;
+  for (const x of b) { if (!m[x]) return false; m[x]--; }
+  return true;
 }
 
 function tapMedicine(id) {
@@ -432,9 +465,7 @@ function checkOrder() {
 
   let correct = false;
   if (p.request.type === "prescription") {
-    correct = expected.length === given.length &&
-      expected.every(id => given.includes(id)) &&
-      given.every(id => expected.includes(id));
+    correct = sameMultiset(expected, given);   // doğru ilaçlar + doğru adet
   } else {
     correct = given.length === 1 && expected.includes(given[0]);
   }
@@ -632,21 +663,25 @@ function drawHUD() {
 function slotLayout(i) {
   const S = layout.stage;
   const counterLine = layout._counterLine;
+  // reçeteli aktif hastada sol panel açılır => müşteri küçülüp sağa kayar
+  const ap = activePatient();
+  const presc = !!(ap && ap.request.type === "prescription");
+  const cx = presc ? S.x + S.w * 0.745 : S.x + S.w * 0.5;
+  const charH = presc ? S.h * 0.40 : S.h * 0.675;
   if (i <= 0) {
-    // genişlik ~%90 kolon => 3:4 oranla DEV; alt kısım banda gömülü
     return {
-      cx: S.x + S.w * 0.5,
-      baseY: counterLine + S.h * 0.345,  // gövde alttan tezgaha gömülü
-      charH: S.h * 0.675,                 // DEV müşteri (genişlik ~%90 kolon)
+      cx,
+      baseY: presc ? counterLine + S.h * 0.13 : counterLine + S.h * 0.345,
+      charH,
       alpha: 1,
       active: 1
     };
   }
-  // bekleyen: aynı yerde ama tamamen tezgahın altında ve görünmez
+  // bekleyen: aynı konumda ama tezgahın altında ve görünmez (öne gelince yükselir)
   return {
-    cx: S.x + S.w * 0.5,
-    baseY: counterLine + S.h * 0.62,
-    charH: S.h * 0.675,
+    cx,
+    baseY: counterLine + S.h * 0.55,
+    charH,
     alpha: 0,
     active: 0
   };
@@ -725,7 +760,8 @@ function drawOnePatient(p) {
   drawPatienceBar(cx, counterLine - barH - layout.stage.h * 0.012, barW, ratio, alpha);
 }
 
-function drawActiveBubble(p) {
+// semptomlu hasta — baş üstü konuşma balonu (reçetelilerde sol panel kullanılır)
+function drawSymptomBubble(p) {
   const area = layout._patientArea;
   const counterLine = layout._counterLine;
   const areaH = counterLine - area.y;
@@ -734,23 +770,34 @@ function drawActiveBubble(p) {
 
   const enter = clamp(p.enterT / CONFIG.patientEnterTime, 0, 1);
   const a = L.active * (1 - Math.pow(1 - enter, 3));
+  const headTop = L.baseY - L.charH;
+  const cx = L.cx;
 
-  const headTop = L.baseY - L.charH;       // karakterin baş hizası
   const bubbleW = Math.min(area.w * 0.72, areaH * 1.5);
   const bubbleH = areaH * 0.25;
-  const cx = L.cx;
-  let bubbleY = headTop - areaH * 0.03 - bubbleH;  // başın ÜSTÜNDE
-  if (bubbleY < area.y) bubbleY = area.y;          // alandan taşmasın
+  let bubbleY = headTop - areaH * 0.03 - bubbleH;
+  if (bubbleY < area.y) bubbleY = area.y;
   const bubbleX = cx - bubbleW / 2;
-
   ctx.globalAlpha = a;
   drawSpeechBubble(bubbleX, bubbleY, bubbleW, bubbleH, cx, bubbleY + bubbleH);
-  if (p.request.type === "prescription") {
-    drawPrescription(p.request.medicineIds, bubbleX, bubbleY, bubbleW, bubbleH);
-  } else {
-    drawSymptom(p.request.symptom, bubbleX, bubbleY, bubbleW, bubbleH);
-  }
+  drawSymptom(p.request.symptom, bubbleX, bubbleY, bubbleW, bubbleH);
   ctx.globalAlpha = 1;
+}
+
+// reçeteli hasta — stage SOL ÜST köşesinde makul boyutlu, DÜZ reçete paneli
+function drawPrescriptionPanel(p) {
+  const S = layout.stage;
+  const area = layout._patientArea;
+  const L = getPatientLayout(p.posCurrent);
+  if (L.active < 0.12) return;
+  const enter = clamp(p.enterT / CONFIG.patientEnterTime, 0, 1);
+  const a = L.active * (1 - Math.pow(1 - enter, 3));
+
+  const w = S.w * 0.42;
+  const h = Math.min(S.h * 0.40, area.h * 0.94);
+  const x = S.x + S.w * 0.04;
+  const top = area.y + S.h * 0.006;
+  drawPrescriptionPaper(p, x + w / 2, top, w, h, a);
 }
 
 function drawQueue() {
@@ -770,8 +817,13 @@ function drawQueue() {
   drawOnePatient(game.queue[0]);
   ctx.restore();
 
-  // konuşma balonu (kırpma dışında, başın üstünde, en önde)
-  drawActiveBubble(game.queue[0]);
+  // reçeteli => sol büyük panel; semptomlu => baş üstü balon (kırpma dışında)
+  const p0 = game.queue[0];
+  if (p0.request.type === "prescription") {
+    drawPrescriptionPanel(p0);
+  } else {
+    drawSymptomBubble(p0);
+  }
 
   // bekleyen sayısı rozeti (üst köşede minik, karmaşa yaratmadan)
   const waiting = game.queue.length - 1;
@@ -805,22 +857,100 @@ function drawSpeechBubble(x, y, w, h, tailX, tailBaseY) {
   strokeRoundRect(x, y, w, h, h * 0.22, c.panelBorder, Math.max(1, w * 0.005));
 }
 
-function drawPrescription(ids, x, y, w, h) {
-  const c = CONFIG.colors;
-  text("📋 Reçete", x + w / 2, y + h * 0.20, h * 0.16, c.creamSoft, "center", "700");
-  const n = ids.length;
-  const iconMax = h * 0.42;
-  const gap = w * 0.04;
-  const iconSize = Math.min(iconMax, (w * 0.82 - gap * (n - 1)) / n);
-  const totalW = n * iconSize + (n - 1) * gap;
-  let ix = x + (w - totalW) / 2;
-  const iy = y + h * 0.58;
-  for (const id of ids) {
-    const m = getMedicine(id);
-    fillRoundRect(ix, iy - iconSize / 2, iconSize, iconSize, iconSize * 0.26, m.color);
-    text(m.emoji, ix + iconSize / 2, iy, iconSize * 0.6, "#000", "center", "400");
-    ix += iconSize + gap;
+// Bir metni verilen maxW'ye sığacak şekilde küçülterek çiz (taşmayı önler).
+const RX_FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+function fitText(str, x, y, maxW, px, color, align, weight) {
+  let s = px;
+  const wgt = weight || "600";
+  ctx.font = wgt + " " + s + "px " + RX_FONT;
+  while (s > 6 && ctx.measureText(str).width > maxW) {
+    s -= 0.5;
+    ctx.font = wgt + " " + s + "px " + RX_FONT;
   }
+  ctx.fillStyle = color;
+  ctx.textAlign = align || "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(str, x, y);
+  return s;
+}
+
+// Reçete kağıdı: kod ile çizilen DÜZ, temiz krem panel + dinamik içerik.
+// Tüm içerik iç padding içinde kalır (taşma yok; gerekirse font küçülür).
+function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
+  const items = p.request.items;
+  const x = cx - w / 2, y = top;
+  const r = Math.min(w, h) * 0.05;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  // kağıt zemini (kod ile) — krem yuvarlak dikdörtgen + yumuşak gölge + ince kenar
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.28)";
+  ctx.shadowBlur = h * 0.05;
+  ctx.shadowOffsetY = h * 0.015;
+  fillRoundRect(x, y, w, h, r, "#f6efdd");
+  ctx.restore();
+  strokeRoundRect(x, y, w, h, r, "rgba(120,90,50,0.35)", Math.max(1, w * 0.006));
+
+  // içeriği kağıt iç alanına kırp (hiçbir şey kenardan sarkmasın)
+  const padX = w * 0.09, padY = h * 0.06;
+  const lx = x + padX, rx = x + w - padX;
+  const innerW = rx - lx;
+  ctx.save();
+  roundRect(x + w * 0.03, y + h * 0.03, w * 0.94, h * 0.94, r);
+  ctx.clip();
+
+  const ink = "#3a3326", inkSoft = "#8a7c5e";
+
+  // --- üst: kaşe (✚) + doktor adı + tarih ---
+  const headY = y + padY + h * 0.045;
+  fitText(p.request.date, rx, headY, innerW * 0.30, h * 0.05, inkSoft, "right", "600");
+  fitText("✚ " + p.request.doctor, lx, headY, innerW * 0.66, h * 0.052, ink, "left", "700");
+
+  // ayraç
+  ctx.strokeStyle = "rgba(120,90,50,0.35)";
+  ctx.lineWidth = Math.max(1, h * 0.005);
+  const sep1 = y + padY + h * 0.11;
+  ctx.beginPath(); ctx.moveTo(lx, sep1); ctx.lineTo(rx, sep1); ctx.stroke();
+
+  // --- orta: ilaç listesi (renk noktası + ad + adet) ---
+  const listTop = sep1 + h * 0.03;
+  const listBot = y + h - padY - h * 0.14;          // imza için altta yer bırak
+  const lineH = Math.min(h * 0.13, (listBot - listTop) / Math.max(1, items.length));
+  const fs = Math.min(lineH * 0.55, h * 0.062);
+  const qtyW = innerW * 0.20;
+  let ly = listTop + lineH * 0.5;
+  for (const it of items) {
+    const m = getMedicine(it.id);
+    const dotR = fs * 0.36;
+    ctx.beginPath();
+    ctx.arc(lx + dotR, ly, dotR, 0, Math.PI * 2);
+    ctx.fillStyle = m.color; ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.18)"; ctx.lineWidth = 1; ctx.stroke();
+    fitText("× " + it.qty, rx, ly, qtyW, fs, ink, "right", "800");
+    const nameX = lx + dotR * 2 + fs * 0.5;
+    fitText(m.name, nameX, ly, rx - qtyW - fs * 0.5 - nameX, fs, ink, "left", "600");
+    ly += lineH;
+  }
+
+  // --- alt: ince ayraç + küçük italik imza ---
+  const sep2 = y + h - padY - h * 0.10;
+  ctx.strokeStyle = "rgba(120,90,50,0.28)";
+  ctx.lineWidth = Math.max(1, h * 0.004);
+  ctx.beginPath(); ctx.moveTo(lx, sep2); ctx.lineTo(rx, sep2); ctx.stroke();
+
+  let sg = h * 0.06;
+  ctx.font = "italic 700 " + sg + "px 'Segoe Script','Snell Roundhand','Brush Script MT',cursive";
+  while (sg > 7 && ctx.measureText(p.request.sig).width > innerW * 0.55) {
+    sg -= 0.5;
+    ctx.font = "italic 700 " + sg + "px 'Segoe Script','Snell Roundhand','Brush Script MT',cursive";
+  }
+  ctx.fillStyle = inkSoft;
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  ctx.fillText(p.request.sig, rx, sep2 + h * 0.055);
+
+  ctx.restore();   // içerik kırpması
+  ctx.restore();   // ana
 }
 
 function drawSymptom(symptom, x, y, w, h) {
@@ -831,26 +961,23 @@ function drawSymptom(symptom, x, y, w, h) {
 }
 
 function drawShelf() {
-  const c = CONFIG.colors;
+  const disabled = !!game.feedback || !activePatient();
   for (const btn of layout.shelfButtons) {
     const m = getMedicine(btn.id);
-    const disabled = !!game.feedback || !activePatient();
     ctx.globalAlpha = disabled ? 0.55 : 1;
 
-    Sprite.draw(ctx, m.assetKey, btn.x, btn.y, btn.w, btn.h, () => {
-      ctx.save();
-      ctx.shadowColor = c.panelShadow;
-      ctx.shadowBlur = 10;
-      ctx.shadowOffsetY = 3;
-      fillRoundRect(btn.x, btn.y, btn.w, btn.h, btn.h * 0.22, "#ffffff");
-      ctx.restore();
+    // hücre zemini — hafif, yuvarlak köşeli koyu yarı saydam (abartısız, okunurluk için)
+    fillRoundRect(btn.x, btn.y, btn.w, btn.h, btn.h * 0.18, "rgba(26,21,36,0.28)");
 
-      fillRoundRect(btn.x, btn.y, btn.w, btn.h * 0.58, btn.h * 0.22, m.color);
-      ctx.fillStyle = m.color;
-      ctx.fillRect(btn.x, btn.y + btn.h * 0.30, btn.w, btn.h * 0.28);
-
-      text(m.emoji, btn.x + btn.w / 2, btn.y + btn.h * 0.30, btn.h * 0.36, "#000", "center", "400");
-      text(m.name, btn.x + btn.w / 2, btn.y + btn.h * 0.80, btn.h * 0.135, "#4a3b58", "center", "700");
+    // ilaç görseli — hücre içinde, ortalı, etrafında boşlukla (contain)
+    const pad = btn.w * 0.10;
+    const ix = btn.x + pad, iy = btn.y + pad;
+    const iw = btn.w - pad * 2, ih = btn.h - pad * 2;
+    Sprite.draw(ctx, m.assetKey, ix, iy, iw, ih, () => {
+      // fallback (görselsiz ilaçlar): renkli kutu + emoji + ad
+      fillRoundRect(ix, iy, iw, ih, iw * 0.18, m.color);
+      text(m.emoji, ix + iw / 2, iy + ih * 0.38, ih * 0.40, "#000", "center", "400");
+      text(m.name, ix + iw / 2, iy + ih * 0.82, ih * 0.18, "#3a2f45", "center", "700");
     }, "contain");
 
     ctx.globalAlpha = 1;
@@ -863,20 +990,35 @@ function drawCounterBand() {
   if (!b) return;
   // karakterin alt kenarını hafifçe örtmek için bandı bir tık yukarıdan başlat
   const top = b.y - layout.stage.h * 0.006;
-  const bot = b.y + b.h;
-  const g = ctx.createLinearGradient(0, top, 0, bot);
-  g.addColorStop(0, "#9a6a40");
-  g.addColorStop(0.10, "#85572f");
-  g.addColorStop(0.5, "#6e4527");
-  g.addColorStop(1, "#4f311d");
+  const bandH = (b.y + b.h) - top;
+  // counter.png varsa onu kullan (stage boyunca yatay bant, cover); yoksa kod gradyan
+  Sprite.draw(ctx, "counter", b.x, top, b.w, bandH, () => {
+    const bot = b.y + b.h;
+    const g = ctx.createLinearGradient(0, top, 0, bot);
+    g.addColorStop(0, "#9a6a40");
+    g.addColorStop(0.10, "#85572f");
+    g.addColorStop(0.5, "#6e4527");
+    g.addColorStop(1, "#4f311d");
+    ctx.fillStyle = g;
+    ctx.fillRect(b.x, top, b.w, bot - top);
+    ctx.fillStyle = "rgba(245, 200, 140, 0.55)";
+    ctx.fillRect(b.x, top, b.w, Math.max(2, b.h * 0.05));
+    ctx.fillStyle = "rgba(0,0,0,0.25)";
+    ctx.fillRect(b.x, bot - b.h * 0.10, b.w, b.h * 0.10);
+  }, "cover");
+}
+
+// Tezgah çizgisinin ALTINI temiz koyu zemine boyar — bg_pharmacy'nin kendi
+// gömülü ahşap tezgahını gizler ki tek tezgah (counter.png) kalsın, grid
+// ahşapsız temiz bir alanda dursun ("çift tezgah" görüntüsünü engeller).
+function drawLowerBackdrop() {
+  const S = layout.stage;
+  const y0 = layout._counterLine;
+  const g = ctx.createLinearGradient(0, y0, 0, S.y + S.h);
+  g.addColorStop(0, "rgba(34, 26, 42, 0.94)");
+  g.addColorStop(1, "rgba(20, 15, 26, 0.985)");
   ctx.fillStyle = g;
-  ctx.fillRect(b.x, top, b.w, bot - top);
-  // üst kenar sıcak highlight (ahşap parlaması)
-  ctx.fillStyle = "rgba(245, 200, 140, 0.55)";
-  ctx.fillRect(b.x, top, b.w, Math.max(2, b.h * 0.05));
-  // alt koyu gölge
-  ctx.fillStyle = "rgba(0,0,0,0.25)";
-  ctx.fillRect(b.x, bot - b.h * 0.10, b.w, b.h * 0.10);
+  ctx.fillRect(S.x, y0, S.w, S.y + S.h - y0);
 }
 
 function drawCounter() {
@@ -884,7 +1026,9 @@ function drawCounter() {
   const area = layout._counterArea;
   if (!area) return;
 
-  // önce ahşap bant (müşterinin önünde tezgah)
+  // bg'nin gömülü tezgahını gizleyen temiz koyu zemin (tek tezgah için)
+  drawLowerBackdrop();
+  // tek ahşap bant (counter.png) — müşterinin önünde
   drawCounterBand();
 
   if (game.counter.length === 0) return;  // tezgah temiz kalsın
@@ -1177,6 +1321,7 @@ window.cheats = {
 // --- Asset'leri yükle (asenkron; yüklendikçe fallback yerine PNG çizilir) ---
 function loadAssets() {
   Assets.load("bg_pharmacy", "assets/bg_pharmacy.png");
+  Assets.load("counter", "assets/counter.png");
   Assets.load("med_agriban", "assets/med_agriban.png");
   Assets.load("med_oksurmez", "assets/med_oksurmez.png");
   Assets.load("med_nezleson", "assets/med_nezleson.png");
