@@ -103,18 +103,36 @@ const CONFIG = {
 // =====================================================================
 //  İLAÇ VERİSİ — 6 ilaç
 // =====================================================================
+// İlaç ekleme rehberi: 100 ilaca çıkmak için sadece bu diziye satır ekle.
+// Her satır: id, name, emoji, color, category (semptom eşleşmesi), group (sekme), assetKey.
+// Sistem ilacı otomatik doğru sekmeye koyar — başka kod değişmez.
 const MEDICINES = [
-  { id: "agriban",   name: "Ağrıban",     emoji: "💊", color: "#f08a8a", category: "ağrı",       assetKey: "med_agriban" },
-  { id: "oksurmez",  name: "Öksürmez",    emoji: "🍯", color: "#f4b160", category: "öksürük",    assetKey: "med_oksurmez" },
-  { id: "nezleson",  name: "Nezleson",    emoji: "🤧", color: "#7fb4e8", category: "nezle",      assetKey: "med_nezleson" },
-  { id: "cvitamin",  name: "C-Vitamin+",  emoji: "🍊", color: "#f6d35b", category: "bağışıklık", assetKey: "med_cvitamin" },
-  { id: "miderahat", name: "Miderahat",   emoji: "🌿", color: "#86cf9a", category: "mide",       assetKey: "med_miderahat" },
-  { id: "bandajix",  name: "Bandajix",    emoji: "🩹", color: "#f3a8c4", category: "yara",       assetKey: "med_bandajix" },
-  { id: "atesdus",   name: "Ateşdüş",     emoji: "🌡️", color: "#b07fd6", category: "ates",       assetKey: "med_atesdus" },
-  { id: "alerjin",   name: "Alerjin",     emoji: "🤧", color: "#bfe39a", category: "alerji",     assetKey: "med_alerjin" },
-  { id: "goznur",    name: "Göznur",      emoji: "👁️", color: "#5fd0c5", category: "goz",        assetKey: "med_goznur" },
-  { id: "uykutas",   name: "Uykutaş",     emoji: "😴", color: "#5566b0", category: "uyku",       assetKey: "med_uykutas" }
+  { id: "agriban",   name: "Ağrıban",     emoji: "💊", color: "#f08a8a", category: "ağrı",       group: "agri_ates",   assetKey: "med_agriban" },
+  { id: "oksurmez",  name: "Öksürmez",    emoji: "🍯", color: "#f4b160", category: "öksürük",    group: "soguk",       assetKey: "med_oksurmez" },
+  { id: "nezleson",  name: "Nezleson",    emoji: "🤧", color: "#7fb4e8", category: "nezle",      group: "soguk",       assetKey: "med_nezleson" },
+  { id: "cvitamin",  name: "C-Vitamin+",  emoji: "🍊", color: "#f6d35b", category: "bağışıklık", group: "vitamin",     assetKey: "med_cvitamin" },
+  { id: "miderahat", name: "Miderahat",   emoji: "🌿", color: "#86cf9a", category: "mide",       group: "sindirim",    assetKey: "med_miderahat" },
+  { id: "bandajix",  name: "Bandajix",    emoji: "🩹", color: "#f3a8c4", category: "yara",       group: "ilk_yardim",  assetKey: "med_bandajix" },
+  { id: "atesdus",   name: "Ateşdüş",     emoji: "🌡️", color: "#b07fd6", category: "ates",       group: "agri_ates",   assetKey: "med_atesdus" },
+  { id: "alerjin",   name: "Alerjin",     emoji: "🤧", color: "#bfe39a", category: "alerji",     group: "soguk",       assetKey: "med_alerjin" },
+  { id: "goznur",    name: "Göznur",      emoji: "👁️", color: "#5fd0c5", category: "goz",        group: "goz_kulak",   assetKey: "med_goznur" },
+  { id: "uykutas",   name: "Uykutaş",     emoji: "😴", color: "#5566b0", category: "uyku",       group: "uyku_sinir",  assetKey: "med_uykutas" }
 ];
+
+// Kategori sekmeleri (ölçeklenebilir; boş gruplar otomatik gizlenir)
+const GROUPS = [
+  { id: "agri_ates",  emoji: "💊", label: "Ağrı" },
+  { id: "soguk",      emoji: "🤧", label: "Soğuk" },
+  { id: "sindirim",   emoji: "🌿", label: "Mide" },
+  { id: "vitamin",    emoji: "💉", label: "Vitamin" },
+  { id: "goz_kulak",  emoji: "👁️", label: "Göz" },
+  { id: "ilk_yardim", emoji: "🩹", label: "İlk Yrd." },
+  { id: "uyku_sinir", emoji: "😴", label: "Uyku" },
+  { id: "cilt",       emoji: "🧴", label: "Cilt" }
+];
+
+function medsInGroup(gid) { return MEDICINES.filter(m => m.group === gid); }
+function groupsWithMeds() { return GROUPS.filter(g => MEDICINES.some(m => m.group === g.id)); }
 
 // semptom emojileri -> kategori eşleşmesi (semptomlu hastalar için)
 const SYMPTOMS = [
@@ -219,6 +237,9 @@ const game = {
   spawnTimer: 0,          // yeni hasta sayacı
   dayStats: { served: 0, correct: 0, wrong: 0, angry: 0, money: 0 },
 
+  // ilaç sekmeleri
+  activeGroup: null,      // seçili kategori (boşsa ilk dolu gruba ayarlanır)
+
   // kuyruk
   queue: [],              // hasta dizisi; queue[0] = aktif hasta
   counter: [],            // tezgaha konan ilaç id'leri (aktif hastaya)
@@ -306,28 +327,20 @@ function computeLayout() {
   const btnY = sy + sh - btnH - sh * 0.02 - (window.__safeBottom || 0);
   layout.serveBtn = { x: left, y: btnY, w: colW, h: btnH };
 
-  // --- İlaç seçim grid'i (bandın ALTINDA, müşteriden tamamen ayrı) ---
-  //     10 ilaç => 2 satır x 5 sütun
-  const shelfTop = counterLine + bandH + sh * 0.014;
-  const shelfBottom = btnY - sh * 0.018;
-  const rows = 2;
-  const cols = Math.ceil(MEDICINES.length / rows);
-  const gap = sw * 0.022;
-  const cellW = (colW - gap * (cols - 1)) / cols;
-  const cellH = (shelfBottom - shelfTop - gap * (rows - 1)) / rows;
+  // --- Kategori sekmeleri + ilaç seçim grid'i (bandın ALTINDA) ---
+  const zoneTop = counterLine + bandH + sh * 0.012;
+  const tabH = sh * 0.056;
+  layout.tabsArea = { x: left, y: zoneTop, w: colW, h: tabH };
+  const gridTop = zoneTop + tabH + sh * 0.012;
+  const gridBottom = btnY - sh * 0.016;
+  layout.gridArea = { x: left, y: gridTop, w: colW, h: gridBottom - gridTop };
 
-  layout.shelfButtons = [];
-  for (let i = 0; i < MEDICINES.length; i++) {
-    const r = Math.floor(i / cols);
-    const c = i % cols;
-    layout.shelfButtons.push({
-      id: MEDICINES[i].id,
-      x: left + c * (cellW + gap),
-      y: shelfTop + r * (cellH + gap),
-      w: cellW,
-      h: cellH
-    });
+  if (!game.activeGroup) {
+    const first = groupsWithMeds()[0];
+    game.activeGroup = first ? first.id : null;
   }
+  buildTabs();
+  buildShelf();
 
   layout._hud = { x: left, y: hudY, w: colW, h: hudH };
 
@@ -344,21 +357,107 @@ function computeLayout() {
 }
 
 function rebuildCounterSlots() {
-  const area = layout._counterArea;
-  if (!area) return;
+  const b = layout._band;
+  if (!b) return;
   layout.counterSlots = [];
   const n = game.counter.length;
   if (n === 0) return;
-  const sw = layout.stage ? layout.stage.w : layout.w;
-  const slotMax = sw * 0.13;
-  const slot = Math.min(slotMax, area.h * 0.9);
-  const gap = sw * 0.02;
-  const totalW = n * slot + (n - 1) * gap;
-  let sx = area.x + (area.w - totalW) / 2;
-  const sy = area.y + (area.h - slot) / 2;
+  const sw = layout.stage.w;
+  // tezgah bandının ~%78'i kadar büyük tile'lar
+  let slot = Math.min(b.h * 0.78, sw * 0.17);
+  let gap = sw * 0.025;
+  // çok ilaç varsa sığacak şekilde küçült
+  const maxW = b.w * 0.92;
+  let totalW = n * slot + (n - 1) * gap;
+  if (totalW > maxW) { const k = maxW / totalW; slot *= k; gap *= k; totalW = maxW; }
+  // alt kenar tezgah yüzeyine otursun (yüzey ~bandın üst %58'i)
+  const baseline = b.y + b.h * 0.60;
+  const sy = baseline - slot;
+  let sx = b.x + (b.w - totalW) / 2;
   for (let i = 0; i < n; i++) {
     layout.counterSlots.push({ id: game.counter[i], idx: i, x: sx, y: sy, w: slot, h: slot });
     sx += slot + gap;
+  }
+}
+
+// kategori sekmelerinin yatay yerleşimi (içerik koordinatında x; tabScroll ile kaydırılır)
+function buildTabs() {
+  const ta = layout.tabsArea;
+  layout.tabs = [];
+  if (!ta) return;
+  const groups = groupsWithMeds();
+  const fs = ta.h * 0.36;
+  ctx.font = "800 " + fs + "px " + RX_FONT;   // çizimdeki en geniş ağırlıkla ölç
+  const gap = ta.h * 0.22;                      // sekmeler arası net boşluk
+  const padInner = ta.h * 0.42;                 // metin etrafı iç boşluk
+  const emojiPad = ta.h * 0.55;                 // emoji'ler ölçümden geniş render olur, pay bırak
+  const minW = ta.h * 2.0;                      // dokunma için makul alt sınır
+  let x = 0;
+  for (const g of groups) {
+    const label = g.emoji + " " + g.label;
+    const btnW = Math.max(minW, ctx.measureText(label).width + padInner * 2 + emojiPad);
+    layout.tabs.push({ group: g, x, w: btnW + gap });  // w = buton + arkasındaki boşluk
+    x += btnW + gap;
+  }
+  const total = x - gap;                 // son boşluğu sayma
+  layout.tabsTotal = total;
+  if (total <= ta.w) {
+    // sığıyorsa şeridi ortala, kaydırma yok
+    layout.tabsOffset = (ta.w - total) / 2;
+    layout.tabScroll = 0;
+  } else {
+    // sığmıyorsa soldan başla, sağa kaydırılabilir
+    layout.tabsOffset = 0;
+    layout.tabScroll = clamp(layout.tabScroll || 0, 0, total - ta.w);
+  }
+  ensureActiveTabVisible();
+}
+
+// aktif sekmeyi görünür alana kaydır (gerekiyorsa)
+function ensureActiveTabVisible() {
+  const ta = layout.tabsArea;
+  if (!ta || !layout.tabs || (layout.tabsTotal || 0) <= ta.w) return;
+  const t = layout.tabs.find(t => t.group.id === game.activeGroup);
+  if (!t) return;
+  const left = t.x, right = t.x + t.w;
+  if (left < layout.tabScroll) layout.tabScroll = left;
+  else if (right > layout.tabScroll + ta.w) layout.tabScroll = right - ta.w;
+  layout.tabScroll = clamp(layout.tabScroll, 0, layout.tabsTotal - ta.w);
+}
+
+// seçili gruptaki ilaçları grid'e yerleştir (otomatik satır/sütun, ortalı)
+function buildShelf() {
+  const area = layout.gridArea;
+  layout.shelfButtons = [];
+  if (!area) return;
+  const meds = medsInGroup(game.activeGroup);
+  const n = meds.length;
+  if (n === 0) return;
+
+  const maxCols = 5;
+  const cols = Math.min(maxCols, n);
+  const rows = Math.ceil(n / cols);
+  const gap = layout.stage.w * 0.022;
+  let cell = Math.min(
+    (area.w - gap * (cols - 1)) / cols,
+    (area.h - gap * (rows - 1)) / rows,
+    layout.stage.w * 0.20            // tek ilaçta dev olmasın
+  );
+  const blockH = rows * cell + gap * (rows - 1);
+  const startY = area.y + (area.h - blockH) / 2;
+  for (let i = 0; i < n; i++) {
+    const r = Math.floor(i / cols);
+    const c = i % cols;
+    const rowCount = Math.min(cols, n - r * cols);          // son satır eksikse o satırı ortala
+    const rowW = rowCount * cell + gap * (rowCount - 1);
+    const startX = area.x + (area.w - rowW) / 2;
+    layout.shelfButtons.push({
+      id: meds[i].id,
+      x: startX + c * (cell + gap),
+      y: startY + r * (cell + gap),
+      w: cell,
+      h: cell
+    });
   }
 }
 
@@ -784,7 +883,7 @@ function drawSymptomBubble(p) {
   ctx.globalAlpha = 1;
 }
 
-// reçeteli hasta — stage SOL ÜST köşesinde makul boyutlu, DÜZ reçete paneli
+// reçeteli hasta — stage SOL ÜST köşesinde, sabit makul boyutlu DÜZ reçete paneli
 function drawPrescriptionPanel(p) {
   const S = layout.stage;
   const area = layout._patientArea;
@@ -876,6 +975,7 @@ function fitText(str, x, y, maxW, px, color, align, weight) {
 
 // Reçete kağıdı: kod ile çizilen DÜZ, temiz krem panel + dinamik içerik.
 // Tüm içerik iç padding içinde kalır (taşma yok; gerekirse font küçülür).
+// Sabit yükseklikli reçete kağıdı (krem zemin + dinamik içerik).
 function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
   const items = p.request.items;
   const x = cx - w / 2, y = top;
@@ -883,7 +983,7 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
   ctx.save();
   ctx.globalAlpha = alpha;
 
-  // kağıt zemini (kod ile) — krem yuvarlak dikdörtgen + yumuşak gölge + ince kenar
+  // kağıt zemini — krem + yumuşak gölge + ince kenar
   ctx.save();
   ctx.shadowColor = "rgba(0,0,0,0.28)";
   ctx.shadowBlur = h * 0.05;
@@ -892,7 +992,7 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
   ctx.restore();
   strokeRoundRect(x, y, w, h, r, "rgba(120,90,50,0.35)", Math.max(1, w * 0.006));
 
-  // içeriği kağıt iç alanına kırp (hiçbir şey kenardan sarkmasın)
+  // içeriği kağıt iç alanına kırp
   const padX = w * 0.09, padY = h * 0.06;
   const lx = x + padX, rx = x + w - padX;
   const innerW = rx - lx;
@@ -902,7 +1002,7 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
 
   const ink = "#3a3326", inkSoft = "#8a7c5e";
 
-  // --- üst: kaşe (✚) + doktor adı + tarih ---
+  // üst: kaşe (✚) + doktor adı + tarih
   const headY = y + padY + h * 0.045;
   fitText(p.request.date, rx, headY, innerW * 0.30, h * 0.05, inkSoft, "right", "600");
   fitText("✚ " + p.request.doctor, lx, headY, innerW * 0.66, h * 0.052, ink, "left", "700");
@@ -913,9 +1013,9 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
   const sep1 = y + padY + h * 0.11;
   ctx.beginPath(); ctx.moveTo(lx, sep1); ctx.lineTo(rx, sep1); ctx.stroke();
 
-  // --- orta: ilaç listesi (renk noktası + ad + adet) ---
+  // orta: ilaç listesi (renk noktası + ad + adet)
   const listTop = sep1 + h * 0.03;
-  const listBot = y + h - padY - h * 0.14;          // imza için altta yer bırak
+  const listBot = y + h - padY - h * 0.14;
   const lineH = Math.min(h * 0.13, (listBot - listTop) / Math.max(1, items.length));
   const fs = Math.min(lineH * 0.55, h * 0.062);
   const qtyW = innerW * 0.20;
@@ -933,7 +1033,7 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
     ly += lineH;
   }
 
-  // --- alt: ince ayraç + küçük italik imza ---
+  // alt: ince ayraç + küçük italik imza
   const sep2 = y + h - padY - h * 0.10;
   ctx.strokeStyle = "rgba(120,90,50,0.28)";
   ctx.lineWidth = Math.max(1, h * 0.004);
@@ -958,6 +1058,78 @@ function drawSymptom(symptom, x, y, w, h) {
   text("💬", x + w / 2, y + h * 0.22, h * 0.16, c.creamSoft, "center", "700");
   text(symptom.emoji, x + w / 2, y + h * 0.55, h * 0.42, "#000", "center", "400");
   text(symptom.label, x + w / 2, y + h * 0.85, h * 0.135, c.cream, "center", "600");
+}
+
+// Sekme içeriğini (emoji + metin, bir grup olarak) kutunun yatay/dikey TAM ortasına çiz.
+// Emoji'nin advance'ı yanlış ölçüldüğü için sabit bir emoji genişliği varsayıp grubu elle ortalar.
+function drawTabLabel(emoji, label, cx, cy, maxW, fs, color, weight) {
+  let s = fs, emojiW, gapE, textW, total;
+  const measure = () => {
+    ctx.font = weight + " " + s + "px " + RX_FONT;
+    textW = ctx.measureText(label).width;   // düz metin doğru ölçülür
+    emojiW = s * 1.05;                       // emoji ~1em (sabit tahmin)
+    gapE = s * 0.28;
+    total = emojiW + gapE + textW;
+  };
+  measure();
+  while (s > 7 && total > maxW) { s -= 0.5; measure(); }  // sığmazsa küçült
+
+  const startX = cx - total / 2;             // grubu yatayda ortala
+  ctx.fillStyle = color;
+  ctx.textBaseline = "middle";               // dikeyde ortala
+  ctx.textAlign = "left";
+  ctx.fillText(emoji, startX, cy);
+  ctx.fillText(label, startX + emojiW + gapE, cy);
+}
+
+// kategori sekmeleri (yatay, kaydırılabilir; aktif sekme amber vurgulu)
+function drawTabs() {
+  const ta = layout.tabsArea;
+  if (!ta || !layout.tabs) return;
+  const c = CONFIG.colors;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(ta.x, ta.y, ta.w, ta.h);
+  ctx.clip();
+  const gap = ta.h * 0.22;
+  const off = layout.tabsOffset || 0;
+  for (const t of layout.tabs) {
+    const sx = ta.x + off + t.x - (layout.tabScroll || 0);
+    const bw = t.w - gap;                              // buton genişliği (boşluk hariç)
+    if (sx + bw < ta.x || sx > ta.x + ta.w) continue;  // görünmeyen sekmeyi atla
+    const active = t.group.id === game.activeGroup;
+    const r = ta.h * 0.28;
+    const maxTextW = bw * 0.86;                         // içerik butona sığsın (taşma yok)
+    const cx = sx + bw / 2, cy = ta.y + ta.h / 2;
+    if (active) {
+      ctx.save();
+      ctx.shadowColor = c.neonGlow;
+      ctx.shadowBlur = 10;
+      fillRoundRect(sx, ta.y, bw, ta.h, r, "rgba(58,40,20,0.95)");
+      ctx.restore();
+      strokeRoundRect(sx, ta.y, bw, ta.h, r, c.neon, Math.max(1.5, ta.h * 0.04));
+      drawTabLabel(t.group.emoji, t.group.label, cx, cy, maxTextW, ta.h * 0.36, c.neon, "800");
+    } else {
+      fillRoundRect(sx, ta.y, bw, ta.h, r, "rgba(26,21,36,0.82)");
+      strokeRoundRect(sx, ta.y, bw, ta.h, r, "rgba(245,170,70,0.25)", 1);
+      drawTabLabel(t.group.emoji, t.group.label, cx, cy, maxTextW, ta.h * 0.34, c.creamSoft, "700");
+    }
+  }
+  ctx.restore();
+  // kaydırılabilir olduğunu belli eden kenar gölgeleri
+  if ((layout.tabsTotal || 0) > ta.w) {
+    const fadeW = ta.w * 0.06;
+    if ((layout.tabScroll || 0) > 1) {
+      const gl = ctx.createLinearGradient(ta.x, 0, ta.x + fadeW, 0);
+      gl.addColorStop(0, "rgba(20,15,26,0.9)"); gl.addColorStop(1, "rgba(20,15,26,0)");
+      ctx.fillStyle = gl; ctx.fillRect(ta.x, ta.y, fadeW, ta.h);
+    }
+    if ((layout.tabScroll || 0) < layout.tabsTotal - ta.w - 1) {
+      const gr = ctx.createLinearGradient(ta.x + ta.w - fadeW, 0, ta.x + ta.w, 0);
+      gr.addColorStop(0, "rgba(20,15,26,0)"); gr.addColorStop(1, "rgba(20,15,26,0.9)");
+      ctx.fillStyle = gr; ctx.fillRect(ta.x + ta.w - fadeW, ta.y, fadeW, ta.h);
+    }
+  }
 }
 
 function drawShelf() {
@@ -1034,14 +1206,18 @@ function drawCounter() {
   if (game.counter.length === 0) return;  // tezgah temiz kalsın
   for (const slot of layout.counterSlots) {
     const m = getMedicine(slot.id);
-    ctx.save();
-    ctx.shadowColor = c.panelShadow;
-    ctx.shadowBlur = 8;
-    ctx.shadowOffsetY = 2;
-    fillRoundRect(slot.x, slot.y, slot.w, slot.h, slot.w * 0.24, m.color);
-    ctx.restore();
-    text(m.emoji, slot.x + slot.w / 2, slot.y + slot.h * 0.42, slot.w * 0.5, "#000", "center", "400");
-    text("✕", slot.x + slot.w * 0.82, slot.y + slot.h * 0.16, slot.w * 0.22, "rgba(74,59,88,0.55)", "center", "700");
+    // ilaç görseli — raftaki gibi şeffaf PNG (contain); PNG yoksa renkli kutu + emoji
+    Sprite.draw(ctx, m.assetKey, slot.x, slot.y, slot.w, slot.h, () => {
+      ctx.save();
+      ctx.shadowColor = c.panelShadow;
+      ctx.shadowBlur = 8;
+      ctx.shadowOffsetY = 2;
+      fillRoundRect(slot.x, slot.y, slot.w, slot.h, slot.w * 0.24, m.color);
+      ctx.restore();
+      text(m.emoji, slot.x + slot.w / 2, slot.y + slot.h * 0.5, slot.w * 0.55, "#000", "center", "400");
+    }, "contain");
+    // kaldır işareti
+    text("✕", slot.x + slot.w * 0.84, slot.y + slot.h * 0.14, slot.w * 0.24, "rgba(255,235,210,0.85)", "center", "800");
   }
 }
 
@@ -1197,7 +1373,8 @@ function render() {
     drawHUD();
     drawQueue();        // DEV müşteri (tezgah çizgisinde kırpılı)
     drawCounter();      // ahşap bant müşterinin önünde + seçilen ilaçlar
-    drawShelf();        // ilaç seçim grid'i (bandın altında)
+    drawTabs();         // kategori sekmeleri
+    drawShelf();        // seçili kategorinin ilaçları
     drawServeButton();
     drawFeedback();
   } else if (game.state === STATE.DAYEND) {
@@ -1205,6 +1382,7 @@ function render() {
     drawHUD();
     drawQueue();
     drawCounter();
+    drawTabs();
     drawShelf();
     drawServeButton();
     drawDayEnd();
@@ -1231,12 +1409,34 @@ function pointInRect(px, py, r) {
   return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
 }
 
+// sekme şeridine dokunulduğunda o kategoriyi seç
+function selectTabAt(px, py) {
+  const ta = layout.tabsArea;
+  if (!ta || !layout.tabs) return;
+  const off = layout.tabsOffset || 0;
+  for (const t of layout.tabs) {
+    const sx = ta.x + off + t.x - (layout.tabScroll || 0);
+    if (px >= sx && px <= sx + t.w && py >= ta.y && py <= ta.y + ta.h) {
+      if (game.activeGroup !== t.group.id) {
+        game.activeGroup = t.group.id;
+        buildShelf();
+        ensureActiveTabVisible();
+      }
+      return;
+    }
+  }
+}
+
 function handleTap(px, py) {
   if (game.state === STATE.DAYEND) {
     if (pointInRect(px, py, layout.nextDayBtn)) startNextDay();
     return;
   }
   if (game.state !== STATE.PLAYING) return;
+
+  // sekmeler feedback sırasında da değiştirilebilir
+  if (layout.tabsArea && pointInRect(px, py, layout.tabsArea)) { selectTabAt(px, py); return; }
+
   if (game.feedback) return;
 
   if (pointInRect(px, py, layout.serveBtn)) { checkOrder(); return; }
@@ -1262,16 +1462,52 @@ function getEventPos(e) {
   return { x: clientX - rect.left, y: clientY - rect.top };
 }
 
+// işaretçi: tap + sekme şeridinde yatay kaydırma (drag)
+const pointer = { down: false, startX: 0, startY: 0, dragging: false, inTabs: false, scrollStart: 0 };
+
+function onDown(x, y) {
+  pointer.down = true;
+  pointer.startX = x;
+  pointer.startY = y;
+  pointer.dragging = false;
+  pointer.inTabs = game.state === STATE.PLAYING && layout.tabsArea && pointInRect(x, y, layout.tabsArea);
+  pointer.scrollStart = layout.tabScroll || 0;
+}
+function onMove(x, y) {
+  if (!pointer.down || !pointer.inTabs) return;
+  const dx = x - pointer.startX;
+  if (Math.abs(dx) > 6) pointer.dragging = true;
+  if (pointer.dragging) {
+    const ta = layout.tabsArea;
+    const maxS = Math.max(0, (layout.tabsTotal || 0) - ta.w);
+    layout.tabScroll = clamp(pointer.scrollStart - dx, 0, maxS);
+  }
+}
+function onUp(x, y) {
+  if (!pointer.down) return;
+  pointer.down = false;
+  if (!pointer.dragging) handleTap(x, y);  // kaydırma değilse tap
+}
+
 canvas.addEventListener("touchstart", (e) => {
   e.preventDefault();
   const p = getEventPos(e);
-  handleTap(p.x, p.y);
+  onDown(p.x, p.y);
+}, { passive: false });
+canvas.addEventListener("touchmove", (e) => {
+  e.preventDefault();
+  const p = getEventPos(e);
+  onMove(p.x, p.y);
+}, { passive: false });
+canvas.addEventListener("touchend", (e) => {
+  e.preventDefault();
+  const p = getEventPos(e);
+  onUp(p.x, p.y);
 }, { passive: false });
 
-canvas.addEventListener("mousedown", (e) => {
-  const p = getEventPos(e);
-  handleTap(p.x, p.y);
-});
+canvas.addEventListener("mousedown", (e) => { const p = getEventPos(e); onDown(p.x, p.y); });
+canvas.addEventListener("mousemove", (e) => { if (pointer.down) { const p = getEventPos(e); onMove(p.x, p.y); } });
+canvas.addEventListener("mouseup", (e) => { const p = getEventPos(e); onUp(p.x, p.y); });
 
 // =====================================================================
 //  ANA DÖNGÜ (60 FPS)
@@ -1296,6 +1532,7 @@ window.cheats = {
   setPatience(n) { const p = activePatient(); if (p) p.patience = n; },
   clearQueue() { game.queue = []; game.counter = []; game.feedback = null; rebuildCounterSlots(); },
   newPatient() { spawnPatient(); },
+  setGroup(gid) { if (medsInGroup(gid).length) { game.activeGroup = gid; buildShelf(); } },
   assetStatus() {
     const keys = ["bg_pharmacy", "counter", "btn_serve"]
       .concat(MEDICINES.map(m => m.assetKey))
@@ -1309,6 +1546,7 @@ window.cheats = {
     return JSON.parse(JSON.stringify({
       day: game.dayNumber, money: game.money, reputation: game.reputation,
       dayTime: Math.round(game.dayTime), queue: game.queue.length,
+      activeGroup: game.activeGroup,
       counter: game.counter, expected: expectedMedicineIds(),
       dayStats: game.dayStats
     }));
@@ -1328,6 +1566,10 @@ function loadAssets() {
   Assets.load("med_cvitamin", "assets/med_cvitamin.png");
   Assets.load("med_miderahat", "assets/med_miderahat.png");
   Assets.load("med_bandajix", "assets/med_bandajix.png");
+  Assets.load("med_atesdus", "assets/med_atesdus.png");
+  Assets.load("med_alerjin", "assets/med_alerjin.png");
+  Assets.load("med_goznur", "assets/med_goznur.png");
+  Assets.load("med_uykutas", "assets/med_uykutas.png");
   Assets.load("patient_granny", "assets/patient_granny.png");
   Assets.load("patient_man", "assets/patient_man.png");
   Assets.load("patient_youth", "assets/patient_youth.png");
