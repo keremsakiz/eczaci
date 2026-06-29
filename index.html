@@ -116,7 +116,45 @@ const MEDICINES = [
   { id: "atesdus",   name: "Ateşdüş",     emoji: "🌡️", color: "#b07fd6", category: "ates",       group: "agri_ates",   assetKey: "med_atesdus" },
   { id: "alerjin",   name: "Alerjin",     emoji: "🤧", color: "#bfe39a", category: "alerji",     group: "soguk",       assetKey: "med_alerjin" },
   { id: "goznur",    name: "Göznur",      emoji: "👁️", color: "#5fd0c5", category: "goz",        group: "goz_kulak",   assetKey: "med_goznur" },
-  { id: "uykutas",   name: "Uykutaş",     emoji: "😴", color: "#5566b0", category: "uyku",       group: "uyku_sinir",  assetKey: "med_uykutas" }
+  { id: "uykutas",   name: "Uykutaş",     emoji: "😴", color: "#5566b0", category: "uyku",       group: "uyku_sinir",  assetKey: "med_uykutas" },
+
+  // --- Genişletilmiş havuz (görselsiz; emoji+color fallback, PNG gelince otomatik giyer) ---
+  { id: "med_bassakin",     name: "Başsakin",      emoji: "💊", color: "#d24a4a", category: "Ağrı/Ateş",        group: "agri_ates",   assetKey: "med_bassakin" },
+  { id: "med_kasgevset",    name: "Kasgevşet",     emoji: "💪", color: "#8b3a4a", category: "Ağrı/Ateş",        group: "agri_ates",   assetKey: "med_kasgevset" },
+  { id: "med_disdindir",    name: "Dişdindir",     emoji: "🦷", color: "#e8d8d8", category: "Ağrı/Ateş",        group: "agri_ates",   assetKey: "med_disdindir" },
+
+  { id: "med_gripsavar",    name: "Gripsavar",     emoji: "🤒", color: "#2a4a7a", category: "Soğuk Algınlığı",  group: "soguk",       assetKey: "med_gripsavar" },
+  { id: "med_bogazcan",     name: "Boğazcan",      emoji: "🗣️", color: "#3aa8a0", category: "Soğuk Algınlığı",  group: "soguk",       assetKey: "med_bogazcan" },
+  { id: "med_burunac",      name: "Burunaç",       emoji: "👃", color: "#7ab8e8", category: "Soğuk Algınlığı",  group: "soguk",       assetKey: "med_burunac" },
+
+  { id: "med_bulantistop",  name: "Bulantıstop",   emoji: "🤢", color: "#5a9a5a", category: "Sindirim",         group: "sindirim",    assetKey: "med_bulantistop" },
+  { id: "med_bagirsakduzen",name: "Bağırsakdüzen", emoji: "🦠", color: "#8ac88a", category: "Sindirim",         group: "sindirim",    assetKey: "med_bagirsakduzen" },
+  { id: "med_hazimkolay",   name: "Hazımkolay",    emoji: "🍽️", color: "#b8c85a", category: "Sindirim",         group: "sindirim",    assetKey: "med_hazimkolay" },
+  { id: "med_reflusondur",  name: "Reflüsöndür",   emoji: "🔥", color: "#6ac8a8", category: "Sindirim",         group: "sindirim",    assetKey: "med_reflusondur" },
+
+  { id: "med_dvitamin",     name: "D-Vitamin",     emoji: "☀️", color: "#e8c84a", category: "Vitamin/Takviye",  group: "vitamin",     assetKey: "med_dvitamin" },
+  { id: "med_b12guc",       name: "B12-Güç",       emoji: "⚡", color: "#e88ab8", category: "Vitamin/Takviye",  group: "vitamin",     assetKey: "med_b12guc" },
+  { id: "med_demirtam",     name: "Demirtam",      emoji: "🩸", color: "#a83a3a", category: "Vitamin/Takviye",  group: "vitamin",     assetKey: "med_demirtam" },
+  { id: "med_cinko",        name: "Çinko+",        emoji: "🛡️", color: "#6a8aa8", category: "Vitamin/Takviye",  group: "vitamin",     assetKey: "med_cinko" },
+  { id: "med_magnezyum",    name: "Magnezyum",     emoji: "🌙", color: "#8a6ac8", category: "Vitamin/Takviye",  group: "vitamin",     assetKey: "med_magnezyum" },
+
+  { id: "med_kulakdamla",   name: "Kulakdamla",    emoji: "👂", color: "#e8943a", category: "Göz/Kulak/Burun",  group: "goz_kulak",   assetKey: "med_kulakdamla" },
+  { id: "med_gorusnet",     name: "Görüşnet",      emoji: "👓", color: "#7ab8e8", category: "Göz/Kulak/Burun",  group: "goz_kulak",   assetKey: "med_gorusnet" },
+  { id: "med_burunferah",   name: "Burunferah",    emoji: "🌬️", color: "#5ab8b8", category: "Göz/Kulak/Burun",  group: "goz_kulak",   assetKey: "med_burunferah" },
+
+  { id: "med_yaratemiz",    name: "Yaratemiz",     emoji: "🧴", color: "#d8e8f8", category: "İlk Yardım",       group: "ilk_yardim",  assetKey: "med_yaratemiz" },
+  { id: "med_yanikkrem",    name: "Yanıkkrem",     emoji: "🔥", color: "#f8c8d8", category: "İlk Yardım",       group: "ilk_yardim",  assetKey: "med_yanikkrem" },
+  { id: "med_mikropkir",    name: "Mikropkır",     emoji: "✨", color: "#5ac88a", category: "İlk Yardım",       group: "ilk_yardim",  assetKey: "med_mikropkir" },
+  { id: "med_agrijel",      name: "Ağrıjel",       emoji: "🧊", color: "#8ac8e8", category: "İlk Yardım",       group: "ilk_yardim",  assetKey: "med_agrijel" },
+
+  { id: "med_sakinol",      name: "Sakinol",       emoji: "🍵", color: "#b89ad8", category: "Sinir/Uyku",       group: "uyku_sinir",  assetKey: "med_sakinol" },
+  { id: "med_stresyok",     name: "Stresyok",      emoji: "😌", color: "#c8a8e8", category: "Sinir/Uyku",       group: "uyku_sinir",  assetKey: "med_stresyok" },
+  { id: "med_huzurver",     name: "Huzurver",      emoji: "🌿", color: "#8ac88a", category: "Sinir/Uyku",       group: "uyku_sinir",  assetKey: "med_huzurver" },
+
+  { id: "med_ciltbakim",    name: "Ciltbakım",     emoji: "🧴", color: "#f8b8c8", category: "Cilt/Dış",         group: "cilt",        assetKey: "med_ciltbakim" },
+  { id: "med_sivilcesil",   name: "Sivilcesil",    emoji: "🧼", color: "#a8d8a8", category: "Cilt/Dış",         group: "cilt",        assetKey: "med_sivilcesil" },
+  { id: "med_mantarkov",    name: "Mantarkov",     emoji: "🦶", color: "#e8a84a", category: "Cilt/Dış",         group: "cilt",        assetKey: "med_mantarkov" },
+  { id: "med_kasintidur",   name: "Kaşıntıdur",    emoji: "🚫", color: "#6a9ad8", category: "Cilt/Dış",         group: "cilt",        assetKey: "med_kasintidur" }
 ];
 
 // Kategori sekmeleri (ölçeklenebilir; boş gruplar otomatik gizlenir)
@@ -145,7 +183,34 @@ const SYMPTOMS = [
   { emoji: "🌡️", category: "ates",       label: "Ateşim var" },
   { emoji: "🤧", category: "alerji",     label: "Alerjim azdı" },
   { emoji: "👁️", category: "goz",        label: "Gözüm yanıyor" },
-  { emoji: "😴", category: "uyku",       label: "Uyuyamıyorum" }
+  { emoji: "😴", category: "uyku",       label: "Uyuyamıyorum" },
+
+  // genişletilmiş havuz (grup okunur adlarıyla eşleşir)
+  { emoji: "🤕", category: "Ağrı/Ateş",       label: "Başım çok ağrıyor" },
+  { emoji: "🦷", category: "Ağrı/Ateş",       label: "Dişim ağrıyor" },
+  { emoji: "💪", category: "Ağrı/Ateş",       label: "Kaslarım tutuldu" },
+  { emoji: "🤒", category: "Soğuk Algınlığı", label: "Grip oldum" },
+  { emoji: "🗣️", category: "Soğuk Algınlığı", label: "Boğazım ağrıyor" },
+  { emoji: "👃", category: "Soğuk Algınlığı", label: "Burnum tıkalı" },
+  { emoji: "🤢", category: "Sindirim",        label: "Bulantım var" },
+  { emoji: "🔥", category: "Sindirim",        label: "Reflüm azdı" },
+  { emoji: "🍽️", category: "Sindirim",        label: "Hazımsızlık çekiyorum" },
+  { emoji: "☀️", category: "Vitamin/Takviye", label: "D vitaminim düşük" },
+  { emoji: "🩸", category: "Vitamin/Takviye", label: "Demir eksikliğim var" },
+  { emoji: "⚡", category: "Vitamin/Takviye", label: "Sürekli yorgunum" },
+  { emoji: "👂", category: "Göz/Kulak/Burun", label: "Kulağım ağrıyor" },
+  { emoji: "👓", category: "Göz/Kulak/Burun", label: "Gözüm bulanık görüyor" },
+  { emoji: "🌬️", category: "Göz/Kulak/Burun", label: "Burnum akıyor" },
+  { emoji: "🔥", category: "İlk Yardım",       label: "Elimi yaktım" },
+  { emoji: "🩹", category: "İlk Yardım",       label: "Yaram var" },
+  { emoji: "✨", category: "İlk Yardım",       label: "Kesik mikrop kapmasın" },
+  { emoji: "😵‍💫", category: "Sinir/Uyku",      label: "Çok stresliyim" },
+  { emoji: "🍵", category: "Sinir/Uyku",      label: "Sakinleşmem lazım" },
+  { emoji: "🌙", category: "Sinir/Uyku",      label: "Geceleri huzursuzum" },
+  { emoji: "🧴", category: "Cilt/Dış",        label: "Cildim çok kuru" },
+  { emoji: "🧼", category: "Cilt/Dış",        label: "Sivilcelerim çıktı" },
+  { emoji: "🦶", category: "Cilt/Dış",        label: "Ayağımda mantar var" },
+  { emoji: "🚫", category: "Cilt/Dış",        label: "Çok kaşınıyorum" }
 ];
 
 // reçetelerde görünecek kurgusal doktorlar
