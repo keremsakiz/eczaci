@@ -38,6 +38,14 @@ const CONFIG = {
   repGainCorrect: 2,        // doğru serviste itibar artışı
   repLossWrong: 5,          // yanlış serviste itibar kaybı
 
+  // --- Sahte reçete inceleme ---
+  fakeChance: 0.28,             // reçetenin sahte olma ihtimali
+  fakeApproveRepLoss: 15,       // sahteyi onaylayıp ilaç verince itibar cezası
+  fakeApproveMoneyPenalty: 50,  // sahteyi onaylayınca para cezası (₺)
+  fakeCatchRepGain: 8,          // sahteyi reddedince (yakalayınca) itibar
+  fakeCatchBonus: 20,           // sahteyi yakalayınca küçük para bonusu (₺)
+  wrongRejectRepLoss: 5,        // gerçeği yanlışlıkla reddedince itibar cezası
+
   prescriptionChance: 0.5,  // %50 reçeteli, %50 semptomlu
   minPrescriptionItems: 1,
   maxPrescriptionItems: 3,
@@ -45,8 +53,9 @@ const CONFIG = {
   feedbackDuration: 0.8,    // feedback gösterim süresi (sn)
   patientEnterTime: 0.35,   // hasta giriş animasyon süresi (sn)
 
-  // --- Faz 1: gün / zaman ---
-  dayDuration: 90,          // bir günün uzunluğu (sn) — zaman çubuğu dolunca gün biter
+  // --- Gün = müşteri limiti (süre değil) ---
+  patientsPerDayBase: 8,    // gün 1 müşteri hedefi
+  patientsPerDayStep: 2,    // her gün +2 müşteri (gün2=10, gün3=12...)
   dailyGoal: 150,           // gün başı hedef para (gerçek hedef = dailyGoal * gün no)
 
   // --- Faz 1: hasta sırası (kuyruk) ---
@@ -213,14 +222,37 @@ const SYMPTOMS = [
   { emoji: "🚫", category: "Cilt/Dış",        label: "Çok kaşınıyorum" }
 ];
 
-// reçetelerde görünecek kurgusal doktorlar
-const DOCTORS = [
-  { name: "Dr. Ayşe Yılmaz",  sig: "AYılmaz" },
-  { name: "Dr. Mehmet Demir", sig: "MDemir" },
-  { name: "Dr. Zeynep Kaya",  sig: "ZKaya" },
-  { name: "Dr. Can Öztürk",   sig: "CÖztürk" },
-  { name: "Dr. Elif Şahin",   sig: "EŞahin" },
-  { name: "Dr. Burak Aslan",  sig: "BAslan" }
+// TANINAN doktorlar — gerçek reçetelerin doktorları buradan seçilir
+const KNOWN_DOCTORS = [
+  { name: "Dr. Ayşe Yılmaz",    sig: "AYılmaz" },
+  { name: "Dr. Mehmet Demir",   sig: "MDemir" },
+  { name: "Dr. Zeynep Kaya",    sig: "ZKaya" },
+  { name: "Dr. Can Öztürk",     sig: "CÖztürk" },
+  { name: "Dr. Elif Şahin",     sig: "EŞahin" },
+  { name: "Dr. Murat Aydın",    sig: "MAydın" },
+  { name: "Dr. Fatma Çelik",    sig: "FÇelik" },
+  { name: "Dr. Ali Koç",        sig: "AKoç" },
+  { name: "Dr. Selin Arslan",   sig: "SArslan" },
+  { name: "Dr. Burak Doğan",    sig: "BDoğan" },
+  { name: "Dr. Deniz Yıldız",   sig: "DYıldız" },
+  { name: "Dr. Ece Kurt",       sig: "EKurt" },
+  { name: "Dr. Emre Şimşek",    sig: "EŞimşek" },
+  { name: "Dr. Gizem Polat",    sig: "GPolat" },
+  { name: "Dr. Hakan Erdoğan",  sig: "HErdoğan" },
+  { name: "Dr. Merve Aksoy",    sig: "MAksoy" },
+  { name: "Dr. Okan Taş",       sig: "OTaş" },
+  { name: "Dr. Pınar Güneş",    sig: "PGüneş" },
+  { name: "Dr. Serkan Bulut",   sig: "SBulut" },
+  { name: "Dr. Tuğçe Avcı",     sig: "TAvcı" }
+];
+
+// SAHTE/uydurma doktorlar — fake_doctor kusurunda kullanılır (listede yok)
+const FAKE_DOCTORS = [
+  { name: "Dr. Xyzqw Asdf",  sig: "Xq" },
+  { name: "Dr. Qwfp Ljxy",   sig: "??" },
+  { name: "Dr. Zzx Vvbn",    sig: "zz" },
+  { name: "Dr. ??? ???",     sig: "???" },
+  { name: "Dr. Brrr Klmn",   sig: "bk" }
 ];
 
 const PATIENT_AVATARS = [
@@ -296,14 +328,16 @@ const game = {
   money: CONFIG.startMoney,
   reputation: CONFIG.startReputation,
 
-  // gün / zaman
+  // gün / müşteri limiti
   dayNumber: 1,
-  dayTime: 0,             // 0..dayDuration
   spawnTimer: 0,          // yeni hasta sayacı
+  daySpawned: 0,          // bu gün üretilen müşteri sayısı
+  dayCompleted: 0,        // bu gün tamamlanan (servis/red/küs) müşteri sayısı
   dayStats: { served: 0, correct: 0, wrong: 0, angry: 0, money: 0 },
 
   // ilaç sekmeleri
   activeGroup: null,      // seçili kategori (boşsa ilk dolu gruba ayarlanır)
+  lastDoctor: null,       // ardışık aynı doktoru engellemek için
 
   // kuyruk
   queue: [],              // hasta dizisi; queue[0] = aktif hasta
@@ -391,6 +425,11 @@ function computeLayout() {
   const btnH = sh * 0.082;
   const btnY = sy + sh - btnH - sh * 0.02 - (window.__safeBottom || 0);
   layout.serveBtn = { x: left, y: btnY, w: colW, h: btnH };
+  // ONAYLA / REDDET (reçete karar fazında SERVİS yerine gösterilir)
+  const halfGap = colW * 0.04;
+  const halfW = (colW - halfGap) / 2;
+  layout.rejectBtn = { x: left, y: btnY, w: halfW, h: btnH };
+  layout.approveBtn = { x: left + halfW + halfGap, y: btnY, w: halfW, h: btnH };
 
   // --- Kategori sekmeleri + ilaç seçim grid'i (bandın ALTINDA) ---
   const zoneTop = counterLine + bandH + sh * 0.012;
@@ -538,36 +577,87 @@ function lerp(a, b, t) { return a + (b - a) * t; }
 function activePatient() { return game.queue.length ? game.queue[0] : null; }
 
 function goalForDay() { return CONFIG.dailyGoal * game.dayNumber; }
+function patientsForDay() { return CONFIG.patientsPerDayBase + (game.dayNumber - 1) * CONFIG.patientsPerDayStep; }
 
-// yeni hasta üret ve kuyruğa ekle
-function spawnPatient() {
+// --- tarih sistemi: gün 1 = 17 Haziran 2026, her gün +1 ---
+const MONTHS_TR = ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"];
+function gameDate(offsetDays) {
+  const d = new Date(2026, 5, 17);
+  d.setDate(d.getDate() + (game.dayNumber - 1) + (offsetDays || 0));
+  return d;
+}
+function dateShort() { const d = gameDate(0); return d.getDate() + " " + MONTHS_TR[d.getMonth()]; }
+function dateRx(offsetDays) {
+  const d = gameDate(offsetDays);
+  return d.getDate() + " " + MONTHS_TR[d.getMonth()] + " '" + String(d.getFullYear()).slice(2);
+}
+
+// ardışık aynı doktoru seçmeden tanınan doktor seç
+function pickKnownDoctor() {
+  let d;
+  do { d = pick(KNOWN_DOCTORS); } while (KNOWN_DOCTORS.length > 1 && d.name === game.lastDoctor);
+  game.lastDoctor = d.name;
+  return d;
+}
+
+// reçete üret (gerçek/sahte + kusurlar). fakeForce: true/false => zorla; undefined => rastgele
+function makePrescription(fakeForce) {
+  const count = CONFIG.minPrescriptionItems +
+    rand(CONFIG.maxPrescriptionItems - CONFIG.minPrescriptionItems + 1);
+  const pool = MEDICINES.slice();
+  const items = [];
+  for (let i = 0; i < count && pool.length; i++) {
+    const m = pool.splice(rand(pool.length), 1)[0];
+    const roll = Math.random();
+    const qty = roll < 0.70 ? 1 : roll < 0.92 ? 2 : 3;
+    items.push({ id: m.id, qty });
+  }
+
+  const fake = (fakeForce === undefined) ? (Math.random() < CONFIG.fakeChance) : !!fakeForce;
+  const flaws = [];
+  if (fake) {
+    const pool2 = ["fake_doctor", "expired", "overdose", "no_stamp", "bad_signature", "conflict"];
+    for (let i = pool2.length - 1; i > 0; i--) { const j = rand(i + 1); [pool2[i], pool2[j]] = [pool2[j], pool2[i]]; }
+    const k = 1 + rand(2);            // 1 veya 2 kusur
+    for (let i = 0; i < k; i++) flaws.push(pool2[i]);
+  }
+
+  // varsayılan (gerçek) üst bilgi
+  let doc = pickKnownDoctor();
+  let doctor = doc.name, sig = doc.sig;
+  let date = dateRx(0);               // güncel tarih
+  let hasStamp = true, expired = false;
+
+  // kusurları uygula
+  if (flaws.includes("conflict")) {
+    const sleepIds = MEDICINES.filter(m => m.group === "uyku_sinir").map(m => m.id);
+    const energyIds = ["med_b12guc", "med_dvitamin", "cvitamin"].filter(id => getMedicine(id));
+    items.length = 0;
+    items.push({ id: pick(sleepIds), qty: 1 });
+    items.push({ id: pick(energyIds), qty: 1 });
+  }
+  if (flaws.includes("overdose")) {
+    items[rand(items.length)].qty = pick([8, 10]);
+  }
+  if (flaws.includes("fake_doctor")) { const f = pick(FAKE_DOCTORS); doctor = f.name; sig = f.sig; }
+  if (flaws.includes("expired")) { expired = true; date = dateRx(-183); }  // ~6 ay önce
+  if (flaws.includes("no_stamp")) { hasStamp = false; }
+  if (flaws.includes("bad_signature")) { sig = pick(["???", "—", ""]); }
+
+  return { type: "prescription", items, fake, flaws, doctor, sig, date, hasStamp, expired };
+}
+
+// yeni hasta üret ve kuyruğa ekle. opts: {forcePrescription, forceFake}
+function spawnPatient(opts) {
+  opts = opts || {};
   if (game.queue.length >= CONFIG.maxQueue) return;
 
   const avatarDef = pick(PATIENT_AVATARS);
-  const isPrescription = Math.random() < CONFIG.prescriptionChance;
+  const isPrescription = opts.forcePrescription ? true : (Math.random() < CONFIG.prescriptionChance);
 
   let request;
   if (isPrescription) {
-    const count = CONFIG.minPrescriptionItems +
-      rand(CONFIG.maxPrescriptionItems - CONFIG.minPrescriptionItems + 1);
-    const pool = MEDICINES.slice();
-    const items = [];
-    for (let i = 0; i < count && pool.length; i++) {
-      const m = pool.splice(rand(pool.length), 1)[0];
-      const roll = Math.random();             // adet: çoğu ×1, bazıları ×2/×3
-      const qty = roll < 0.70 ? 1 : roll < 0.92 ? 2 : 3;
-      items.push({ id: m.id, qty });
-    }
-    // reçete üst bilgisi (bir kez atanır, sabit kalır)
-    const doc = pick(DOCTORS);
-    const dd = String(((game.dayNumber * 3 + 11) % 28) + 1).padStart(2, "0");
-    request = {
-      type: "prescription",
-      items,
-      doctor: doc.name,
-      sig: doc.sig,
-      date: dd + ".06"
-    };
+    request = makePrescription(opts.forceFake);
   } else {
     const symptom = pick(SYMPTOMS);
     request = { type: "symptom", symptom };
@@ -577,12 +667,14 @@ function spawnPatient() {
     avatar: avatarDef.emoji,
     avatarKey: avatarDef.assetKey,
     request,
+    decided: null,            // reçeteliler için: null | "approve" | "reject"
     maxPatience: CONFIG.basePatience,
     patience: CONFIG.basePatience,
     enterT: 0,
     posCurrent: game.queue.length + 0.85  // sağdan kayarak girsin
   };
   game.queue.push(patient);
+  game.daySpawned++;
 }
 
 // aktif hastanın beklediği ilaç çoklu-kümesi (adetli => id tekrarlı liste)
@@ -607,22 +699,74 @@ function sameMultiset(a, b) {
   return true;
 }
 
+// reçeteli hasta henüz ONAYLA/REDDET kararı bekliyor mu?
+function activeNeedsDecision() {
+  const p = activePatient();
+  return !!(p && !game.feedback && p.request.type === "prescription" && !p.decided);
+}
+// ilaç seçip servis edilebilir mi? (semptom => evet; reçete => onaylanmışsa)
+function servingAllowed() {
+  const p = activePatient();
+  if (!p || game.feedback) return false;
+  if (p.request.type === "prescription") return p.decided === "approve";
+  return true;
+}
+
+function approvePrescription() {
+  const p = activePatient();
+  if (!activeNeedsDecision() || p.request.type !== "prescription") return;
+  p.decided = "approve";          // ilaç verme moduna geç
+  game.counter = [];
+  rebuildCounterSlots();
+}
+
+function rejectPrescription() {
+  const p = activePatient();
+  if (!activeNeedsDecision() || p.request.type !== "prescription") return;
+  p.decided = "reject";
+  game.dayStats.served++;
+  if (p.request.fake) {
+    // doğru yakalama
+    game.money += CONFIG.fakeCatchBonus;
+    game.dayStats.money += CONFIG.fakeCatchBonus;
+    game.dayStats.correct++;
+    game.reputation = clamp(game.reputation + CONFIG.fakeCatchRepGain, CONFIG.minReputation, CONFIG.maxReputation);
+    game.feedback = { ok: true, angry: false, text: "✓ Sahte reçete yakaladın!  +" + CONFIG.fakeCatchBonus + "₺", t: 0 };
+  } else {
+    // gerçeği boşuna reddetti
+    game.dayStats.wrong++;
+    game.reputation = clamp(game.reputation - CONFIG.wrongRejectRepLoss, CONFIG.minReputation, CONFIG.maxReputation);
+    game.feedback = { ok: false, angry: false, text: "Müşteriyi boşuna çevirdin", t: 0 };
+  }
+}
+
 function tapMedicine(id) {
-  if (game.feedback || !activePatient()) return;
+  if (!servingAllowed()) return;
   game.counter.push(id);
   rebuildCounterSlots();
 }
 
 function removeFromCounter(idx) {
-  if (game.feedback) return;
+  if (!servingAllowed()) return;
   game.counter.splice(idx, 1);
   rebuildCounterSlots();
 }
 
 function checkOrder() {
   const p = activePatient();
-  if (game.feedback || !p) return;
+  if (!servingAllowed() || !p) return;
   if (game.counter.length === 0) return;
+
+  // onaylanmış SAHTE reçeteye ilaç verme => ağır ceza (ilaç doğru olsa bile)
+  if (p.request.type === "prescription" && p.request.fake) {
+    game.dayStats.served++;
+    game.dayStats.wrong++;
+    game.reputation = clamp(game.reputation - CONFIG.fakeApproveRepLoss, CONFIG.minReputation, CONFIG.maxReputation);
+    game.money = Math.max(0, game.money - CONFIG.fakeApproveMoneyPenalty);
+    game.dayStats.money -= CONFIG.fakeApproveMoneyPenalty;
+    game.feedback = { ok: false, angry: false, text: "⚠️ Sahte reçeteye ilaç verdin!", t: 0 };
+    return;
+  }
 
   const expected = expectedMedicineIds();
   const given = game.counter.slice();
@@ -649,12 +793,14 @@ function checkOrder() {
   }
 }
 
-// feedback bitince aktif hasta çıkar, sıra kayar
+// feedback bitince aktif hasta çıkar (tamamlandı), sıra kayar; hedef dolduysa gün biter
 function onFeedbackEnd() {
   game.queue.shift();
   game.counter = [];
   game.feedback = null;
   rebuildCounterSlots();
+  game.dayCompleted++;
+  if (game.dayCompleted >= patientsForDay()) endDay();
 }
 
 function endDay() {
@@ -668,8 +814,9 @@ function endDay() {
 
 function startNextDay() {
   game.dayNumber++;
-  game.dayTime = 0;
-  game.spawnTimer = CONFIG.spawnInterval; // ilk hasta hemen, sonrakiler aralıkla
+  game.spawnTimer = CONFIG.spawnInterval;
+  game.daySpawned = 0;
+  game.dayCompleted = 0;
   game.queue = [];
   game.counter = [];
   game.feedback = null;
@@ -686,19 +833,12 @@ function update(dt) {
   game.clock += dt;
   if (game.state !== STATE.PLAYING) return;
 
-  // gün zamanı
-  game.dayTime += dt;
-  if (game.dayTime >= CONFIG.dayDuration) {
-    game.dayTime = CONFIG.dayDuration;
-    endDay();
-    return;
-  }
-
-  // hasta spawn (gün ilerledikçe aralık kısalır)
+  // hasta spawn — günün hedef müşteri sayısı kadar üret, kuyruk doluysa bekle
+  const goalN = patientsForDay();
   game.spawnTimer += dt;
-  const prog = game.dayTime / CONFIG.dayDuration;
+  const prog = goalN > 0 ? game.dayCompleted / goalN : 0;       // gün ilerledikçe hızlan
   const interval = lerp(CONFIG.spawnInterval, CONFIG.minSpawnInterval, prog);
-  if (game.spawnTimer >= interval && game.queue.length < CONFIG.maxQueue) {
+  if (game.spawnTimer >= interval && game.queue.length < CONFIG.maxQueue && game.daySpawned < goalN) {
     game.spawnTimer = 0;
     spawnPatient();
   }
@@ -716,8 +856,11 @@ function update(dt) {
     if (game.feedback.t >= CONFIG.feedbackDuration) onFeedbackEnd();
   } else {
     for (let i = 0; i < game.queue.length; i++) {
-      const rate = i === 0 ? 1 : CONFIG.queuePatienceMultiplier;
-      game.queue[i].patience -= dt * rate;
+      const p = game.queue[i];
+      let rate = i === 0 ? 1 : CONFIG.queuePatienceMultiplier;
+      // reçete inceleme fazında aktif hastanın sabrı DONUK (acele baskısı yok)
+      if (i === 0 && p.request.type === "prescription" && !p.decided) rate = 0;
+      p.patience -= dt * rate;
     }
     const act = activePatient();
     if (act && act.patience <= 0) {
@@ -798,27 +941,19 @@ function drawHUD() {
 
   // 💰 Para (sol)
   text("💰 " + game.money + "₺", hud.x + hud.w * 0.04, rowY, fs, c.cream, "left", "700");
-  // 📅 Gün (orta)
-  text("📅 Gün " + game.dayNumber, hud.x + hud.w * 0.5, rowY, fs, c.cream, "center", "700");
+  // 📅 Takvim tarihi (orta) — gün ilerledikçe artar
+  text("📅 " + dateShort(), hud.x + hud.w * 0.5, rowY, fs, c.cream, "center", "700");
   // ⭐ İtibar (sağ)
   text("⭐ " + Math.round(game.reputation), hud.x + hud.w * 0.96, rowY, fs, c.cream, "right", "700");
 
-  // alt satır: itibar barı + gün zaman çubuğu
+  // alt satır: itibar barı (tam genişlik) — müşteri sayacı gizli
   const barY = hud.y + hud.h * 0.64;
   const barH = hud.h * 0.18;
-
   const repX = hud.x + hud.w * 0.04;
-  const repW = hud.w * 0.42;
+  const repW = hud.w * 0.92;
   fillRoundRect(repX, barY, repW, barH, barH / 2, c.repTrack);
   const repFill = repW * (game.reputation / CONFIG.maxReputation);
   if (repFill > 1) fillRoundRect(repX, barY, repFill, barH, barH / 2, c.repBar);
-
-  const timeX = hud.x + hud.w * 0.54;
-  const timeW = hud.w * 0.42;
-  fillRoundRect(timeX, barY, timeW, barH, barH / 2, c.timeTrack);
-  const timeFill = timeW * (game.dayTime / CONFIG.dayDuration);
-  if (timeFill > 1) fillRoundRect(timeX, barY, timeFill, barH, barH / 2, c.timeBar);
-  text("🕐", timeX - hud.w * 0.005, barY + barH / 2, barH * 1.5, c.cream, "right", "400");
 }
 
 // ---- kuyruk yerleşimi: pozisyon değerini sahne koordinatına çevir ----
@@ -1066,11 +1201,25 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
   ctx.clip();
 
   const ink = "#3a3326", inkSoft = "#8a7c5e";
+  const req = p.request;
 
   // üst: kaşe (✚) + doktor adı + tarih
   const headY = y + padY + h * 0.045;
-  fitText(p.request.date, rx, headY, innerW * 0.30, h * 0.05, inkSoft, "right", "600");
-  fitText("✚ " + p.request.doctor, lx, headY, innerW * 0.66, h * 0.052, ink, "left", "700");
+  // tarih — sahte/eski olsa da renkle ele vermez; oyuncu tarihi OKUYUP anlamalı
+  fitText(req.date, rx, headY, innerW * 0.34, h * 0.05, inkSoft, "right", "600");
+  // kaşe rozeti (gerçeklerde HER ZAMAN çizilir; no_stamp kusurunda HİÇ çizilmez)
+  let docX = lx;
+  if (req.hasStamp !== false) {
+    const br = h * 0.052;
+    const bx = lx + br, by = headY;
+    ctx.save();
+    ctx.strokeStyle = "#2e7d32"; ctx.lineWidth = Math.max(1.2, h * 0.006);
+    ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+    text("✚", bx, by + h * 0.002, br * 1.5, "#2e7d32", "center", "800");
+    docX = lx + br * 2 + w * 0.025;
+  }
+  fitText(req.doctor, docX, headY, (rx - innerW * 0.36) - docX, h * 0.052, ink, "left", "700");
 
   // ayraç
   ctx.strokeStyle = "rgba(120,90,50,0.35)";
@@ -1092,6 +1241,7 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
     ctx.arc(lx + dotR, ly, dotR, 0, Math.PI * 2);
     ctx.fillStyle = m.color; ctx.fill();
     ctx.strokeStyle = "rgba(0,0,0,0.18)"; ctx.lineWidth = 1; ctx.stroke();
+    // adet renkle ele vermez; ×8/×10 yine yazılır ama normal renkte (oyuncu mantığı yakalar)
     fitText("× " + it.qty, rx, ly, qtyW, fs, ink, "right", "800");
     const nameX = lx + dotR * 2 + fs * 0.5;
     fitText(m.name, nameX, ly, rx - qtyW - fs * 0.5 - nameX, fs, ink, "left", "600");
@@ -1198,7 +1348,7 @@ function drawTabs() {
 }
 
 function drawShelf() {
-  const disabled = !!game.feedback || !activePatient();
+  const disabled = !servingAllowed();
   for (const btn of layout.shelfButtons) {
     const m = getMedicine(btn.id);
     ctx.globalAlpha = disabled ? 0.55 : 1;
@@ -1286,10 +1436,32 @@ function drawCounter() {
   }
 }
 
+// basit dolgu buton (onay/red için)
+function drawSolidButton(b, label, fillCol, textCol, glowCol) {
+  const r = b.h * 0.32;
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.35)";
+  ctx.shadowBlur = 12;
+  ctx.shadowOffsetY = 4;
+  fillRoundRect(b.x, b.y, b.w, b.h, r, fillCol);
+  ctx.restore();
+  ctx.save();
+  if (glowCol) { ctx.shadowColor = glowCol; ctx.shadowBlur = 14; }
+  strokeRoundRect(b.x, b.y, b.w, b.h, r, textCol, Math.max(1.5, b.w * 0.008));
+  text(label, b.x + b.w / 2, b.y + b.h / 2, b.h * 0.32, textCol, "center", "800");
+  ctx.restore();
+}
+
+// reçete karar fazı: REDDET / ONAYLA butonları
+function drawDecisionButtons() {
+  drawSolidButton(layout.rejectBtn, "✕ REDDET", "rgba(40,18,18,0.92)", "#e8736b", "rgba(232,115,107,0.6)");
+  drawSolidButton(layout.approveBtn, "✓ ONAYLA", "rgba(20,38,24,0.92)", "#5ec48a", "rgba(94,196,138,0.6)");
+}
+
 function drawServeButton() {
   const c = CONFIG.colors;
   const b = layout.serveBtn;
-  const enabled = game.counter.length > 0 && !game.feedback;
+  const enabled = game.counter.length > 0 && servingAllowed();
 
   Sprite.draw(ctx, "btn_serve", b.x, b.y, b.w, b.h, () => {
     const r = b.h * 0.32;
@@ -1440,7 +1612,7 @@ function render() {
     drawCounter();      // ahşap bant müşterinin önünde + seçilen ilaçlar
     drawTabs();         // kategori sekmeleri
     drawShelf();        // seçili kategorinin ilaçları
-    drawServeButton();
+    if (activeNeedsDecision()) drawDecisionButtons(); else drawServeButton();
     drawFeedback();
   } else if (game.state === STATE.DAYEND) {
     // arka planda son kareyi koru + kart
@@ -1449,7 +1621,7 @@ function render() {
     drawCounter();
     drawTabs();
     drawShelf();
-    drawServeButton();
+    if (activeNeedsDecision()) drawDecisionButtons(); else drawServeButton();
     drawDayEnd();
   } else if (game.state === STATE.MENU) {
     drawMenuPlaceholder();
@@ -1503,6 +1675,13 @@ function handleTap(px, py) {
   if (layout.tabsArea && pointInRect(px, py, layout.tabsArea)) { selectTabAt(px, py); return; }
 
   if (game.feedback) return;
+
+  // reçete karar fazı: önce ONAYLA/REDDET
+  if (activeNeedsDecision()) {
+    if (pointInRect(px, py, layout.approveBtn)) approvePrescription();
+    else if (pointInRect(px, py, layout.rejectBtn)) rejectPrescription();
+    return;
+  }
 
   if (pointInRect(px, py, layout.serveBtn)) { checkOrder(); return; }
 
@@ -1597,6 +1776,17 @@ window.cheats = {
   setPatience(n) { const p = activePatient(); if (p) p.patience = n; },
   clearQueue() { game.queue = []; game.counter = []; game.feedback = null; rebuildCounterSlots(); },
   newPatient() { spawnPatient(); },
+  spawnFake() { spawnPatient({ forcePrescription: true, forceFake: true }); },
+  revealFlaws() {
+    const p = activePatient();
+    if (!p || p.request.type !== "prescription") { console.log("Aktif hasta reçeteli değil."); return; }
+    const r = p.request;
+    console.log("Reçete:", r.fake ? "SAHTE" : "GERÇEK",
+      "| kusurlar:", r.flaws && r.flaws.length ? r.flaws.join(", ") : "(yok)",
+      "| doktor:", r.doctor, "| tarih:", r.date, "| kaşe:", r.hasStamp, "| imza:", JSON.stringify(r.sig),
+      "| ilaçlar:", r.items.map(it => it.id + "×" + it.qty).join(", "));
+    return r;
+  },
   setGroup(gid) { if (medsInGroup(gid).length) { game.activeGroup = gid; buildShelf(); } },
   assetStatus() {
     const keys = ["bg_pharmacy", "counter", "btn_serve"]
@@ -1610,7 +1800,7 @@ window.cheats = {
   state() {
     return JSON.parse(JSON.stringify({
       day: game.dayNumber, money: game.money, reputation: game.reputation,
-      dayTime: Math.round(game.dayTime), queue: game.queue.length,
+      patients: game.dayCompleted + "/" + patientsForDay(), queue: game.queue.length,
       activeGroup: game.activeGroup,
       counter: game.counter, expected: expectedMedicineIds(),
       dayStats: game.dayStats
