@@ -325,7 +325,7 @@ const Sprite = {
 const STATE = { MENU: "MENU", PLAYING: "PLAYING", DAYEND: "DAYEND", GAMEOVER: "GAMEOVER" };
 
 const game = {
-  state: STATE.PLAYING,   // şimdilik direkt PLAYING aktif
+  state: STATE.MENU,      // açılışta menü; BAŞLA'ya basınca PLAYING
   money: CONFIG.startMoney,
   reputation: CONFIG.startReputation,
 
@@ -744,8 +744,8 @@ function rejectPrescription() {
   } else {
     // gerçeği boşuna reddetti
     game.dayStats.wrong++;
-    game.reputation = clamp(game.reputation - CONFIG.wrongRejectRepLoss, CONFIG.minReputation, CONFIG.maxReputation);
     game.feedback = { ok: false, angry: false, text: "Müşteriyi boşuna çevirdin", t: 0 };
+    loseReputation(CONFIG.wrongRejectRepLoss);
   }
 }
 
@@ -770,10 +770,10 @@ function checkOrder() {
   if (p.request.type === "prescription" && p.request.fake) {
     game.dayStats.served++;
     game.dayStats.wrong++;
-    game.reputation = clamp(game.reputation - CONFIG.fakeApproveRepLoss, CONFIG.minReputation, CONFIG.maxReputation);
     game.money = Math.max(0, game.money - CONFIG.fakeApproveMoneyPenalty);
     game.dayStats.money -= CONFIG.fakeApproveMoneyPenalty;
     game.feedback = { ok: false, angry: false, text: "⚠️ Sahte reçeteye ilaç verdin!", t: 0 };
+    loseReputation(CONFIG.fakeApproveRepLoss);
     return;
   }
 
@@ -797,13 +797,15 @@ function checkOrder() {
     game.feedback = { ok: true, angry: false, text: "✓ Teşekkürler!  +" + earn + "₺", t: 0 };
   } else {
     game.dayStats.wrong++;
-    game.reputation = clamp(game.reputation - CONFIG.repLossWrong, CONFIG.minReputation, CONFIG.maxReputation);
     game.feedback = { ok: false, angry: false, text: "✗ Yanlış ilaç!", t: 0 };
+    loseReputation(CONFIG.repLossWrong);
   }
 }
 
 // feedback bitince aktif hasta çıkar (tamamlandı), sıra kayar; hedef dolduysa gün biter
 function onFeedbackEnd() {
+  // feedback bitiminde oyun bittiyse kuyruk kaydırma / yeni gün mantığı çalışmaz
+  if (game.state === STATE.GAMEOVER) { game.feedback = null; return; }
   game.queue.shift();
   game.counter = [];
   game.feedback = null;
@@ -833,6 +835,35 @@ function startNextDay() {
   rebuildCounterSlots();
   game.state = STATE.PLAYING;
   spawnPatient();
+}
+
+// Oyunu sıfırdan kurar (MENU/GAMEOVER → PLAYING). Gün, para, itibar dahil her şey resetlenir.
+function startNewGame() {
+  game.money = CONFIG.startMoney;
+  game.reputation = CONFIG.startReputation;
+  game.dayNumber = 1;
+  game.spawnTimer = 0;
+  game.daySpawned = 0;
+  game.dayCompleted = 0;
+  game.queue = [];
+  game.counter = [];
+  game.feedback = null;
+  game.dayStats = { served: 0, correct: 0, wrong: 0, angry: 0, money: 0 };
+  game.state = STATE.PLAYING;
+  rebuildCounterSlots();
+  spawnPatient();
+}
+
+// İtibar kaybını tek noktadan uygula: clamp + sıfıra inince oyun biter.
+function loseReputation(amount) {
+  game.reputation = clamp(game.reputation - amount, CONFIG.minReputation, CONFIG.maxReputation);
+  if (game.reputation <= CONFIG.minReputation) triggerGameOver();
+}
+
+// Oyun biter: kuyruk olduğu yerde donar (update PLAYING dışında çalışmaz).
+function triggerGameOver() {
+  game.state = STATE.GAMEOVER;
+  game.feedback = null;
 }
 
 // =====================================================================
@@ -884,9 +915,9 @@ function update(dt) {
     const act = activePatient();
     if (act && act.patience <= 0) {
       act.patience = 0;
-      game.reputation = clamp(game.reputation - CONFIG.angryRepLoss, CONFIG.minReputation, CONFIG.maxReputation);
       game.dayStats.angry++;
       game.feedback = { ok: false, angry: true, text: "😠 Çok beklettin!", t: 0 };
+      loseReputation(CONFIG.angryRepLoss);
     }
   }
 }
@@ -1749,21 +1780,124 @@ function render() {
     if (activeNeedsDecision()) drawDecisionButtons(); else drawServeButton();
     drawDayEnd();
   } else if (game.state === STATE.MENU) {
-    drawMenuPlaceholder();
+    // oyun dünyası çizilmesin; arka plan + menü kartı
+    drawMenu();
   } else if (game.state === STATE.GAMEOVER) {
-    drawGameOverPlaceholder();
+    // arka planda son PLAYING karesini koru + üstüne oyun bitti kartı
+    drawHUD();
+    drawQueue();
+    drawCounter();
+    drawClosedBook();
+    drawTabs();
+    drawShelf();
+    if (activeNeedsDecision()) drawDecisionButtons(); else drawServeButton();
+    drawGameOver();
   }
 
   drawBookOverlay();   // defter açılma animasyonu + açık panel (en üstte)
 }
 
-function drawMenuPlaceholder() {
-  text("ECZACI", layout.w / 2, layout.h * 0.4, 48, CONFIG.colors.cream, "center", "800");
-  text("(MENU — yakında)", layout.w / 2, layout.h * 0.5, 18, CONFIG.colors.creamSoft, "center", "600");
+// ---- Açılış menüsü (drawDayEnd kart diliyle aynı) ----
+function drawMenu() {
+  const w = layout.w, h = layout.h, c = CONFIG.colors;
+  const S = layout.stage;
+
+  // tüm ekranı hafifçe karart (kart öne çıksın)
+  ctx.fillStyle = "rgba(10, 8, 16, 0.55)";
+  ctx.fillRect(0, 0, w, h);
+
+  const cardW = S.w * 0.82;
+  const cardH = S.h * 0.56;
+  const cardX = S.x + (S.w - cardW) / 2;
+  const cardY = S.y + (S.h - cardH) / 2;
+
+  // koyu kart + amber kenarlık
+  drawPanel(cardX, cardY, cardW, cardH, cardW * 0.08, c.panelBgSolid);
+
+  // büyük başlık + alt başlık
+  text("ECZACI", cardX + cardW / 2, cardY + cardH * 0.20, cardH * 0.13, c.neon, "center", "800");
+  text("Eczane Simülasyonu", cardX + cardW / 2, cardY + cardH * 0.32, cardH * 0.05, c.creamSoft, "center", "600");
+
+  // BAŞLA butonu (drawDayEnd'deki Sonraki Gün ile aynı nabız)
+  const bW = cardW * 0.7, bH = cardH * 0.12;
+  const bX = cardX + (cardW - bW) / 2;
+  const bY = cardY + cardH * 0.50 - bH / 2;
+  layout.menuStartBtn = { x: bX, y: bY, w: bW, h: bH };
+  fillRoundRect(bX, bY, bW, bH, bH * 0.34, c.btnDark);
+  ctx.save();
+  const pulse = 0.6 + 0.4 * (0.5 + 0.5 * Math.sin(game.clock * 4));
+  ctx.shadowColor = c.neonGlow;
+  ctx.shadowBlur = 20 * pulse;
+  strokeRoundRect(bX, bY, bW, bH, bH * 0.34, c.neon, Math.max(2, bW * 0.008));
+  ctx.restore();
+  ctx.save();
+  ctx.shadowColor = c.neonGlow;
+  ctx.shadowBlur = 14;
+  text("BAŞLA", bX + bW / 2, bY + bH / 2, bH * 0.40, c.neon, "center", "800");
+  ctx.restore();
+
+  // kilitli, soluk, dokunulamaz placeholder satırlar (layout rect verilmez)
+  text("⚙️ Ayarlar 🔒", cardX + cardW / 2, cardY + cardH * 0.72, cardH * 0.05, c.creamSoft, "center", "600");
+  text("🏆 En Yüksek Skor 🔒", cardX + cardW / 2, cardY + cardH * 0.83, cardH * 0.05, c.creamSoft, "center", "600");
 }
-function drawGameOverPlaceholder() {
-  text("Oyun Bitti", layout.w / 2, layout.h * 0.4, 40, CONFIG.colors.cream, "center", "800");
-  text("(GAMEOVER — yakında)", layout.w / 2, layout.h * 0.5, 18, CONFIG.colors.creamSoft, "center", "600");
+
+// ---- Oyun bitti ekranı (kırmızımsı vurgulu koyu kart) ----
+function drawGameOver() {
+  const w = layout.w, h = layout.h, c = CONFIG.colors;
+  const S = layout.stage;
+
+  // tüm ekranı karart
+  ctx.fillStyle = "rgba(10, 8, 16, 0.62)";
+  ctx.fillRect(0, 0, w, h);
+
+  const cardW = S.w * 0.82;
+  const cardH = S.h * 0.56;
+  const cardX = S.x + (S.w - cardW) / 2;
+  const cardY = S.y + (S.h - cardH) / 2;
+
+  // koyu kart + kırmızımsı kenarlık
+  drawPanel(cardX, cardY, cardW, cardH, cardW * 0.08, c.panelBgSolid, "rgba(232,115,107,0.85)");
+
+  // başlık
+  text("💔 Oyun Bitti", cardX + cardW / 2, cardY + cardH * 0.18, cardH * 0.085, c.bad, "center", "800");
+
+  // satırlar
+  let ly = cardY + cardH * 0.34;
+  const step = cardH * 0.095;
+  const fs = cardH * 0.05;
+  text("📅 Ulaşılan gün", cardX + cardW * 0.12, ly, fs, c.cream, "left", "600");
+  text("Gün " + game.dayNumber, cardX + cardW * 0.88, ly, fs, c.neon, "right", "800");
+  ly += step;
+  text("💰 Toplam para", cardX + cardW * 0.12, ly, fs, c.cream, "left", "600");
+  text(game.money + "₺", cardX + cardW * 0.88, ly, fs, c.neon, "right", "800");
+  ly += step;
+  text("⚠️ Sebep", cardX + cardW * 0.12, ly, fs, c.cream, "left", "600");
+  text("İtibarın tükendi", cardX + cardW * 0.88, ly, fs, c.bad, "right", "800");
+
+  // TEKRAR DENE butonu (neon, nabız)
+  const bW = cardW * 0.7, bH = cardH * 0.12;
+  const bX = cardX + (cardW - bW) / 2;
+  const bY = cardY + cardH * 0.74 - bH / 2;
+  layout.retryBtn = { x: bX, y: bY, w: bW, h: bH };
+  fillRoundRect(bX, bY, bW, bH, bH * 0.34, c.btnDark);
+  ctx.save();
+  const pulse = 0.6 + 0.4 * (0.5 + 0.5 * Math.sin(game.clock * 4));
+  ctx.shadowColor = c.neonGlow;
+  ctx.shadowBlur = 20 * pulse;
+  strokeRoundRect(bX, bY, bW, bH, bH * 0.34, c.neon, Math.max(2, bW * 0.008));
+  ctx.restore();
+  ctx.save();
+  ctx.shadowColor = c.neonGlow;
+  ctx.shadowBlur = 14;
+  text("TEKRAR DENE", bX + bW / 2, bY + bH / 2, bH * 0.36, c.neon, "center", "800");
+  ctx.restore();
+
+  // Ana Menü (küçük, soluk)
+  const mW = cardW * 0.5, mH = cardH * 0.08;
+  const mX = cardX + (cardW - mW) / 2;
+  const mY = cardY + cardH * 0.90 - mH / 2;
+  layout.menuFromGameOverBtn = { x: mX, y: mY, w: mW, h: mH };
+  text("Ana Menü", mX + mW / 2, mY + mH / 2, mH * 0.42, c.creamSoft, "center", "700");
 }
 
 // =====================================================================
@@ -1803,6 +1937,15 @@ function handleTap(px, py) {
     return;
   }
 
+  if (game.state === STATE.MENU) {
+    if (layout.menuStartBtn && pointInRect(px, py, layout.menuStartBtn)) startNewGame();
+    return;   // başka dokunuş yutulur
+  }
+  if (game.state === STATE.GAMEOVER) {
+    if (layout.retryBtn && pointInRect(px, py, layout.retryBtn)) startNewGame();
+    else if (layout.menuFromGameOverBtn && pointInRect(px, py, layout.menuFromGameOverBtn)) game.state = STATE.MENU;
+    return;   // başka dokunuş yutulur
+  }
   if (game.state === STATE.DAYEND) {
     if (pointInRect(px, py, layout.nextDayBtn)) startNextDay();
     return;
@@ -1921,6 +2064,8 @@ window.cheats = {
   clearQueue() { game.queue = []; game.counter = []; game.feedback = null; rebuildCounterSlots(); },
   newPatient() { spawnPatient(); },
   spawnFake() { spawnPatient({ forcePrescription: true, forceFake: true }); },
+  menu() { game.state = STATE.MENU; },
+  gameOver() { triggerGameOver(); },
   revealFlaws() {
     const p = activePatient();
     if (!p || p.request.type !== "prescription") { console.log("Aktif hasta reçeteli değil."); return; }
@@ -1985,7 +2130,6 @@ function loadAssets() {
 loadAssets();
 resize();
 game.spawnTimer = CONFIG.spawnInterval;
-spawnPatient();
 requestAnimationFrame(loop);
 
 </script>
