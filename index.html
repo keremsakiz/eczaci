@@ -338,6 +338,7 @@ const game = {
   // ilaç sekmeleri
   activeGroup: null,      // seçili kategori (boşsa ilk dolu gruba ayarlanır)
   lastDoctor: null,       // ardışık aynı doktoru engellemek için
+  bookOpen: false,        // doktor defteri paneli açık mı
 
   // kuyruk
   queue: [],              // hasta dizisi; queue[0] = aktif hasta
@@ -447,6 +448,10 @@ function computeLayout() {
   buildShelf();
 
   layout._hud = { x: left, y: hudY, w: colW, h: hudH };
+
+  // doktor defteri butonu (sağ üst köşe, HUD'un hemen altı)
+  const bs = sw * 0.13;
+  layout.bookBtn = { x: left + colW - bs, y: hudY + hudH + sh * 0.01, w: bs, h: bs };
 
   // hasta alanı: HUD altı .. tezgah çizgisi (DEV müşteri burada, alttan banda gömülür)
   const patientTop = hudY + hudH + sh * 0.004;
@@ -1124,16 +1129,96 @@ function drawQueue() {
     drawSymptomBubble(p0);
   }
 
-  // bekleyen sayısı rozeti (üst köşede minik, karmaşa yaratmadan)
+  // bekleyen sayısı rozeti — defter butonunun hemen ALTINDA (çakışmasın)
   const waiting = game.queue.length - 1;
   if (waiting > 0) {
     const c = CONFIG.colors;
-    const bw = area.w * 0.2, bh = layout.stage.h * 0.035;
-    const bx = area.x + area.w - bw - layout.stage.w * 0.04;
-    const by = area.y + layout.stage.h * 0.008;
+    const bw = layout.bookBtn.w, bh = layout.stage.h * 0.034;
+    const bx = layout.bookBtn.x;
+    const by = layout.bookBtn.y + layout.bookBtn.h + layout.stage.h * 0.008;
     drawPanel(bx, by, bw, bh, bh * 0.5);
-    text("👥 +" + waiting, bx + bw / 2, by + bh / 2, bh * 0.5, c.cream, "center", "700");
+    text("👥 +" + waiting, bx + bw / 2, by + bh / 2, bh * 0.55, c.cream, "center", "700");
   }
+}
+
+// doktor defteri butonu (her zaman erişilebilir)
+function drawBookButton() {
+  const b = layout.bookBtn;
+  if (!b) return;
+  const c = CONFIG.colors;
+  Sprite.draw(ctx, "doctor_book_icon", b.x, b.y, b.w, b.h, () => {
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.4)";
+    ctx.shadowBlur = 10;
+    ctx.shadowOffsetY = 3;
+    fillRoundRect(b.x, b.y, b.w, b.h, b.h * 0.28, c.panelBgSolid);
+    ctx.restore();
+    strokeRoundRect(b.x, b.y, b.w, b.h, b.h * 0.28, c.panelBorder, Math.max(1.5, b.w * 0.04));
+    text("📖", b.x + b.w / 2, b.y + b.h * 0.5, b.h * 0.5, "#f8ecd9", "center", "400");
+  }, "contain");
+}
+
+// doktor defteri paneli (açık defter + tanınan doktor isimleri)
+function drawDoctorBook() {
+  if (!game.bookOpen) return;
+  const S = layout.stage;
+
+  // arka karartma (modal)
+  ctx.fillStyle = "rgba(8,6,12,0.6)";
+  ctx.fillRect(0, 0, layout.w, layout.h);
+
+  // kitap çizim kutusu (contain) — gerçek dikdörtgeni elle hesapla ki yazılar otursun
+  const boxW = S.w * 0.94, boxH = S.h * 0.64;
+  const boxX = S.x + (S.w - boxW) / 2, boxY = S.y + (S.h - boxH) / 2;
+  const img = Assets.images["doctor_book"];
+  const aspect = (img && img.naturalWidth) ? (img.naturalWidth / img.naturalHeight) : 1.5;
+  let dw, dh;
+  if (boxW / boxH > aspect) { dh = boxH; dw = dh * aspect; } else { dw = boxW; dh = dw / aspect; }
+  const dx = boxX + (boxW - dw) / 2, dy = boxY + (boxH - dh) / 2;
+  layout.bookBox = { x: dx, y: dy, w: dw, h: dh };
+
+  Sprite.draw(ctx, "doctor_book", dx, dy, dw, dh, () => {
+    // fallback: krem açık defter + cilt çizgisi
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.4)"; ctx.shadowBlur = 18; ctx.shadowOffsetY = 6;
+    fillRoundRect(dx, dy, dw, dh, dw * 0.03, "#efe2c8");
+    ctx.restore();
+    strokeRoundRect(dx, dy, dw, dh, dw * 0.03, "rgba(120,90,50,0.5)", 2);
+    ctx.strokeStyle = "rgba(120,90,50,0.35)"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(dx + dw / 2, dy + dh * 0.06); ctx.lineTo(dx + dw / 2, dy + dh * 0.94); ctx.stroke();
+  });
+
+  const ink = "#3a3326";
+  // başlık
+  text("Tanınan Doktorlar", dx + dw / 2, dy + dh * 0.12, dh * 0.062, ink, "center", "800");
+
+  // isimler: alfabetik, iki sütun (sol 10 / sağ 10), kağıt alanı içinde
+  const names = KNOWN_DOCTORS.map(d => d.name).slice().sort((a, b) => a.localeCompare(b, "tr"));
+  const perCol = Math.ceil(names.length / 2);
+  const areaTop = dy + dh * 0.22, areaBot = dy + dh * 0.86;
+  const lineH = (areaBot - areaTop) / perCol;
+  const fs = Math.min(lineH * 0.5, dw * 0.034);
+  const colX = [dx + dw * 0.12, dx + dw * 0.56];
+  const colW = dw * 0.33;
+  for (let i = 0; i < names.length; i++) {
+    const col = i < perCol ? 0 : 1;
+    const row = i % perCol;
+    const ny = areaTop + row * lineH + lineH * 0.5;
+    fitText("• " + names[i], colX[col], ny, colW, fs, ink, "left", "600");
+  }
+
+  // ✕ kapatma butonu (kitabın sağ üst köşesi)
+  const cs = S.w * 0.085;
+  layout.bookCloseBtn = { x: dx + dw - cs * 0.85, y: dy - cs * 0.35, w: cs, h: cs };
+  const cb = layout.bookCloseBtn;
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.45)"; ctx.shadowBlur = 10; ctx.shadowOffsetY = 3;
+  ctx.beginPath(); ctx.arc(cb.x + cb.w / 2, cb.y + cb.h / 2, cb.w / 2, 0, Math.PI * 2);
+  ctx.fillStyle = "#3a2230"; ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = "#e8736b"; ctx.lineWidth = Math.max(2, cs * 0.06);
+  ctx.beginPath(); ctx.arc(cb.x + cb.w / 2, cb.y + cb.h / 2, cb.w / 2, 0, Math.PI * 2); ctx.stroke();
+  text("✕", cb.x + cb.w / 2, cb.y + cb.h / 2, cs * 0.5, "#e8736b", "center", "800");
 }
 
 function drawSpeechBubble(x, y, w, h, tailX, tailBaseY) {
@@ -1613,6 +1698,7 @@ function render() {
     drawTabs();         // kategori sekmeleri
     drawShelf();        // seçili kategorinin ilaçları
     if (activeNeedsDecision()) drawDecisionButtons(); else drawServeButton();
+    drawBookButton();   // doktor defteri butonu
     drawFeedback();
   } else if (game.state === STATE.DAYEND) {
     // arka planda son kareyi koru + kart
@@ -1628,6 +1714,8 @@ function render() {
   } else if (game.state === STATE.GAMEOVER) {
     drawGameOverPlaceholder();
   }
+
+  drawDoctorBook();   // her şeyin üstünde (açıksa)
 }
 
 function drawMenuPlaceholder() {
@@ -1665,11 +1753,22 @@ function selectTabAt(px, py) {
 }
 
 function handleTap(px, py) {
+  // doktor defteri açıksa modal: kitabın İÇİ (✕ hariç) açık tutar; ✕ veya dışarı = kapat
+  if (game.bookOpen) {
+    const insideBook = layout.bookBox && pointInRect(px, py, layout.bookBox);
+    const onClose = layout.bookCloseBtn && pointInRect(px, py, layout.bookCloseBtn);
+    if (!insideBook || onClose) game.bookOpen = false;
+    return;
+  }
+
   if (game.state === STATE.DAYEND) {
     if (pointInRect(px, py, layout.nextDayBtn)) startNextDay();
     return;
   }
   if (game.state !== STATE.PLAYING) return;
+
+  // doktor defteri butonu (her zaman erişilebilir)
+  if (layout.bookBtn && pointInRect(px, py, layout.bookBtn)) { game.bookOpen = true; return; }
 
   // sekmeler feedback sırasında da değiştirilebilir
   if (layout.tabsArea && pointInRect(px, py, layout.tabsArea)) { selectTabAt(px, py); return; }
@@ -1714,7 +1813,7 @@ function onDown(x, y) {
   pointer.startX = x;
   pointer.startY = y;
   pointer.dragging = false;
-  pointer.inTabs = game.state === STATE.PLAYING && layout.tabsArea && pointInRect(x, y, layout.tabsArea);
+  pointer.inTabs = !game.bookOpen && game.state === STATE.PLAYING && layout.tabsArea && pointInRect(x, y, layout.tabsArea);
   pointer.scrollStart = layout.tabScroll || 0;
 }
 function onMove(x, y) {
@@ -1834,6 +1933,8 @@ function loadAssets() {
   Assets.load("patient_worker", "assets/patient_worker.png");
   Assets.load("patient_lady", "assets/patient_lady.png");
   Assets.load("prescription_paper", "assets/prescription_paper.png");
+  Assets.load("doctor_book_icon", "assets/doctor_book_icon.png");
+  Assets.load("doctor_book", "assets/doctor_book.png");
 }
 
 loadAssets();
