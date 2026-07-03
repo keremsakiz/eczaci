@@ -59,6 +59,13 @@ const CONFIG = {
   patientsPerDayStep: 2,    // her gün +2 müşteri (gün2=10, gün3=12...)
   dailyGoal: 150,           // gün başı hedef para (gerçek hedef = dailyGoal * gün no)
 
+  // --- Stok + ecza deposu (toptancı) ---
+  startStock: 10,           // her ilaç için oyun başı stok
+  maxStock: 30,             // ilaç başına stok tavanı
+  restockPrice: 4,          // depodan 1 adet alış maliyeti (₺)
+  restockBatch: 5,          // tek siparişte alınan adet
+  stockToastDuration: 1.1,  // "stok yok" uyarısı gösterim süresi (sn)
+
   // --- Faz 1: hasta sırası (kuyruk) ---
   maxQueue: 3,              // ekranda aynı anda max hasta
   spawnInterval: 4,         // yeni hasta gelme aralığı (sn) — gün başı
@@ -347,6 +354,12 @@ const game = {
   counter: [],            // tezgaha konan ilaç id'leri (aktif hastaya)
   feedback: null,         // { ok, angry, text, t }
 
+  // stok + ecza deposu
+  stock: {},              // ilaç id -> adet (ilaç bazında; günler arası kalıcı)
+  depotOpen: false,       // depo paneli açık mı (modal; oyun donar)
+  depotGroup: null,       // depo panelinde seçili kategori (oyun sekmesinden bağımsız)
+  stockToast: null,       // { text, until } — kısa "stok yok" uyarısı (game.feedback'i ezmez)
+
   clock: 0                // global animasyon saati
 };
 
@@ -356,7 +369,10 @@ let layout = {
   shelfButtons: [],
   counterSlots: [],
   serveBtn: { x: 0, y: 0, w: 0, h: 0 },
-  nextDayBtn: { x: 0, y: 0, w: 0, h: 0 }
+  nextDayBtn: { x: 0, y: 0, w: 0, h: 0 },
+  // depo paneli rect'leri (drawDepot içinde hesaplanır — nextDayBtn kalıbı)
+  depotBtn: null, depotFromDayEndBtn: null,
+  depotPanel: null, depotCloseBtn: null, depotTabs: [], depotRows: []
 };
 
 // =====================================================================
@@ -749,10 +765,40 @@ function rejectPrescription() {
   }
 }
 
+// kısa uyarı toast'u — game.feedback'i EZMEZ (ayrı, süreli flash)
+function flashStockToast(txt) {
+  game.stockToast = { text: txt, until: game.clock + CONFIG.stockToastDuration };
+}
+
 function tapMedicine(id) {
   if (!servingAllowed()) return;
+  const stock = game.stock[id] || 0;
+  const m = getMedicine(id);
+  // stok yoksa tezgaha ekleme
+  if (stock <= 0) { flashStockToast("⛔ " + (m ? m.name : "İlaç") + " — Stok yok!"); return; }
+  // tezgahtaki aynı ilaç adedi stoğu aşamaz
+  let onCounter = 0;
+  for (const cId of game.counter) if (cId === id) onCounter++;
+  if (onCounter >= stock) { flashStockToast("⛔ " + (m ? m.name : "İlaç") + " — Stok yetersiz!"); return; }
   game.counter.push(id);
   rebuildCounterSlots();
+}
+
+// --- Ecza deposu (toptancı) ---
+function openDepot() {
+  if (!game.depotGroup) { const g = groupsWithMeds()[0]; game.depotGroup = g ? g.id : null; }
+  game.depotOpen = true;
+}
+function closeDepot() { game.depotOpen = false; }
+
+// depodan tek batch sipariş: para yeter + tavan altındaysa
+function orderStock(id) {
+  const cur = game.stock[id] || 0;
+  if (cur >= CONFIG.maxStock) return;                       // dolu
+  const cost = CONFIG.restockPrice * CONFIG.restockBatch;
+  if (game.money < cost) return;                            // para yetmez
+  game.money -= cost;
+  game.stock[id] = Math.min(CONFIG.maxStock, cur + CONFIG.restockBatch);
 }
 
 function removeFromCounter(idx) {
@@ -789,6 +835,8 @@ function checkOrder() {
 
   game.dayStats.served++;
   if (correct) {
+    // stok tüketimi — verilen her ilaç stoktan düşer (negatife inmez; ekleme zaten stokla sınırlı)
+    for (const gid of given) game.stock[gid] = Math.max(0, (game.stock[gid] || 0) - 1);
     const earn = given.length * CONFIG.pricePerMedicine;
     game.money += earn;
     game.dayStats.money += earn;
@@ -837,7 +885,13 @@ function startNextDay() {
   spawnPatient();
 }
 
-// Oyunu sıfırdan kurar (MENU/GAMEOVER → PLAYING). Gün, para, itibar dahil her şey resetlenir.
+// Stoğu başlangıç değerine kur (her ilaç ayrı). MEDICINES dizisi değişmez; runtime obje.
+function initStock() {
+  game.stock = {};
+  for (const m of MEDICINES) game.stock[m.id] = CONFIG.startStock;
+}
+
+// Oyunu sıfırdan kurar (MENU/GAMEOVER → PLAYING). Gün, para, itibar, STOK dahil her şey resetlenir.
 function startNewGame() {
   game.money = CONFIG.startMoney;
   game.reputation = CONFIG.startReputation;
@@ -848,6 +902,9 @@ function startNewGame() {
   game.queue = [];
   game.counter = [];
   game.feedback = null;
+  game.stockToast = null;
+  game.depotOpen = false;
+  initStock();            // stok yalnızca yeni oyunda sıfırlanır (günler arası kalıcı)
   game.dayStats = { served: 0, correct: 0, wrong: 0, angry: 0, money: 0 };
   game.state = STATE.PLAYING;
   rebuildCounterSlots();
@@ -880,6 +937,9 @@ function update(dt) {
     game.bookT -= dt / CONFIG.bookAnimTime;
     if (game.bookT <= 0) { game.bookT = 0; game.bookState = "closed"; }
   }
+
+  // depo paneli açıkken oyun donsun (sabır/spawn/feedback işlemesin) — clock akmaya devam eder
+  if (game.depotOpen) return;
 
   if (game.state !== STATE.PLAYING) return;
 
@@ -1505,7 +1565,10 @@ function drawShelf() {
   const disabled = !servingAllowed();
   for (const btn of layout.shelfButtons) {
     const m = getMedicine(btn.id);
-    ctx.globalAlpha = disabled ? 0.55 : 1;
+    const stock = game.stock[btn.id] || 0;
+    const out = stock <= 0;
+    // stok yoksa daha soluk; ayrıca servis engelliyse zaten soluk
+    ctx.globalAlpha = out ? 0.38 : (disabled ? 0.55 : 1);
 
     // hücre zemini — hafif, yuvarlak köşeli koyu yarı saydam (abartısız, okunurluk için)
     fillRoundRect(btn.x, btn.y, btn.w, btn.h, btn.h * 0.18, "rgba(26,21,36,0.28)");
@@ -1522,6 +1585,23 @@ function drawShelf() {
     }, "contain");
 
     ctx.globalAlpha = 1;
+
+    // --- stok overlay (buton çizimini bozmaz; sadece üstüne eklenir) ---
+    if (out) {
+      // tükenmiş: soluk "TÜKENDİ" etiketi (renksiz)
+      const lh = btn.h * 0.24;
+      const ly = btn.y + btn.h - lh - btn.h * 0.06;
+      fillRoundRect(btn.x + btn.w * 0.10, ly, btn.w * 0.80, lh, lh * 0.4, "rgba(20,16,28,0.72)");
+      text("TÜKENDİ", btn.x + btn.w / 2, ly + lh / 2, lh * 0.52, "rgba(220,205,190,0.9)", "center", "800");
+    } else {
+      // stoğu olan: sağ-üst köşede soluk stok sayısı rozeti (dikkat dağıtmaz)
+      const br = btn.w * 0.15;
+      const bx = btn.x + btn.w - br - btn.w * 0.04;
+      const by = btn.y + br + btn.h * 0.04;
+      ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(20,16,28,0.66)"; ctx.fill();
+      text(String(stock), bx, by, br * 1.05, "rgba(240,230,215,0.85)", "center", "800");
+    }
   }
 }
 
@@ -1726,7 +1806,7 @@ function drawDayEnd() {
   row("💰", "Günlük kazanç", s.money + "₺");
 
   // hedef durumu
-  const goalY = cardY + cardH * 0.745;
+  const goalY = cardY + cardH * 0.71;
   const goalCol = res.met ? c.good : c.bad;
   const goalTxt = res.met
     ? "🎯 Hedef tuttu! (" + res.goal + "₺)"
@@ -1737,9 +1817,9 @@ function drawDayEnd() {
   text(goalTxt, cardX + cardW / 2, goalY + cardH * 0.045, cardH * 0.045, goalCol, "center", "800");
 
   // Sonraki Gün butonu (neon)
-  const bW = cardW * 0.7, bH = cardH * 0.12;
+  const bW = cardW * 0.7, bH = cardH * 0.10;
   const bX = cardX + (cardW - bW) / 2;
-  const bY = cardY + cardH * 0.86 - bH / 2;
+  const bY = cardY + cardH * 0.85 - bH / 2;
   layout.nextDayBtn = { x: bX, y: bY, w: bW, h: bH };
   fillRoundRect(bX, bY, bW, bH, bH * 0.34, c.btnDark);
   ctx.save();
@@ -1751,8 +1831,179 @@ function drawDayEnd() {
   ctx.save();
   ctx.shadowColor = c.neonGlow;
   ctx.shadowBlur = 14;
-  text("Sonraki Gün →", bX + bW / 2, bY + bH / 2, bH * 0.36, c.neon, "center", "800");
+  text("Sonraki Gün →", bX + bW / 2, bY + bH / 2, bH * 0.38, c.neon, "center", "800");
   ctx.restore();
+
+  // 📦 Depodan Sipariş — Sonraki Gün'ün altında soluk pill (aynı depo panelini açar)
+  const dW = cardW * 0.62, dH = cardH * 0.062;
+  const dX = cardX + (cardW - dW) / 2;
+  const dY = cardY + cardH * 0.955 - dH / 2;
+  layout.depotFromDayEndBtn = { x: dX, y: dY, w: dW, h: dH };
+  fillRoundRect(dX, dY, dW, dH, dH * 0.4, c.btnDark);
+  strokeRoundRect(dX, dY, dW, dH, dH * 0.4, "rgba(245,170,70,0.55)", 1.5);
+  text("📦 Depodan Sipariş", dX + dW / 2, dY + dH / 2, dH * 0.5, c.neon, "center", "800");
+}
+
+// Tezgahta "📦 Depo" butonu (bandın sağ ucunda, kapalı defterin karşısında).
+// Rect burada hesaplanır (nextDayBtn kalıbı).
+function drawDepotButton() {
+  const b = layout._band, S = layout.stage, c = CONFIG.colors;
+  if (!b) return;
+  const bw = S.w * 0.185, bh = b.h * 0.44;
+  const bx = b.x + b.w - bw - S.w * 0.025;
+  const by = b.y + b.h * 0.5 - bh * 0.5;
+  layout.depotBtn = { x: bx, y: by, w: bw, h: bh };
+  const r = bh * 0.32;
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.4)"; ctx.shadowBlur = 10; ctx.shadowOffsetY = 3;
+  fillRoundRect(bx, by, bw, bh, r, c.btnDark);
+  ctx.restore();
+  strokeRoundRect(bx, by, bw, bh, r, c.neon, Math.max(1.5, bw * 0.01));
+  text("📦 Depo", bx + bw / 2, by + bh / 2, bh * 0.42, c.neon, "center", "800");
+}
+
+// Kısa stok uyarısı toast'u (feedback'ten bağımsız, süreli; random yok — clock ile fade).
+function drawStockToast() {
+  const t = game.stockToast;
+  if (!t) return;
+  const remain = t.until - game.clock;
+  if (remain <= 0) { game.stockToast = null; return; }
+  const c = CONFIG.colors, S = layout.stage;
+  const dur = CONFIG.stockToastDuration;
+  const alpha = clamp(remain / (dur * 0.4), 0, 1);   // son %40'ta yumuşak sönme
+  const boxW = S.w * 0.62, boxH = S.h * 0.055;
+  const bx = S.x + (S.w - boxW) / 2;
+  const by = layout.gridArea ? layout.gridArea.y - boxH - S.h * 0.008 : S.y + S.h * 0.5;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.shadowColor = "rgba(0,0,0,0.35)"; ctx.shadowBlur = 12; ctx.shadowOffsetY = 3;
+  fillRoundRect(bx, by, boxW, boxH, boxH * 0.4, "rgba(40,18,18,0.94)");
+  ctx.shadowColor = "transparent";
+  strokeRoundRect(bx, by, boxW, boxH, boxH * 0.4, c.bad, 1.5);
+  text(t.text, bx + boxW / 2, by + boxH / 2, boxH * 0.42, "#f4d8d4", "center", "800");
+  ctx.restore();
+}
+
+// Ecza deposu paneli (defter overlay + DAYEND kart dili). Rect'ler burada hesaplanır.
+function drawDepot() {
+  const w = layout.w, h = layout.h, c = CONFIG.colors, S = layout.stage;
+
+  // tam ekran karartma (modal)
+  ctx.fillStyle = "rgba(8,6,12,0.68)";
+  ctx.fillRect(0, 0, w, h);
+
+  const panelW = S.w * 0.90, panelH = S.h * 0.80;
+  const panelX = S.x + (S.w - panelW) / 2, panelY = S.y + (S.h - panelH) / 2;
+  layout.depotPanel = { x: panelX, y: panelY, w: panelW, h: panelH };
+  drawPanel(panelX, panelY, panelW, panelH, panelW * 0.06, c.panelBgSolid);
+
+  // başlık + para
+  text("📦 Ecza Deposu", panelX + panelW * 0.5, panelY + panelH * 0.05, panelH * 0.045, c.neon, "center", "800");
+  text("💰 " + game.money + "₺", panelX + panelW * 0.5, panelY + panelH * 0.10, panelH * 0.033, c.cream, "center", "700");
+
+  // kapat butonu (✕) — defter kalıbı
+  const cs = S.w * 0.085;
+  layout.depotCloseBtn = { x: panelX + panelW - cs * 0.85, y: panelY - cs * 0.35, w: cs, h: cs };
+  const cb = layout.depotCloseBtn;
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.45)"; ctx.shadowBlur = 10; ctx.shadowOffsetY = 3;
+  ctx.beginPath(); ctx.arc(cb.x + cb.w / 2, cb.y + cb.h / 2, cb.w / 2, 0, Math.PI * 2);
+  ctx.fillStyle = "#3a2230"; ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = "#e8736b"; ctx.lineWidth = Math.max(2, cs * 0.06);
+  ctx.beginPath(); ctx.arc(cb.x + cb.w / 2, cb.y + cb.h / 2, cb.w / 2, 0, Math.PI * 2); ctx.stroke();
+  text("✕", cb.x + cb.w / 2, cb.y + cb.h / 2, cs * 0.5, "#e8736b", "center", "800");
+
+  // --- kategori sekmeleri (tek satır, eşit bölünmüş; depoya özel aktif grup) ---
+  const groups = groupsWithMeds();
+  if (!game.depotGroup && groups.length) game.depotGroup = groups[0].id;
+  const tabsX = panelX + panelW * 0.05;
+  const tabsW = panelW * 0.90;
+  const tabsY = panelY + panelH * 0.145;
+  const tabsH = panelH * 0.06;
+  const tGap = tabsW * 0.012;
+  const tW = (tabsW - tGap * (groups.length - 1)) / Math.max(1, groups.length);
+  layout.depotTabs = [];
+  for (let i = 0; i < groups.length; i++) {
+    const g = groups[i];
+    const tx = tabsX + i * (tW + tGap);
+    const active = g.id === game.depotGroup;
+    const r = tabsH * 0.28;
+    const cx = tx + tW / 2, cy = tabsY + tabsH / 2;
+    if (active) {
+      ctx.save(); ctx.shadowColor = c.neonGlow; ctx.shadowBlur = 8;
+      fillRoundRect(tx, tabsY, tW, tabsH, r, "rgba(58,40,20,0.95)"); ctx.restore();
+      strokeRoundRect(tx, tabsY, tW, tabsH, r, c.neon, Math.max(1.2, tabsH * 0.05));
+      drawTabLabel(g.emoji, g.label, cx, cy, tW * 0.86, tabsH * 0.34, c.neon, "800");
+    } else {
+      fillRoundRect(tx, tabsY, tW, tabsH, r, "rgba(26,21,36,0.82)");
+      strokeRoundRect(tx, tabsY, tW, tabsH, r, "rgba(245,170,70,0.25)", 1);
+      drawTabLabel(g.emoji, g.label, cx, cy, tW * 0.86, tabsH * 0.32, c.creamSoft, "700");
+    }
+    layout.depotTabs.push({ group: g, x: tx, y: tabsY, w: tW, h: tabsH });
+  }
+
+  // --- ilaç listesi (seçili kategori; her satır: emoji/ad + stok + sipariş) ---
+  const meds = medsInGroup(game.depotGroup);
+  const listTop = tabsY + tabsH + panelH * 0.025;
+  const listBot = panelY + panelH * 0.955;
+  const rowGap = panelH * 0.012;
+  const maxRowH = panelH * 0.11;
+  let rowH = Math.min(maxRowH, (listBot - listTop - rowGap * Math.max(0, meds.length - 1)) / Math.max(1, meds.length));
+  const rx0 = panelX + panelW * 0.06, rw = panelW * 0.88;
+  layout.depotRows = [];
+  const orderCost = CONFIG.restockPrice * CONFIG.restockBatch;
+  let ry = listTop;
+  for (const m of meds) {
+    const stock = game.stock[m.id] || 0;
+    const full = stock >= CONFIG.maxStock;
+    const affordable = game.money >= orderCost;
+    // satır zemini
+    fillRoundRect(rx0, ry, rw, rowH, rowH * 0.22, "rgba(26,21,36,0.5)");
+    // emoji + ad
+    const em = rx0 + rowH * 0.5;
+    text(m.emoji, em, ry + rowH * 0.5, rowH * 0.5, "#f2e6d4", "center", "400");
+    fitText(m.name, rx0 + rowH * 0.95, ry + rowH * 0.5, rw * 0.34, rowH * 0.34, c.cream, "left", "700");
+    // stok x/max (orta)
+    const stColor = full ? c.good : (stock <= 0 ? c.bad : c.cream);
+    text(stock + "/" + CONFIG.maxStock, rx0 + rw * 0.60, ry + rowH * 0.5, rowH * 0.34, stColor, "center", "800");
+    // sipariş butonu (sağ)
+    const obW = rw * 0.26, obH = rowH * 0.72;
+    const obX = rx0 + rw - obW, obY = ry + (rowH - obH) / 2;
+    const or = obH * 0.30;
+    let label, fillCol, lineCol, txtCol, enabled;
+    if (full) {
+      label = "DOLU"; fillCol = "rgba(30,40,30,0.85)"; lineCol = "rgba(94,196,138,0.5)"; txtCol = "rgba(150,200,165,0.85)"; enabled = false;
+    } else if (!affordable) {
+      label = "+" + CONFIG.restockBatch + " (" + orderCost + "₺)"; fillCol = "rgba(30,26,38,0.6)"; lineCol = "rgba(245,170,70,0.25)"; txtCol = c.creamSoft; enabled = false;
+    } else {
+      label = "+" + CONFIG.restockBatch + " (" + orderCost + "₺)"; fillCol = c.btnDark; lineCol = c.neon; txtCol = c.neon; enabled = true;
+    }
+    ctx.globalAlpha = enabled ? 1 : 0.7;
+    fillRoundRect(obX, obY, obW, obH, or, fillCol);
+    strokeRoundRect(obX, obY, obW, obH, or, lineCol, Math.max(1.2, obW * 0.012));
+    fitText(label, obX + obW / 2, obY + obH / 2, obW * 0.86, obH * 0.42, txtCol, "center", "800");
+    ctx.globalAlpha = 1;
+    layout.depotRows.push({ id: m.id, btn: { x: obX, y: obY, w: obW, h: obH }, enabled });
+    ry += rowH + rowGap;
+  }
+}
+
+// depo paneli açıkken dokunuşlar (sipariş / sekme / kapat / dışarı)
+function handleDepotTap(px, py) {
+  if (layout.depotCloseBtn && pointInRect(px, py, layout.depotCloseBtn)) { closeDepot(); return; }
+  if (layout.depotTabs) {
+    for (const t of layout.depotTabs) {
+      if (pointInRect(px, py, t)) { game.depotGroup = t.group.id; return; }
+    }
+  }
+  if (layout.depotRows) {
+    for (const row of layout.depotRows) {
+      if (row.btn && pointInRect(px, py, row.btn)) { if (row.enabled) orderStock(row.id); return; }
+    }
+  }
+  // panel dışına tıkla → kapat; panel içi boşluk → yut
+  if (layout.depotPanel && !pointInRect(px, py, layout.depotPanel)) { closeDepot(); return; }
 }
 
 function render() {
@@ -1765,9 +2016,11 @@ function render() {
     drawQueue();        // DEV müşteri (tezgah çizgisinde kırpılı)
     drawCounter();      // ahşap bant müşterinin önünde + seçilen ilaçlar
     drawClosedBook();   // tezgahtaki kapalı defter (obje)
+    drawDepotButton();  // 📦 Depo butonu (bandın sağında)
     drawTabs();         // kategori sekmeleri
     drawShelf();        // seçili kategorinin ilaçları
     if (activeNeedsDecision()) drawDecisionButtons(); else drawServeButton();
+    drawStockToast();   // kısa stok uyarısı (feedback'ten bağımsız)
     drawFeedback();
   } else if (game.state === STATE.DAYEND) {
     // arka planda son kareyi koru + kart
@@ -1794,6 +2047,7 @@ function render() {
     drawGameOver();
   }
 
+  if (game.depotOpen) drawDepot();  // ecza deposu paneli (PLAYING/DAYEND üstünde modal)
   drawBookOverlay();   // defter açılma animasyonu + açık panel (en üstte)
 }
 
@@ -1937,6 +2191,9 @@ function handleTap(px, py) {
     return;
   }
 
+  // depo paneli açıkken modal: içi işle, ✕/dışarı kapat, gerisini yut
+  if (game.depotOpen) { handleDepotTap(px, py); return; }
+
   if (game.state === STATE.MENU) {
     if (layout.menuStartBtn && pointInRect(px, py, layout.menuStartBtn)) startNewGame();
     return;   // başka dokunuş yutulur
@@ -1947,10 +2204,14 @@ function handleTap(px, py) {
     return;   // başka dokunuş yutulur
   }
   if (game.state === STATE.DAYEND) {
+    if (layout.depotFromDayEndBtn && pointInRect(px, py, layout.depotFromDayEndBtn)) { openDepot(); return; }
     if (pointInRect(px, py, layout.nextDayBtn)) startNextDay();
     return;
   }
   if (game.state !== STATE.PLAYING) return;
+
+  // 📦 Depo butonu → depo panelini aç
+  if (layout.depotBtn && pointInRect(px, py, layout.depotBtn)) { openDepot(); return; }
 
   // tezgahtaki kapalı deftere dokun → açılma animasyonunu başlat
   if (layout.bookClosedRect && pointInRect(px, py, layout.bookClosedRect)) {
@@ -2001,7 +2262,7 @@ function onDown(x, y) {
   pointer.startX = x;
   pointer.startY = y;
   pointer.dragging = false;
-  pointer.inTabs = game.bookState === "closed" && game.state === STATE.PLAYING && layout.tabsArea && pointInRect(x, y, layout.tabsArea);
+  pointer.inTabs = game.bookState === "closed" && !game.depotOpen && game.state === STATE.PLAYING && layout.tabsArea && pointInRect(x, y, layout.tabsArea);
   pointer.scrollStart = layout.tabScroll || 0;
 }
 function onMove(x, y) {
@@ -2077,6 +2338,23 @@ window.cheats = {
     return r;
   },
   setGroup(gid) { if (medsInGroup(gid).length) { game.activeGroup = gid; buildShelf(); } },
+  stock() {
+    const out = {};
+    for (const m of MEDICINES) out[m.id] = game.stock[m.id] || 0;
+    console.table(out);
+    return out;
+  },
+  setStock(id, n) {
+    if (!getMedicine(id)) { console.log("Bilinmeyen ilaç:", id); return; }
+    game.stock[id] = clamp(n | 0, 0, CONFIG.maxStock);
+    return game.stock[id];
+  },
+  emptyStock(id) {
+    if (!getMedicine(id)) { console.log("Bilinmeyen ilaç:", id); return; }
+    game.stock[id] = 0;
+    return 0;
+  },
+  openDepot() { openDepot(); },
   assetStatus() {
     const keys = ["bg_pharmacy", "counter", "btn_serve"]
       .concat(MEDICINES.map(m => m.assetKey))
