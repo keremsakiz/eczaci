@@ -34,7 +34,7 @@ const CONFIG = {
   maxReputation: 100,
   minReputation: 0,
 
-  pricePerMedicine: 10,     // doğru servis başına her ilaç değeri (₺)
+  // kazanç ilaç bazında: her MEDICINES öğesinin price alanından hesaplanır (sabit yok)
   repGainCorrect: 2,        // doğru serviste itibar artışı
   repLossWrong: 5,          // yanlış serviste itibar kaybı
 
@@ -62,9 +62,12 @@ const CONFIG = {
   // --- Stok + ecza deposu (toptancı) ---
   startStock: 10,           // her ilaç için oyun başı stok
   maxStock: 30,             // ilaç başına stok tavanı
-  restockPrice: 4,          // depodan 1 adet alış maliyeti (₺)
-  restockBatch: 5,          // tek siparişte alınan adet
+  // depo alış fiyatı ilaç bazında: MEDICINES.cost (sabit birim fiyat yok)
   stockToastDuration: 1.1,  // "stok yok" uyarısı gösterim süresi (sn)
+
+  // --- Tezgah PC'si ince ayar ---
+  pcScale: 1.0,             // PC boyut çarpanı (1 = varsayılan, defterle benzer ağırlık)
+  pcOffsetX: 0,             // PC yatay kaydırma (px; negatif = sola, pozitif = sağa)
 
   // --- Faz 1: hasta sırası (kuyruk) ---
   maxQueue: 3,              // ekranda aynı anda max hasta
@@ -124,60 +127,63 @@ const CONFIG = {
 // Her satır: id, name, emoji, color, category (semptom eşleşmesi), group (sekme), assetKey.
 // Sistem ilacı otomatik doğru sekmeye koyar — başka kod değişmez.
 const MEDICINES = [
-  { id: "agriban",   name: "Ağrıban",     emoji: "💊", color: "#f08a8a", category: "ağrı",       group: "agri_ates",   assetKey: "med_agriban" },
-  { id: "oksurmez",  name: "Öksürmez",    emoji: "🍯", color: "#f4b160", category: "öksürük",    group: "soguk",       assetKey: "med_oksurmez" },
-  { id: "nezleson",  name: "Nezleson",    emoji: "🤧", color: "#7fb4e8", category: "nezle",      group: "soguk",       assetKey: "med_nezleson" },
-  { id: "cvitamin",  name: "C-Vitamin+",  emoji: "🍊", color: "#f6d35b", category: "bağışıklık", group: "vitamin",     assetKey: "med_cvitamin" },
-  { id: "miderahat", name: "Miderahat",   emoji: "🌿", color: "#86cf9a", category: "mide",       group: "sindirim",    assetKey: "med_miderahat" },
-  { id: "bandajix",  name: "Bandajix",    emoji: "🩹", color: "#f3a8c4", category: "yara",       group: "ilk_yardim",  assetKey: "med_bandajix" },
-  { id: "atesdus",   name: "Ateşdüş",     emoji: "🌡️", color: "#b07fd6", category: "ates",       group: "agri_ates",   assetKey: "med_atesdus" },
-  { id: "alerjin",   name: "Alerjin",     emoji: "🤧", color: "#bfe39a", category: "alerji",     group: "soguk",       assetKey: "med_alerjin" },
-  { id: "goznur",    name: "Göznur",      emoji: "👁️", color: "#5fd0c5", category: "goz",        group: "goz_kulak",   assetKey: "med_goznur" },
-  { id: "uykutas",   name: "Uykutaş",     emoji: "😴", color: "#5566b0", category: "uyku",       group: "uyku_sinir",  assetKey: "med_uykutas" },
+  // cost = depodan alış (₺), price = hastaya satış (₺). Kâr oranı ilaca göre değişir
+  // (temel ağrı kesici ~%18, vitamin ~%40). 2026 TR eczane gerçekçiliğinde elle ayarlı.
+  { id: "agriban",   name: "Ağrıban",     emoji: "💊", color: "#f08a8a", category: "ağrı",       group: "agri_ates",   cost: 34,  price: 42,  assetKey: "med_agriban" },
+  { id: "oksurmez",  name: "Öksürmez",    emoji: "🍯", color: "#f4b160", category: "öksürük",    group: "soguk",       cost: 51,  price: 68,  assetKey: "med_oksurmez" },
+  { id: "nezleson",  name: "Nezleson",    emoji: "🤧", color: "#7fb4e8", category: "nezle",      group: "soguk",       cost: 44,  price: 57,  assetKey: "med_nezleson" },
+  { id: "cvitamin",  name: "C-Vitamin+",  emoji: "🍊", color: "#f6d35b", category: "bağışıklık", group: "vitamin",     cost: 69,  price: 115, assetKey: "med_cvitamin" },
+  { id: "miderahat", name: "Miderahat",   emoji: "🌿", color: "#86cf9a", category: "mide",       group: "sindirim",    cost: 40,  price: 52,  assetKey: "med_miderahat" },
+  { id: "bandajix",  name: "Bandajix",    emoji: "🩹", color: "#f3a8c4", category: "yara",       group: "ilk_yardim",  cost: 23,  price: 29,  assetKey: "med_bandajix" },
+  { id: "atesdus",   name: "Ateşdüş",     emoji: "🌡️", color: "#b07fd6", category: "ates",       group: "agri_ates",   cost: 43,  price: 55,  assetKey: "med_atesdus" },
+  { id: "alerjin",   name: "Alerjin",     emoji: "🤧", color: "#bfe39a", category: "alerji",     group: "alerji",      cost: 62,  price: 89,  assetKey: "med_alerjin" },
+  { id: "goznur",    name: "Göznur",      emoji: "👁️", color: "#5fd0c5", category: "goz",        group: "goz_kulak",   cost: 63,  price: 87,  assetKey: "med_goznur" },
+  { id: "uykutas",   name: "Uykutaş",     emoji: "😴", color: "#5566b0", category: "uyku",       group: "uyku_sinir",  cost: 92,  price: 132, assetKey: "med_uykutas" },
 
   // --- Genişletilmiş havuz (görselsiz; emoji+color fallback, PNG gelince otomatik giyer) ---
-  { id: "med_bassakin",     name: "Başsakin",      emoji: "💊", color: "#d24a4a", category: "Ağrı/Ateş",        group: "agri_ates",   assetKey: "med_bassakin" },
-  { id: "med_kasgevset",    name: "Kasgevşet",     emoji: "💪", color: "#8b3a4a", category: "Ağrı/Ateş",        group: "agri_ates",   assetKey: "med_kasgevset" },
-  { id: "med_disdindir",    name: "Dişdindir",     emoji: "🦷", color: "#e8d8d8", category: "Ağrı/Ateş",        group: "agri_ates",   assetKey: "med_disdindir" },
+  { id: "med_bassakin",     name: "Başsakin",      emoji: "💊", color: "#d24a4a", category: "Ağrı/Ateş",        group: "agri_ates",   cost: 31,  price: 38,  assetKey: "med_bassakin" },
+  { id: "med_kasgevset",    name: "Kasgevşet",     emoji: "💪", color: "#8b3a4a", category: "Ağrı/Ateş",        group: "agri_ates",   cost: 57,  price: 76,  assetKey: "med_kasgevset" },
+  { id: "med_disdindir",    name: "Dişdindir",     emoji: "🦷", color: "#e8d8d8", category: "Ağrı/Ateş",        group: "agri_ates",   cost: 49,  price: 64,  assetKey: "med_disdindir" },
 
-  { id: "med_gripsavar",    name: "Gripsavar",     emoji: "🤒", color: "#2a4a7a", category: "Soğuk Algınlığı",  group: "soguk",       assetKey: "med_gripsavar" },
-  { id: "med_bogazcan",     name: "Boğazcan",      emoji: "🗣️", color: "#3aa8a0", category: "Soğuk Algınlığı",  group: "soguk",       assetKey: "med_bogazcan" },
-  { id: "med_burunac",      name: "Burunaç",       emoji: "👃", color: "#7ab8e8", category: "Soğuk Algınlığı",  group: "soguk",       assetKey: "med_burunac" },
+  { id: "med_gripsavar",    name: "Gripsavar",     emoji: "🤒", color: "#2a4a7a", category: "Soğuk Algınlığı",  group: "soguk",       cost: 66,  price: 94,  assetKey: "med_gripsavar" },
+  { id: "med_bogazcan",     name: "Boğazcan",      emoji: "🗣️", color: "#3aa8a0", category: "Soğuk Algınlığı",  group: "soguk",       cost: 37,  price: 49,  assetKey: "med_bogazcan" },
+  { id: "med_burunac",      name: "Burunaç",       emoji: "👃", color: "#7ab8e8", category: "Soğuk Algınlığı",  group: "soguk",       cost: 53,  price: 73,  assetKey: "med_burunac" },
 
-  { id: "med_bulantistop",  name: "Bulantıstop",   emoji: "🤢", color: "#5a9a5a", category: "Sindirim",         group: "sindirim",    assetKey: "med_bulantistop" },
-  { id: "med_bagirsakduzen",name: "Bağırsakdüzen", emoji: "🦠", color: "#8ac88a", category: "Sindirim",         group: "sindirim",    assetKey: "med_bagirsakduzen" },
-  { id: "med_hazimkolay",   name: "Hazımkolay",    emoji: "🍽️", color: "#b8c85a", category: "Sindirim",         group: "sindirim",    assetKey: "med_hazimkolay" },
-  { id: "med_reflusondur",  name: "Reflüsöndür",   emoji: "🔥", color: "#6ac8a8", category: "Sindirim",         group: "sindirim",    assetKey: "med_reflusondur" },
+  { id: "med_bulantistop",  name: "Bulantıstop",   emoji: "🤢", color: "#5a9a5a", category: "Sindirim",         group: "sindirim",    cost: 46,  price: 61,  assetKey: "med_bulantistop" },
+  { id: "med_bagirsakduzen",name: "Bağırsakdüzen", emoji: "🦠", color: "#8ac88a", category: "Sindirim",         group: "sindirim",    cost: 60,  price: 83,  assetKey: "med_bagirsakduzen" },
+  { id: "med_hazimkolay",   name: "Hazımkolay",    emoji: "🍽️", color: "#b8c85a", category: "Sindirim",         group: "sindirim",    cost: 34,  price: 44,  assetKey: "med_hazimkolay" },
+  { id: "med_reflusondur",  name: "Reflüsöndür",   emoji: "🔥", color: "#6ac8a8", category: "Sindirim",         group: "sindirim",    cost: 64,  price: 91,  assetKey: "med_reflusondur" },
 
-  { id: "med_dvitamin",     name: "D-Vitamin",     emoji: "☀️", color: "#e8c84a", category: "Vitamin/Takviye",  group: "vitamin",     assetKey: "med_dvitamin" },
-  { id: "med_b12guc",       name: "B12-Güç",       emoji: "⚡", color: "#e88ab8", category: "Vitamin/Takviye",  group: "vitamin",     assetKey: "med_b12guc" },
-  { id: "med_demirtam",     name: "Demirtam",      emoji: "🩸", color: "#a83a3a", category: "Vitamin/Takviye",  group: "vitamin",     assetKey: "med_demirtam" },
-  { id: "med_cinko",        name: "Çinko+",        emoji: "🛡️", color: "#6a8aa8", category: "Vitamin/Takviye",  group: "vitamin",     assetKey: "med_cinko" },
-  { id: "med_magnezyum",    name: "Magnezyum",     emoji: "🌙", color: "#8a6ac8", category: "Vitamin/Takviye",  group: "vitamin",     assetKey: "med_magnezyum" },
+  { id: "med_dvitamin",     name: "D-Vitamin",     emoji: "☀️", color: "#e8c84a", category: "Vitamin/Takviye",  group: "vitamin",     cost: 81,  price: 138, assetKey: "med_dvitamin" },
+  { id: "med_b12guc",       name: "B12-Güç",       emoji: "⚡", color: "#e88ab8", category: "Vitamin/Takviye",  group: "vitamin",     cost: 105, price: 176, assetKey: "med_b12guc" },
+  { id: "med_demirtam",     name: "Demirtam",      emoji: "🩸", color: "#a83a3a", category: "Vitamin/Takviye",  group: "vitamin",     cost: 122, price: 197, assetKey: "med_demirtam" },
+  { id: "med_cinko",        name: "Çinko+",        emoji: "🛡️", color: "#6a8aa8", category: "Vitamin/Takviye",  group: "vitamin",     cost: 76,  price: 124, assetKey: "med_cinko" },
+  { id: "med_magnezyum",    name: "Magnezyum",     emoji: "🌙", color: "#8a6ac8", category: "Vitamin/Takviye",  group: "vitamin",     cost: 141, price: 231, assetKey: "med_magnezyum" },
 
-  { id: "med_kulakdamla",   name: "Kulakdamla",    emoji: "👂", color: "#e8943a", category: "Göz/Kulak/Burun",  group: "goz_kulak",   assetKey: "med_kulakdamla" },
-  { id: "med_gorusnet",     name: "Görüşnet",      emoji: "👓", color: "#7ab8e8", category: "Göz/Kulak/Burun",  group: "goz_kulak",   assetKey: "med_gorusnet" },
-  { id: "med_burunferah",   name: "Burunferah",    emoji: "🌬️", color: "#5ab8b8", category: "Göz/Kulak/Burun",  group: "goz_kulak",   assetKey: "med_burunferah" },
+  { id: "med_kulakdamla",   name: "Kulakdamla",    emoji: "👂", color: "#e8943a", category: "Göz/Kulak/Burun",  group: "goz_kulak",   cost: 70,  price: 96,  assetKey: "med_kulakdamla" },
+  { id: "med_gorusnet",     name: "Görüşnet",      emoji: "👓", color: "#7ab8e8", category: "Göz/Kulak/Burun",  group: "goz_kulak",   cost: 85,  price: 121, assetKey: "med_gorusnet" },
+  { id: "med_burunferah",   name: "Burunferah",    emoji: "🌬️", color: "#5ab8b8", category: "Alerji",           group: "alerji",      cost: 49,  price: 66,  assetKey: "med_burunferah" },
 
-  { id: "med_yaratemiz",    name: "Yaratemiz",     emoji: "🧴", color: "#d8e8f8", category: "İlk Yardım",       group: "ilk_yardim",  assetKey: "med_yaratemiz" },
-  { id: "med_yanikkrem",    name: "Yanıkkrem",     emoji: "🔥", color: "#f8c8d8", category: "İlk Yardım",       group: "ilk_yardim",  assetKey: "med_yanikkrem" },
-  { id: "med_mikropkir",    name: "Mikropkır",     emoji: "✨", color: "#5ac88a", category: "İlk Yardım",       group: "ilk_yardim",  assetKey: "med_mikropkir" },
-  { id: "med_agrijel",      name: "Ağrıjel",       emoji: "🧊", color: "#8ac8e8", category: "İlk Yardım",       group: "ilk_yardim",  assetKey: "med_agrijel" },
+  { id: "med_yaratemiz",    name: "Yaratemiz",     emoji: "🧴", color: "#d8e8f8", category: "İlk Yardım",       group: "ilk_yardim",  cost: 36,  price: 47,  assetKey: "med_yaratemiz" },
+  { id: "med_yanikkrem",    name: "Yanıkkrem",     emoji: "🔥", color: "#f8c8d8", category: "İlk Yardım",       group: "ilk_yardim",  cost: 52,  price: 71,  assetKey: "med_yanikkrem" },
+  { id: "med_mikropkir",    name: "Mikropkır",     emoji: "✨", color: "#5ac88a", category: "İlk Yardım",       group: "ilk_yardim",  cost: 43,  price: 58,  assetKey: "med_mikropkir" },
+  { id: "med_agrijel",      name: "Ağrıjel",       emoji: "🧊", color: "#8ac8e8", category: "Ağrı/Ateş",        group: "agri_ates",   cost: 58,  price: 79,  assetKey: "med_agrijel" },
 
-  { id: "med_sakinol",      name: "Sakinol",       emoji: "🍵", color: "#b89ad8", category: "Sinir/Uyku",       group: "uyku_sinir",  assetKey: "med_sakinol" },
-  { id: "med_stresyok",     name: "Stresyok",      emoji: "😌", color: "#c8a8e8", category: "Sinir/Uyku",       group: "uyku_sinir",  assetKey: "med_stresyok" },
-  { id: "med_huzurver",     name: "Huzurver",      emoji: "🌿", color: "#8ac88a", category: "Sinir/Uyku",       group: "uyku_sinir",  assetKey: "med_huzurver" },
+  { id: "med_sakinol",      name: "Sakinol",       emoji: "🍵", color: "#b89ad8", category: "Sinir/Uyku",       group: "uyku_sinir",  cost: 56,  price: 78,  assetKey: "med_sakinol" },
+  { id: "med_stresyok",     name: "Stresyok",      emoji: "😌", color: "#c8a8e8", category: "Sinir/Uyku",       group: "uyku_sinir",  cost: 74,  price: 106, assetKey: "med_stresyok" },
+  { id: "med_huzurver",     name: "Huzurver",      emoji: "🌿", color: "#8ac88a", category: "Sinir/Uyku",       group: "uyku_sinir",  cost: 97,  price: 143, assetKey: "med_huzurver" },
 
-  { id: "med_ciltbakim",    name: "Ciltbakım",     emoji: "🧴", color: "#f8b8c8", category: "Cilt/Dış",         group: "cilt",        assetKey: "med_ciltbakim" },
-  { id: "med_sivilcesil",   name: "Sivilcesil",    emoji: "🧼", color: "#a8d8a8", category: "Cilt/Dış",         group: "cilt",        assetKey: "med_sivilcesil" },
-  { id: "med_mantarkov",    name: "Mantarkov",     emoji: "🦶", color: "#e8a84a", category: "Cilt/Dış",         group: "cilt",        assetKey: "med_mantarkov" },
-  { id: "med_kasintidur",   name: "Kaşıntıdur",    emoji: "🚫", color: "#6a9ad8", category: "Cilt/Dış",         group: "cilt",        assetKey: "med_kasintidur" }
+  { id: "med_ciltbakim",    name: "Ciltbakım",     emoji: "🧴", color: "#f8b8c8", category: "Cilt/Dış",         group: "cilt",        cost: 79,  price: 118, assetKey: "med_ciltbakim" },
+  { id: "med_sivilcesil",   name: "Sivilcesil",    emoji: "🧼", color: "#a8d8a8", category: "Cilt/Dış",         group: "cilt",        cost: 63,  price: 92,  assetKey: "med_sivilcesil" },
+  { id: "med_mantarkov",    name: "Mantarkov",     emoji: "🦶", color: "#e8a84a", category: "Cilt/Dış",         group: "cilt",        cost: 88,  price: 134, assetKey: "med_mantarkov" },
+  { id: "med_kasintidur",   name: "Kaşıntıdur",    emoji: "🚫", color: "#6a9ad8", category: "Alerji",           group: "alerji",      cost: 52,  price: 74,  assetKey: "med_kasintidur" }
 ];
 
 // Kategori sekmeleri (ölçeklenebilir; boş gruplar otomatik gizlenir)
 const GROUPS = [
   { id: "agri_ates",  emoji: "💊", label: "Ağrı" },
   { id: "soguk",      emoji: "🤧", label: "Soğuk" },
+  { id: "alerji",     emoji: "🌼", label: "Alerji" },
   { id: "sindirim",   emoji: "🌿", label: "Mide" },
   { id: "vitamin",    emoji: "💉", label: "Vitamin" },
   { id: "goz_kulak",  emoji: "👁️", label: "Göz" },
@@ -254,13 +260,23 @@ const KNOWN_DOCTORS = [
   { name: "Dr. Tuğçe Avcı",     sig: "TAvcı" }
 ];
 
-// SAHTE/uydurma doktorlar — fake_doctor kusurunda kullanılır (listede yok)
+// SAHTE doktorlar — fake_doctor kusurunda kullanılır. Gerçekçi isimler, DEFTERDE YOK;
+// tanınanlara benzer ad/soyadlar bilerek seçildi (oyuncu defteri gerçekten kontrol etsin).
 const FAKE_DOCTORS = [
-  { name: "Dr. Xyzqw Asdf",  sig: "Xq" },
-  { name: "Dr. Qwfp Ljxy",   sig: "??" },
-  { name: "Dr. Zzx Vvbn",    sig: "zz" },
-  { name: "Dr. ??? ???",     sig: "???" },
-  { name: "Dr. Brrr Klmn",   sig: "bk" }
+  { name: "Dr. Ayşe Kılıçarslan",  sig: "AKılıçarslan" },
+  { name: "Dr. Mehmet Doğanay",    sig: "MDoğanay" },
+  { name: "Dr. Zeynep Kayahan",    sig: "ZKayahan" },
+  { name: "Dr. Cenk Özkan",        sig: "CÖzkan" },
+  { name: "Dr. Elif Şahiner",      sig: "EŞahiner" },
+  { name: "Dr. Murat Aydoğdu",     sig: "MAydoğdu" },
+  { name: "Dr. Fatih Çelikkol",    sig: "FÇelikkol" },
+  { name: "Dr. Aylin Koçak",       sig: "AKoçak" },
+  { name: "Dr. Selim Arslantaş",   sig: "SArslantaş" },
+  { name: "Dr. Burcu Doğaner",     sig: "BDoğaner" },
+  { name: "Dr. Deniz Yıldırım",    sig: "DYıldırım" },
+  { name: "Dr. Erdem Şentürk",     sig: "EŞentürk" },
+  { name: "Dr. Hale Erdoğmuş",     sig: "HErdoğmuş" },
+  { name: "Dr. Osman Taşkın",      sig: "OTaşkın" }
 ];
 
 const PATIENT_AVATARS = [
@@ -356,8 +372,9 @@ const game = {
 
   // stok + ecza deposu
   stock: {},              // ilaç id -> adet (ilaç bazında; günler arası kalıcı)
-  depotOpen: false,       // depo paneli açık mı (modal; oyun donar)
+  depotOpen: false,       // depo (PC sipariş ekranı) açık mı (modal; oyun donar)
   depotGroup: null,       // depo panelinde seçili kategori (oyun sekmesinden bağımsız)
+  depotPending: {},       // ilaç id -> sipariş sepetindeki adet (panel kapanınca sıfırlanır)
   stockToast: null,       // { text, until } — kısa "stok yok" uyarısı (game.feedback'i ezmez)
 
   clock: 0                // global animasyon saati
@@ -370,9 +387,10 @@ let layout = {
   counterSlots: [],
   serveBtn: { x: 0, y: 0, w: 0, h: 0 },
   nextDayBtn: { x: 0, y: 0, w: 0, h: 0 },
-  // depo paneli rect'leri (drawDepot içinde hesaplanır — nextDayBtn kalıbı)
-  depotBtn: null, depotFromDayEndBtn: null,
-  depotPanel: null, depotCloseBtn: null, depotTabs: [], depotRows: []
+  // depo (PC ekranı) rect'leri (ilgili draw fonksiyonlarında hesaplanır — nextDayBtn kalıbı)
+  pcBtn: null, depotFromDayEndBtn: null,
+  depotPanel: null, depotCloseBtn: null, depotTabs: [], depotRows: [],
+  depotOrderBtn: null
 };
 
 // =====================================================================
@@ -489,7 +507,14 @@ function rebuildCounterSlots() {
   const b = layout._band;
   if (!b) return;
   layout.counterSlots = [];
-  const n = game.counter.length;
+  // counter verisi düz id listesi kalır (multiset/checkOrder aynı); sadece ÇİZİM
+  // ilaç bazında gruplanır: benzersiz ilaç = tek kutu + adet (×N rozeti için)
+  const order = [], countById = {};
+  for (const id of game.counter) {
+    if (!(id in countById)) { countById[id] = 0; order.push(id); }
+    countById[id]++;
+  }
+  const n = order.length;
   if (n === 0) return;
   const sw = layout.stage.w;
   // tezgah bandının ~%78'i kadar büyük tile'lar
@@ -504,7 +529,7 @@ function rebuildCounterSlots() {
   const sy = baseline - slot;
   let sx = b.x + (b.w - totalW) / 2;
   for (let i = 0; i < n; i++) {
-    layout.counterSlots.push({ id: game.counter[i], idx: i, x: sx, y: sy, w: slot, h: slot });
+    layout.counterSlots.push({ id: order[i], count: countById[order[i]], x: sx, y: sy, w: slot, h: slot });
     sx += slot + gap;
   }
 }
@@ -784,25 +809,51 @@ function tapMedicine(id) {
   rebuildCounterSlots();
 }
 
-// --- Ecza deposu (toptancı) ---
+// --- Ecza deposu (PC sipariş ekranı) ---
 function openDepot() {
   if (!game.depotGroup) { const g = groupsWithMeds()[0]; game.depotGroup = g ? g.id : null; }
+  game.depotPending = {};      // sepet her açılışta temiz
   game.depotOpen = true;
 }
-function closeDepot() { game.depotOpen = false; }
+function closeDepot() { game.depotOpen = false; game.depotPending = {}; }
 
-// depodan tek batch sipariş: para yeter + tavan altındaysa
-function orderStock(id) {
-  const cur = game.stock[id] || 0;
-  if (cur >= CONFIG.maxStock) return;                       // dolu
-  const cost = CONFIG.restockPrice * CONFIG.restockBatch;
-  if (game.money < cost) return;                            // para yetmez
-  game.money -= cost;
-  game.stock[id] = Math.min(CONFIG.maxStock, cur + CONFIG.restockBatch);
+// sepetteki adedi değiştir: 0..(maxStock - mevcut stok) aralığına clamp
+function changePending(id, delta) {
+  const cur = game.depotPending[id] || 0;
+  const maxAdd = Math.max(0, CONFIG.maxStock - (game.stock[id] || 0));
+  game.depotPending[id] = clamp(cur + delta, 0, maxAdd);
 }
 
-function removeFromCounter(idx) {
+// sepet toplamı (₺) — ilaç bazında alış fiyatı (cost) üzerinden
+function depotOrderTotal() {
+  let sum = 0;
+  for (const id in game.depotPending) {
+    const q = game.depotPending[id];
+    if (!q) continue;
+    const m = getMedicine(id);
+    if (m) sum += m.cost * q;
+  }
+  return sum;
+}
+
+// tüm bekleyen siparişleri tek seferde uygula (para düşer, stoklar artar, sepet sıfırlanır)
+function placeDepotOrder() {
+  const total = depotOrderTotal();
+  if (total <= 0 || game.money < total) return;
+  game.money -= total;
+  for (const id in game.depotPending) {
+    const q = game.depotPending[id];
+    if (!q) continue;
+    game.stock[id] = Math.min(CONFIG.maxStock, (game.stock[id] || 0) + q);
+  }
+  game.depotPending = {};
+}
+
+// gruplu kutuya tıklayınca o ilaçtan BİR adet çıkar (tek tek geri alma korunur)
+function removeOneFromCounter(id) {
   if (!servingAllowed()) return;
+  const idx = game.counter.lastIndexOf(id);
+  if (idx < 0) return;
   game.counter.splice(idx, 1);
   rebuildCounterSlots();
 }
@@ -837,7 +888,9 @@ function checkOrder() {
   if (correct) {
     // stok tüketimi — verilen her ilaç stoktan düşer (negatife inmez; ekleme zaten stokla sınırlı)
     for (const gid of given) game.stock[gid] = Math.max(0, (game.stock[gid] || 0) - 1);
-    const earn = given.length * CONFIG.pricePerMedicine;
+    // kazanç = servis edilen ilaçların satış fiyatı toplamı (adet dahil; given id tekrarlı liste)
+    let earn = 0;
+    for (const gid of given) { const gm = getMedicine(gid); if (gm) earn += gm.price; }
     game.money += earn;
     game.dayStats.money += earn;
     game.dayStats.correct++;
@@ -904,6 +957,7 @@ function startNewGame() {
   game.feedback = null;
   game.stockToast = null;
   game.depotOpen = false;
+  game.depotPending = {};
   initStock();            // stok yalnızca yeni oyunda sıfırlanır (günler arası kalıcı)
   game.dayStats = { served: 0, correct: 0, wrong: 0, angry: 0, money: 0 };
   game.state = STATE.PLAYING;
@@ -1123,15 +1177,9 @@ function drawGroundShadow(cx, cy, rx, ry) {
   ctx.restore();
 }
 
-function drawPatienceBar(cx, cy, w, ratio, alpha) {
-  const c = CONFIG.colors;
-  const h = Math.max(4, w * 0.10);   // ince ve şık
-  ctx.globalAlpha = alpha;
-  fillRoundRect(cx - w / 2, cy, w, h, h / 2, "rgba(20,15,28,0.55)");
-  const col = ratio > 0.5 ? c.patGood : ratio > 0.25 ? c.patMid : c.patBad;
-  if (ratio > 0.02) fillRoundRect(cx - w / 2, cy, w * ratio, h, h / 2, col);
-  ctx.globalAlpha = 1;
-}
+// Sabır barı ÇİZİLMİYOR (görsel olarak gizli) — sabır sistemi aynen işler:
+// update() azaltır, biten hasta küser, itibar düşer, reçete incelemede donar.
+// Konsoldan takip: cheats.setPatience(n) ve cheats.state().activePatience
 
 function drawOnePatient(p) {
   const counterLine = layout._counterLine;
@@ -1162,11 +1210,7 @@ function drawOnePatient(p) {
   }, "contain");
 
   ctx.globalAlpha = 1;
-
-  // 3) sabır barı — tezgah çizgisinin hemen üstünde, ince ve ortalı
-  const barW = layout.stage.w * 0.42;
-  const barH = Math.max(4, barW * 0.05);
-  drawPatienceBar(cx, counterLine - barH - layout.stage.h * 0.012, barW, ratio, alpha);
+  // (sabır barı bilinçli olarak çizilmiyor; sabır mantığı update()'te aynen işler)
 }
 
 // semptomlu hasta — baş üstü konuşma balonu (reçetelilerde sol panel kullanılır)
@@ -1385,6 +1429,22 @@ function fitText(str, x, y, maxW, px, color, align, weight) {
   ctx.textBaseline = "middle";
   ctx.fillText(str, x, y);
   return s;
+}
+
+// Metni SABİT puntoyla verilen genişliğe sığdır: taşarsa sonunu "…" ile kısalt.
+// (fitText'in aksine font küçültmez; sütunlu listelerde satırlar aynı boyda kalır)
+function ellipsisText(str, x, y, maxW, px, color, align, weight) {
+  const wgt = weight || "600";
+  ctx.font = wgt + " " + px + "px " + RX_FONT;
+  let s = str;
+  if (ctx.measureText(s).width > maxW) {
+    while (s.length > 1 && ctx.measureText(s + "…").width > maxW) s = s.slice(0, -1);
+    s += "…";
+  }
+  ctx.fillStyle = color;
+  ctx.textAlign = align || "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(s, x, y);
 }
 
 // Reçete kağıdı: kod ile çizilen DÜZ, temiz krem panel + dinamik içerik.
@@ -1665,8 +1725,18 @@ function drawCounter() {
       ctx.restore();
       text(m.emoji, slot.x + slot.w / 2, slot.y + slot.h * 0.5, slot.w * 0.55, "#000", "center", "400");
     }, "contain");
-    // kaldır işareti
-    text("✕", slot.x + slot.w * 0.84, slot.y + slot.h * 0.14, slot.w * 0.24, "rgba(255,235,210,0.85)", "center", "800");
+    // kaldır işareti (sol üst; sağ üst adet rozetine ayrıldı)
+    text("✕", slot.x + slot.w * 0.16, slot.y + slot.h * 0.14, slot.w * 0.24, "rgba(255,235,210,0.85)", "center", "800");
+    // aynı ilaçtan 2+ varsa sağ üstte adet rozeti
+    if (slot.count >= 2) {
+      const br = slot.w * 0.20;
+      const bx = slot.x + slot.w - br * 0.85, by = slot.y + br * 0.85;
+      ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(20,16,28,0.88)"; ctx.fill();
+      ctx.strokeStyle = c.panelBorder; ctx.lineWidth = Math.max(1, br * 0.10);
+      ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.stroke();
+      text("×" + slot.count, bx, by, br * 0.95, CONFIG.colors.neon, "center", "800");
+    }
   }
 }
 
@@ -1844,22 +1914,34 @@ function drawDayEnd() {
   text("📦 Depodan Sipariş", dX + dW / 2, dY + dH / 2, dH * 0.5, c.neon, "center", "800");
 }
 
-// Tezgahta "📦 Depo" butonu (bandın sağ ucunda, kapalı defterin karşısında).
-// Rect burada hesaplanır (nextDayBtn kalıbı).
-function drawDepotButton() {
-  const b = layout._band, S = layout.stage, c = CONFIG.colors;
+// Tezgahın SAĞ tarafında duran bilgisayar (kapalı defterin simetriği) — depo
+// sipariş ekranını açar. Defterle benzer görsel ağırlıkta (küçük), bandın EN SAĞINA
+// yaslı (sağ boşluk = defterin sol boşluğu, S.w*0.02) ve alt kenarı defterin alt
+// kenarıyla aynı hizada (tezgah yüzeyi) — ortadaki hastanın önünü kesmez.
+// CONFIG.pcScale / pcOffsetX ile elle ince ayar. Rect burada hesaplanır.
+function drawCounterPC() {
+  const b = layout._band, S = layout.stage;
   if (!b) return;
-  const bw = S.w * 0.185, bh = b.h * 0.44;
-  const bx = b.x + b.w - bw - S.w * 0.025;
-  const by = b.y + b.h * 0.5 - bh * 0.5;
-  layout.depotBtn = { x: bx, y: by, w: bw, h: bh };
-  const r = bh * 0.32;
-  ctx.save();
-  ctx.shadowColor = "rgba(0,0,0,0.4)"; ctx.shadowBlur = 10; ctx.shadowOffsetY = 3;
-  fillRoundRect(bx, by, bw, bh, r, c.btnDark);
-  ctx.restore();
-  strokeRoundRect(bx, by, bw, bh, r, c.neon, Math.max(1.5, bw * 0.01));
-  text("📦 Depo", bx + bw / 2, by + bh / 2, bh * 0.42, c.neon, "center", "800");
+  const scale = CONFIG.pcScale || 1;
+  const pw = S.w * 0.21 * scale, ph = S.h * 0.10 * scale;
+  const px = b.x + b.w - pw - S.w * 0.02 + (CONFIG.pcOffsetX || 0);
+  const py = (b.y + b.h * 0.58) - ph;   // alt kenar = defterin alt kenarı (tezgah yüzeyi)
+  // tıklama alanı görselden her yönde ~9px geniş (dokunma kolaylığı)
+  const hitPad = 9;
+  layout.pcBtn = { x: px - hitPad, y: py - hitPad, w: pw + hitPad * 2, h: ph + hitPad * 2 };
+  drawGroundShadow(px + pw / 2, py + ph * 0.96, pw * 0.5, ph * 0.14);
+  Sprite.draw(ctx, "pc", px, py, pw, ph, () => {
+    // fallback: koyu monitör + soluk yeşilimsi ekran + ayak + 🖥️
+    const mh = ph * 0.78;
+    fillRoundRect(px, py, pw, mh, mh * 0.12, "#241d30");
+    strokeRoundRect(px, py, pw, mh, mh * 0.12, "rgba(245,170,70,0.4)", 1.5);
+    const inPad = pw * 0.06;
+    fillRoundRect(px + inPad, py + mh * 0.12, pw - inPad * 2, mh * 0.70, mh * 0.08, "rgba(120,180,150,0.28)");
+    text("🖥️", px + pw / 2, py + mh * 0.47, mh * 0.48, "#000", "center", "400");
+    // monitör ayağı + taban
+    fillRoundRect(px + pw * 0.42, py + mh, pw * 0.16, ph * 0.12, 2, "#1c1626");
+    fillRoundRect(px + pw * 0.30, py + ph * 0.92, pw * 0.40, ph * 0.08, 2, "#2a2138");
+  }, "contain");
 }
 
 // Kısa stok uyarısı toast'u (feedback'ten bağımsız, süreli; random yok — clock ile fade).
@@ -1884,22 +1966,35 @@ function drawStockToast() {
   ctx.restore();
 }
 
-// Ecza deposu paneli (defter overlay + DAYEND kart dili). Rect'ler burada hesaplanır.
-function drawDepot() {
+// PC ekranı kapsayıcısı: karartma + koyu panel + yeşilimsi sistem başlık şeridi + ✕.
+// İleride Medula / E-reçete gibi ekranlar da bu kapsayıcıyla çizilecek; içerik rect'i döner.
+function drawPcScreen(title) {
   const w = layout.w, h = layout.h, c = CONFIG.colors, S = layout.stage;
 
-  // tam ekran karartma (modal)
-  ctx.fillStyle = "rgba(8,6,12,0.68)";
+  // tam ekran karartma (modal) — sahnenin TAMAMEN üstüne (REDDET/ONAYLA dahil tüm
+  // arka butonları örter); arka plan seçilebilir ama tıklanabilir hissi vermez
+  ctx.fillStyle = "rgba(8,6,12,0.80)";
   ctx.fillRect(0, 0, w, h);
 
   const panelW = S.w * 0.90, panelH = S.h * 0.80;
   const panelX = S.x + (S.w - panelW) / 2, panelY = S.y + (S.h - panelH) / 2;
   layout.depotPanel = { x: panelX, y: panelY, w: panelW, h: panelH };
-  drawPanel(panelX, panelY, panelW, panelH, panelW * 0.06, c.panelBgSolid);
+  drawPanel(panelX, panelY, panelW, panelH, panelW * 0.05, c.panelBgSolid);
 
-  // başlık + para
-  text("📦 Ecza Deposu", panelX + panelW * 0.5, panelY + panelH * 0.05, panelH * 0.045, c.neon, "center", "800");
-  text("💰 " + game.money + "₺", panelX + panelW * 0.5, panelY + panelH * 0.10, panelH * 0.033, c.cream, "center", "700");
+  // sistem başlık şeridi (yeşilimsi, soluk — eski terminal hissi)
+  const barH = panelH * 0.065;
+  ctx.save();
+  roundRect(panelX, panelY, panelW, panelH, panelW * 0.05);
+  ctx.clip();
+  ctx.fillStyle = "rgba(38, 74, 54, 0.92)";
+  ctx.fillRect(panelX, panelY, panelW, barH);
+  ctx.fillStyle = "rgba(140, 220, 170, 0.30)";
+  ctx.fillRect(panelX, panelY + barH - Math.max(1, panelH * 0.004), panelW, Math.max(1, panelH * 0.004));
+  ctx.restore();
+  // sistem ışığı + başlık
+  ctx.beginPath(); ctx.arc(panelX + panelW * 0.045, panelY + barH * 0.5, barH * 0.16, 0, Math.PI * 2);
+  ctx.fillStyle = "#7ee2a8"; ctx.fill();
+  fitText(title, panelX + panelW * 0.5, panelY + barH * 0.5, panelW * 0.78, barH * 0.42, "#d8f0e0", "center", "800");
 
   // kapat butonu (✕) — defter kalıbı
   const cs = S.w * 0.085;
@@ -1914,13 +2009,23 @@ function drawDepot() {
   ctx.beginPath(); ctx.arc(cb.x + cb.w / 2, cb.y + cb.h / 2, cb.w / 2, 0, Math.PI * 2); ctx.stroke();
   text("✕", cb.x + cb.w / 2, cb.y + cb.h / 2, cs * 0.5, "#e8736b", "center", "800");
 
+  return { x: panelX, y: panelY + barH, w: panelW, h: panelH - barH };
+}
+
+// Ecza deposu — PC sipariş ekranı. Satır başına −/+ adımlayıcı ile sepet (pendingQty),
+// altta tek "SİPARİŞ VER" butonu. Rect'ler burada hesaplanır.
+function drawDepot() {
+  const c = CONFIG.colors;
+  const r = drawPcScreen("ECZA DEPOSU — Sipariş Ekranı");
+
+  // kasa (sol üst)
+  text("💰 " + game.money + "₺", r.x + r.w * 0.05, r.y + r.h * 0.045, r.h * 0.032, c.cream, "left", "700");
+
   // --- kategori sekmeleri (tek satır, eşit bölünmüş; depoya özel aktif grup) ---
   const groups = groupsWithMeds();
   if (!game.depotGroup && groups.length) game.depotGroup = groups[0].id;
-  const tabsX = panelX + panelW * 0.05;
-  const tabsW = panelW * 0.90;
-  const tabsY = panelY + panelH * 0.145;
-  const tabsH = panelH * 0.06;
+  const tabsX = r.x + r.w * 0.05, tabsW = r.w * 0.90;
+  const tabsY = r.y + r.h * 0.085, tabsH = r.h * 0.062;
   const tGap = tabsW * 0.012;
   const tW = (tabsW - tGap * (groups.length - 1)) / Math.max(1, groups.length);
   layout.depotTabs = [];
@@ -1928,68 +2033,103 @@ function drawDepot() {
     const g = groups[i];
     const tx = tabsX + i * (tW + tGap);
     const active = g.id === game.depotGroup;
-    const r = tabsH * 0.28;
-    const cx = tx + tW / 2, cy = tabsY + tabsH / 2;
+    const tr = tabsH * 0.28;
+    const tcx = tx + tW / 2, tcy = tabsY + tabsH / 2;
     if (active) {
       ctx.save(); ctx.shadowColor = c.neonGlow; ctx.shadowBlur = 8;
-      fillRoundRect(tx, tabsY, tW, tabsH, r, "rgba(58,40,20,0.95)"); ctx.restore();
-      strokeRoundRect(tx, tabsY, tW, tabsH, r, c.neon, Math.max(1.2, tabsH * 0.05));
-      drawTabLabel(g.emoji, g.label, cx, cy, tW * 0.86, tabsH * 0.34, c.neon, "800");
+      fillRoundRect(tx, tabsY, tW, tabsH, tr, "rgba(58,40,20,0.95)"); ctx.restore();
+      strokeRoundRect(tx, tabsY, tW, tabsH, tr, c.neon, Math.max(1.2, tabsH * 0.05));
+      drawTabLabel(g.emoji, g.label, tcx, tcy, tW * 0.86, tabsH * 0.34, c.neon, "800");
     } else {
-      fillRoundRect(tx, tabsY, tW, tabsH, r, "rgba(26,21,36,0.82)");
-      strokeRoundRect(tx, tabsY, tW, tabsH, r, "rgba(245,170,70,0.25)", 1);
-      drawTabLabel(g.emoji, g.label, cx, cy, tW * 0.86, tabsH * 0.32, c.creamSoft, "700");
+      fillRoundRect(tx, tabsY, tW, tabsH, tr, "rgba(26,21,36,0.82)");
+      strokeRoundRect(tx, tabsY, tW, tabsH, tr, "rgba(245,170,70,0.25)", 1);
+      drawTabLabel(g.emoji, g.label, tcx, tcy, tW * 0.86, tabsH * 0.32, c.creamSoft, "700");
     }
     layout.depotTabs.push({ group: g, x: tx, y: tabsY, w: tW, h: tabsH });
   }
 
-  // --- ilaç listesi (seçili kategori; her satır: emoji/ad + stok + sipariş) ---
+  // --- ilaç satırları: sabit oranlı sütunlar (metin ölçüsüne göre kaydırma YOK) ---
+  //   SOL  (%46'ya kadar) : emoji + ilaç adı (üst) + "Stok x/30" (alt)
+  //   ORTA (%60'ta biter) : birim alış (üst) + seçim varsa satır tutarı / DOLU (alt)
+  //   SAĞ  (sağa yaslı)   : −/+ adımlayıcı
   const meds = medsInGroup(game.depotGroup);
-  const listTop = tabsY + tabsH + panelH * 0.025;
-  const listBot = panelY + panelH * 0.955;
-  const rowGap = panelH * 0.012;
-  const maxRowH = panelH * 0.11;
-  let rowH = Math.min(maxRowH, (listBot - listTop - rowGap * Math.max(0, meds.length - 1)) / Math.max(1, meds.length));
-  const rx0 = panelX + panelW * 0.06, rw = panelW * 0.88;
+  const obH = r.h * 0.085;
+  const obY = r.y + r.h - obH - r.h * 0.03;
+  const listTop = tabsY + tabsH + r.h * 0.02;
+  const listBot = obY - r.h * 0.02;
+  const rowGap = r.h * 0.01;
+  // satır yüksekliği alandan türetilir: 6 satır en kötü ihtimalle sığar,
+  // az satırlı kategorilerde üst sınıra kadar genişler (metinler nefes alır)
+  let rowH = Math.min(r.h * 0.12, (listBot - listTop - rowGap * Math.max(0, meds.length - 1)) / Math.max(1, meds.length));
+  const rx0 = r.x + r.w * 0.05, rw = r.w * 0.90;
+  const colNameR = rx0 + rw * 0.46;   // sol sütunun sağ sınırı
+  const colCostR = rx0 + rw * 0.60;   // orta sütunun sağ sınırı (fiyat/tutar sağa hizalı)
   layout.depotRows = [];
-  const orderCost = CONFIG.restockPrice * CONFIG.restockBatch;
   let ry = listTop;
   for (const m of meds) {
     const stock = game.stock[m.id] || 0;
-    const full = stock >= CONFIG.maxStock;
-    const affordable = game.money >= orderCost;
-    // satır zemini
-    fillRoundRect(rx0, ry, rw, rowH, rowH * 0.22, "rgba(26,21,36,0.5)");
-    // emoji + ad
-    const em = rx0 + rowH * 0.5;
-    text(m.emoji, em, ry + rowH * 0.5, rowH * 0.5, "#f2e6d4", "center", "400");
-    fitText(m.name, rx0 + rowH * 0.95, ry + rowH * 0.5, rw * 0.34, rowH * 0.34, c.cream, "left", "700");
-    // stok x/max (orta)
-    const stColor = full ? c.good : (stock <= 0 ? c.bad : c.cream);
-    text(stock + "/" + CONFIG.maxStock, rx0 + rw * 0.60, ry + rowH * 0.5, rowH * 0.34, stColor, "center", "800");
-    // sipariş butonu (sağ)
-    const obW = rw * 0.26, obH = rowH * 0.72;
-    const obX = rx0 + rw - obW, obY = ry + (rowH - obH) / 2;
-    const or = obH * 0.30;
-    let label, fillCol, lineCol, txtCol, enabled;
-    if (full) {
-      label = "DOLU"; fillCol = "rgba(30,40,30,0.85)"; lineCol = "rgba(94,196,138,0.5)"; txtCol = "rgba(150,200,165,0.85)"; enabled = false;
-    } else if (!affordable) {
-      label = "+" + CONFIG.restockBatch + " (" + orderCost + "₺)"; fillCol = "rgba(30,26,38,0.6)"; lineCol = "rgba(245,170,70,0.25)"; txtCol = c.creamSoft; enabled = false;
-    } else {
-      label = "+" + CONFIG.restockBatch + " (" + orderCost + "₺)"; fillCol = c.btnDark; lineCol = c.neon; txtCol = c.neon; enabled = true;
+    const pending = game.depotPending[m.id] || 0;
+    const full = stock + pending >= CONFIG.maxStock;
+    fillRoundRect(rx0, ry, rw, rowH, rowH * 0.20, "rgba(26,21,36,0.5)");
+
+    // SOL: emoji + ad (üst; uzunsa "…" ile kısalır, taşmaz) + stok (alt, soluk)
+    text(m.emoji, rx0 + rowH * 0.42, ry + rowH * 0.5, rowH * 0.40, "#f2e6d4", "center", "400");
+    const nameX = rx0 + rowH * 0.80;
+    ellipsisText(m.name, nameX, ry + rowH * 0.30, colNameR - nameX, rowH * 0.28, c.cream, "left", "700");
+    fitText("Stok " + stock + "/" + CONFIG.maxStock, nameX, ry + rowH * 0.70, colNameR - nameX,
+      rowH * 0.22, stock <= 0 ? c.bad : c.creamSoft, "left", "600");
+
+    // ORTA: birim alış (üst) + satır tutarı / DOLU (alt) — kendi alanında, adın üzerine binmez
+    fitText(m.cost + "₺", colCostR, ry + rowH * 0.30, rw * 0.12, rowH * 0.26, c.creamSoft, "right", "700");
+    if (pending > 0) {
+      fitText("= " + (m.cost * pending) + "₺", colCostR, ry + rowH * 0.70, rw * 0.12, rowH * 0.22, c.neon, "right", "800");
+    } else if (full) {
+      fitText("DOLU", colCostR, ry + rowH * 0.70, rw * 0.12, rowH * 0.22, "rgba(150,200,165,0.75)", "right", "800");
     }
-    ctx.globalAlpha = enabled ? 1 : 0.7;
-    fillRoundRect(obX, obY, obW, obH, or, fillCol);
-    strokeRoundRect(obX, obY, obW, obH, or, lineCol, Math.max(1.2, obW * 0.012));
-    fitText(label, obX + obW / 2, obY + obH / 2, obW * 0.86, obH * 0.42, txtCol, "center", "800");
-    ctx.globalAlpha = 1;
-    layout.depotRows.push({ id: m.id, btn: { x: obX, y: obY, w: obW, h: obH }, enabled });
+
+    // SAĞ: −/+ adımlayıcı (satırın sağ kenarına yaslı; davranış aynı)
+    const sq = rowH * 0.56;
+    const qtyW = sq * 0.9;
+    const sY = ry + (rowH - sq) / 2;
+    const pX = rx0 + rw * 0.99 - sq;
+    const mX = pX - qtyW - sq;
+    const minusOn = pending > 0, plusOn = !full;
+    fillRoundRect(mX, sY, sq, sq, sq * 0.28, c.btnDark);
+    strokeRoundRect(mX, sY, sq, sq, sq * 0.28, minusOn ? c.neon : "rgba(245,170,70,0.22)", 1.2);
+    text("−", mX + sq / 2, sY + sq / 2, sq * 0.55, minusOn ? c.neon : c.neonDim, "center", "800");
+    text(String(pending), mX + sq + qtyW / 2, ry + rowH * 0.5, rowH * 0.30,
+      pending > 0 ? c.neon : c.creamSoft, "center", "800");
+    fillRoundRect(pX, sY, sq, sq, sq * 0.28, c.btnDark);
+    strokeRoundRect(pX, sY, sq, sq, sq * 0.28, plusOn ? c.neon : "rgba(245,170,70,0.22)", 1.2);
+    text("+", pX + sq / 2, sY + sq / 2, sq * 0.55, plusOn ? c.neon : c.neonDim, "center", "800");
+
+    layout.depotRows.push({
+      id: m.id, minusOn, plusOn,
+      minusBtn: { x: mX - sq * 0.15, y: sY - sq * 0.15, w: sq * 1.3, h: sq * 1.3 },
+      plusBtn:  { x: pX - sq * 0.15, y: sY - sq * 0.15, w: sq * 1.3, h: sq * 1.3 }
+    });
     ry += rowH + rowGap;
+  }
+
+  // --- SİPARİŞ VER (toplam) — tüm sepet tek seferde ---
+  const total = depotOrderTotal();
+  const afford = game.money >= total;
+  const enabled = total > 0 && afford;
+  layout.depotOrderBtn = { x: rx0, y: obY, w: rw, h: obH, enabled };
+  fillRoundRect(rx0, obY, rw, obH, obH * 0.32, c.btnDark);
+  ctx.save();
+  if (enabled) { ctx.shadowColor = c.neonGlow; ctx.shadowBlur = 14; }
+  strokeRoundRect(rx0, obY, rw, obH, obH * 0.32,
+    enabled ? c.neon : (total > 0 ? "rgba(232,115,107,0.55)" : c.neonDim), Math.max(1.5, rw * 0.006));
+  ctx.restore();
+  text("SİPARİŞ VER", rx0 + rw * 0.05, obY + obH / 2, obH * 0.36, enabled ? c.neon : c.neonDim, "left", "800");
+  if (total > 0) {
+    // para yetmiyorsa toplam kırmızımsı
+    text(total + "₺", rx0 + rw * 0.95, obY + obH / 2, obH * 0.38, afford ? c.neon : c.bad, "right", "800");
   }
 }
 
-// depo paneli açıkken dokunuşlar (sipariş / sekme / kapat / dışarı)
+// depo ekranı açıkken dokunuşlar (adımlayıcı / sipariş / sekme / kapat / dışarı)
 function handleDepotTap(px, py) {
   if (layout.depotCloseBtn && pointInRect(px, py, layout.depotCloseBtn)) { closeDepot(); return; }
   if (layout.depotTabs) {
@@ -1999,8 +2139,13 @@ function handleDepotTap(px, py) {
   }
   if (layout.depotRows) {
     for (const row of layout.depotRows) {
-      if (row.btn && pointInRect(px, py, row.btn)) { if (row.enabled) orderStock(row.id); return; }
+      if (row.minusBtn && pointInRect(px, py, row.minusBtn)) { if (row.minusOn) changePending(row.id, -1); return; }
+      if (row.plusBtn && pointInRect(px, py, row.plusBtn)) { if (row.plusOn) changePending(row.id, 1); return; }
     }
+  }
+  if (layout.depotOrderBtn && pointInRect(px, py, layout.depotOrderBtn)) {
+    if (layout.depotOrderBtn.enabled) placeDepotOrder();
+    return;
   }
   // panel dışına tıkla → kapat; panel içi boşluk → yut
   if (layout.depotPanel && !pointInRect(px, py, layout.depotPanel)) { closeDepot(); return; }
@@ -2016,7 +2161,7 @@ function render() {
     drawQueue();        // DEV müşteri (tezgah çizgisinde kırpılı)
     drawCounter();      // ahşap bant müşterinin önünde + seçilen ilaçlar
     drawClosedBook();   // tezgahtaki kapalı defter (obje)
-    drawDepotButton();  // 📦 Depo butonu (bandın sağında)
+    drawCounterPC();    // tezgahtaki bilgisayar (depo sipariş ekranını açar)
     drawTabs();         // kategori sekmeleri
     drawShelf();        // seçili kategorinin ilaçları
     if (activeNeedsDecision()) drawDecisionButtons(); else drawServeButton();
@@ -2210,8 +2355,8 @@ function handleTap(px, py) {
   }
   if (game.state !== STATE.PLAYING) return;
 
-  // 📦 Depo butonu → depo panelini aç
-  if (layout.depotBtn && pointInRect(px, py, layout.depotBtn)) { openDepot(); return; }
+  // tezgahtaki PC'ye dokun → depo sipariş ekranını aç
+  if (layout.pcBtn && pointInRect(px, py, layout.pcBtn)) { openDepot(); return; }
 
   // tezgahtaki kapalı deftere dokun → açılma animasyonunu başlat
   if (layout.bookClosedRect && pointInRect(px, py, layout.bookClosedRect)) {
@@ -2234,7 +2379,7 @@ function handleTap(px, py) {
   if (pointInRect(px, py, layout.serveBtn)) { checkOrder(); return; }
 
   for (const slot of layout.counterSlots) {
-    if (pointInRect(px, py, slot)) { removeFromCounter(slot.idx); return; }
+    if (pointInRect(px, py, slot)) { removeOneFromCounter(slot.id); return; }
   }
   for (const btn of layout.shelfButtons) {
     if (pointInRect(px, py, btn)) { tapMedicine(btn.id); return; }
@@ -2355,6 +2500,14 @@ window.cheats = {
     return 0;
   },
   openDepot() { openDepot(); },
+  prices() {
+    const out = {};
+    for (const m of MEDICINES) {
+      out[m.id] = { ad: m.name, alis: m.cost + "₺", satis: m.price + "₺", "kâr%": Math.round((1 - m.cost / m.price) * 100) };
+    }
+    console.table(out);
+    return out;
+  },
   assetStatus() {
     const keys = ["bg_pharmacy", "counter", "btn_serve"]
       .concat(MEDICINES.map(m => m.assetKey))
@@ -2365,9 +2518,11 @@ window.cheats = {
     return out;
   },
   state() {
+    const ap = activePatient();
     return JSON.parse(JSON.stringify({
       day: game.dayNumber, money: game.money, reputation: game.reputation,
       patients: game.dayCompleted + "/" + patientsForDay(), queue: game.queue.length,
+      activePatience: ap ? Math.round(ap.patience * 10) / 10 + "/" + ap.maxPatience : null,
       activeGroup: game.activeGroup,
       counter: game.counter, expected: expectedMedicineIds(),
       dayStats: game.dayStats
@@ -2403,6 +2558,7 @@ function loadAssets() {
   Assets.load("prescription_paper", "assets/prescription_paper.png");
   Assets.load("doctor_book_closed", "assets/doctor_book_closed.png");
   Assets.load("doctor_book", "assets/doctor_book.png");
+  Assets.load("pc", "assets/pc.png");
 }
 
 loadAssets();
