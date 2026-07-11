@@ -69,6 +69,10 @@ const CONFIG = {
   pcScale: 1.0,             // PC boyut çarpanı (1 = varsayılan, defterle benzer ağırlık)
   pcOffsetX: 0,             // PC yatay kaydırma (px; negatif = sola, pozitif = sağa)
 
+  // --- Açık defter yazı hizası (kitap YÜKSEKLİĞİNE oran; elle ince ayar için) ---
+  bookTextStartY: 0.225,    // ilk isim satırının baseline'ı (kağıttaki ilk çizgi)
+  bookLineStep: 0.0723,     // satır adımı (kağıtta iki çizgi arası ×2 — isimler ferah otursun)
+
   // --- Faz 1: hasta sırası (kuyruk) ---
   maxQueue: 3,              // ekranda aynı anda max hasta
   spawnInterval: 4,         // yeni hasta gelme aralığı (sn) — gün başı
@@ -480,12 +484,14 @@ function computeLayout() {
   layout.rejectBtn = { x: left, y: btnY, w: halfW, h: btnH };
   layout.approveBtn = { x: left + halfW + halfGap, y: btnY, w: halfW, h: btnH };
 
-  // --- Kategori sekmeleri + ilaç seçim grid'i (bandın ALTINDA) ---
-  // grid alanı yukarı çekildi: tezgahla arasındaki ölü boşluk azaltıldı
-  const zoneTop = counterLine + bandH + sh * 0.006;
+  // --- Kategori sekmeleri + ilaç seçim grid'i ---
+  // Sekmeler bandın GÖRÜNÜR yüzeyinin hemen altına alındı: counter.png'nin alt ~%35'i
+  // koyu ön panel (boş şerit gibi okunuyordu); sekmeler o panelin üstüne biner.
+  // Yüzey çizgisi ~0.58×bandH (defter/PC oturma hizası) + nefes payı ~0.15×bandH.
+  const zoneTop = counterLine + bandH * 0.73;
   const tabH = sh * 0.056;
   layout.tabsArea = { x: left, y: zoneTop, w: colW, h: tabH };
-  const gridTop = zoneTop + tabH + sh * 0.008;
+  const gridTop = zoneTop + tabH + sh * 0.006;
   const gridBottom = btnY - sh * 0.008;
   layout.gridArea = { x: left, y: gridTop, w: colW, h: gridBottom - gridTop };
 
@@ -1416,23 +1422,33 @@ function openBookBox() {
   return { x: boxX + (boxW - dw) / 2, y: boxY + (boxH - dh) / 2, w: dw, h: dh };
 }
 
-// açık defter içeriği (başlık + 20 doktor, iki sütun) — verilen kağıt dikdörtgenine
+// açık defter içeriği — 20 doktor, iki sütun; her isim kağıttaki ÇİZGİNİN üstüne
+// oturur (baseline çizgide). Hiza CONFIG.bookTextStartY / bookLineStep ile elle ayarlanır
+// (ikisi de kitap yüksekliğine oran). Başlık kitabın DIŞINDA (drawBookOverlay'de plaka).
 function drawBookContent(r) {
   const ink = "#3a3326";
-  text("Tanınan Doktorlar", r.x + r.w / 2, r.y + r.h * 0.12, r.h * 0.062, ink, "center", "800");
   const names = KNOWN_DOCTORS.map(d => d.name).slice().sort((a, b) => a.localeCompare(b, "tr"));
   const perCol = Math.ceil(names.length / 2);
-  const areaTop = r.y + r.h * 0.22, areaBot = r.y + r.h * 0.86;
-  const lineH = (areaBot - areaTop) / perCol;
-  const fs = Math.min(lineH * 0.5, r.w * 0.034);
-  const colX = [r.x + r.w * 0.12, r.x + r.w * 0.56];
-  const colW = r.w * 0.33;
+  const startY = r.y + r.h * CONFIG.bookTextStartY;
+  const step = r.h * CONFIG.bookLineStep;
+  const colX = [r.x + r.w * 0.15, r.x + r.w * 0.55];   // sol/sağ sayfa iç kenarları
+  const colW = r.w * 0.30;
+  const fsMax = step * 0.52;
+  ctx.save();
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";           // baseline = kağıt çizgisi
+  ctx.fillStyle = ink;
   for (let i = 0; i < names.length; i++) {
     const col = i < perCol ? 0 : 1;
-    const row = i % perCol;
-    const ny = areaTop + row * lineH + lineH * 0.5;
-    fitText("• " + names[i], colX[col], ny, colW, fs, ink, "left", "600");
+    const rowI = i % perCol;
+    const ny = startY + rowI * step;
+    // sütuna sığdır: punto gerekirse hafif küçülür, taşma yok
+    let s = fsMax;
+    ctx.font = "600 " + s + "px " + RX_FONT;
+    while (s > 6 && ctx.measureText(names[i]).width > colW) { s -= 0.5; ctx.font = "600 " + s + "px " + RX_FONT; }
+    ctx.fillText(names[i], colX[col], ny);
   }
+  ctx.restore();
 }
 
 // açık defter çizim yardımcısı (contain + krem fallback)
@@ -1469,6 +1485,16 @@ function drawBookOverlay() {
     // tam açık: net açık defter + içerik + kapatma
     drawOpenBookImage(end);
     drawBookContent(end);
+    // "Tanınan Doktorlar" başlığı — kitabın DIŞINDA, üst kenarın hemen üstünde krem plaka
+    const plW = end.w * 0.56, plH = end.h * 0.075;
+    const plX = end.x + (end.w - plW) / 2;
+    const plY = end.y - plH - end.h * 0.015;
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.35)"; ctx.shadowBlur = 10; ctx.shadowOffsetY = 3;
+    fillRoundRect(plX, plY, plW, plH, plH * 0.35, "#f6efdd");
+    ctx.restore();
+    strokeRoundRect(plX, plY, plW, plH, plH * 0.35, "rgba(120,90,50,0.5)", 2);
+    fitText("Tanınan Doktorlar", plX + plW / 2, plY + plH / 2, plW * 0.9, plH * 0.48, "#3a3326", "center", "800");
     layout.bookBox = end;
     const cs = layout.stage.w * 0.085;
     layout.bookCloseBtn = { x: end.x + end.w - cs * 0.85, y: end.y - cs * 0.35, w: cs, h: cs };
@@ -1822,12 +1848,21 @@ function drawCounterBand() {
 function drawLowerBackdrop() {
   const S = layout.stage;
   const y0 = layout._counterLine;
-  const g = ctx.createLinearGradient(0, y0, 0, S.y + S.h);
-  // ÇOK daha şeffaf: arka plandaki eczane görseli okunur, kartlar opak kalır
-  g.addColorStop(0, "rgba(34, 26, 42, 0.42)");
-  g.addColorStop(1, "rgba(20, 15, 26, 0.58)");
+  const y1 = S.y + S.h;
+  // Bandın ahşap tonlarından türetilmiş OPAK zemin: bg_pharmacy'nin gömülü alt tezgahı
+  // tamamen örtülür ("iki ayrı görüntü sıkışmış" hissi biter). Kartlar/sekmeler üstüne çizilir.
+  const g = ctx.createLinearGradient(0, y0, 0, y1);
+  g.addColorStop(0, "#4f311d");      // banda yakın koyu ahşap (drawCounterBand alt tonu)
+  g.addColorStop(0.4, "#3a2415");
+  g.addColorStop(1, "#221610");      // alta doğru daha koyu/nötr
   ctx.fillStyle = g;
-  ctx.fillRect(S.x, y0, S.w, S.y + S.h - y0);
+  ctx.fillRect(S.x, y0, S.w, y1 - y0);
+  // hafif yatay ahşap doku çizgileri — SABİT aralık/alfa (frame'de random yok)
+  ctx.fillStyle = "rgba(0,0,0,0.10)";
+  const grain = S.h * 0.028;
+  for (let gy = y0 + grain; gy < y1; gy += grain) {
+    ctx.fillRect(S.x, gy, S.w, 1);
+  }
 }
 
 function drawCounter() {
@@ -2072,13 +2107,22 @@ function drawCounterPC() {
   const scale = CONFIG.pcScale || 1;
   const pw = S.w * 0.21 * scale, ph = S.h * 0.10 * scale;
   const px = b.x + b.w - pw - S.w * 0.02 + (CONFIG.pcOffsetX || 0);
-  const py = (b.y + b.h * 0.58) - ph;   // alt kenar = defterin alt kenarı (tezgah yüzeyi)
+  const surfaceY = b.y + b.h * 0.58;    // defterin oturduğu tezgah yüzey çizgisi (aynı hiza)
+  const py = surfaceY - ph;
   // tıklama alanı görselden her yönde ~9px geniş (dokunma kolaylığı)
   const hitPad = 9;
   layout.pcBtn = { x: px - hitPad, y: py - hitPad, w: pw + hitPad * 2, h: ph + hitPad * 2 };
-  drawGroundShadow(px + pw / 2, py + ph * 0.96, pw * 0.5, ph * 0.14);
-  Sprite.draw(ctx, "pc", px, py, pw, ph, () => {
-    // fallback: koyu monitör + soluk yeşilimsi ekran + ayak + 🖥️
+  drawGroundShadow(px + pw / 2, surfaceY - ph * 0.04, pw * 0.5, ph * 0.14);
+  const img = Assets.images["pc"];
+  if (img && img.complete && img.naturalWidth > 0) {
+    // Defterle aynı oturma mantığı: görsel ALT KENARA yaslanır (contain ortalayıp
+    // havada bırakabiliyordu). Genişliğe sığdır, oran koru; alt kenar = yüzey çizgisi.
+    let dw = pw, dh = pw * (img.naturalHeight / img.naturalWidth);
+    const maxDh = ph * 1.35;            // aşırı dik görselde tavan (oran korunarak)
+    if (dh > maxDh) { dw *= maxDh / dh; dh = maxDh; }
+    ctx.drawImage(img, px + (pw - dw) / 2, surfaceY - dh, dw, dh);
+  } else {
+    // fallback: koyu monitör + soluk yeşilimsi ekran + ayak + 🖥️ (taban yüzey çizgisinde biter)
     const mh = ph * 0.78;
     fillRoundRect(px, py, pw, mh, mh * 0.12, "#241d30");
     strokeRoundRect(px, py, pw, mh, mh * 0.12, "rgba(245,170,70,0.4)", 1.5);
@@ -2088,7 +2132,7 @@ function drawCounterPC() {
     // monitör ayağı + taban
     fillRoundRect(px + pw * 0.42, py + mh, pw * 0.16, ph * 0.12, 2, "#1c1626");
     fillRoundRect(px + pw * 0.30, py + ph * 0.92, pw * 0.40, ph * 0.08, 2, "#2a2138");
-  }, "contain");
+  }
 }
 
 // Kısa stok uyarısı toast'u (feedback'ten bağımsız, süreli; random yok — clock ile fade).
