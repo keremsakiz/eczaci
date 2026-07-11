@@ -364,6 +364,7 @@ const game = {
 
   // gün / müşteri limiti
   dayNumber: 1,
+  weather: null,          // günün kozmetik havası [ad, emoji]; gün başında weatherForDay ile seçilir
   spawnTimer: 0,          // yeni hasta sayacı
   daySpawned: 0,          // bu gün üretilen müşteri sayısı
   dayCompleted: 0,        // bu gün tamamlanan (servis/red/küs) müşteri sayısı
@@ -650,7 +651,39 @@ function gameDate(offsetDays) {
   d.setDate(d.getDate() + (game.dayNumber - 1) + (offsetDays || 0));
   return d;
 }
-function dateShort() { const d = gameDate(0); return d.getDate() + " " + MONTHS_TR[d.getMonth()]; }
+// gün değişmediği sürece cache'lenir (HUD her frame çağırır; frame'de new Date olmasın)
+let _dateCacheDay = 0, _dateCacheStr = "";
+function dateShort() {
+  if (_dateCacheDay === game.dayNumber) return _dateCacheStr;
+  _dateCacheDay = game.dayNumber;
+  const d = gameDate(0);
+  _dateCacheStr = d.getDate() + " " + MONTHS_TR[d.getMonth()];
+  return _dateCacheStr;
+}
+
+// --- KOZMETİK hava durumu: gün başında DETERMİNİSTİK seçilir, mantığa etkisi yok ---
+const WEATHERS = [
+  ["GÜNEŞLİ", "☀️"],
+  ["BULUTLU", "⛅"],
+  ["PARÇALI", "🌤️"],
+  ["YAĞMURLU", "🌧️"]
+];
+// sabit pseudo-random karışım (ardışık tekrar yok; dizide dönerek tekrar hissi vermez)
+const WEATHER_SEQ = [0, 2, 1, 0, 3, 1, 2, 0, 1, 3, 2, 0, 3, 1, 0, 2];
+function weatherForDay(n) { return WEATHERS[WEATHER_SEQ[(n - 1) % WEATHER_SEQ.length]]; }
+
+// Türkçe binlik ayraçlı para formatı: 1100 → "1.100₺" (toLocaleString YOK — her ortamda
+// aynı görünüm). Basit cache: para değişmediği sürece string yeniden hesaplanmaz.
+let _moneyCacheVal = null, _moneyCacheStr = "";
+function formatMoney(n) {
+  if (n === _moneyCacheVal) return _moneyCacheStr;
+  _moneyCacheVal = n;
+  let s = String(Math.abs(Math.trunc(n)));
+  let out = "";
+  while (s.length > 3) { out = "." + s.slice(-3) + out; s = s.slice(0, -3); }
+  _moneyCacheStr = (n < 0 ? "-" : "") + s + out + "₺";
+  return _moneyCacheStr;
+}
 function dateRx(offsetDays) {
   const d = gameDate(offsetDays);
   return d.getDate() + " " + MONTHS_TR[d.getMonth()] + " '" + String(d.getFullYear()).slice(2);
@@ -941,6 +974,7 @@ function endDay() {
 
 function startNextDay() {
   game.dayNumber++;
+  game.weather = weatherForDay(game.dayNumber);   // kozmetik; günde bir kez
   game.spawnTimer = CONFIG.spawnInterval;
   game.daySpawned = 0;
   game.dayCompleted = 0;
@@ -964,6 +998,7 @@ function startNewGame() {
   game.money = CONFIG.startMoney;
   game.reputation = CONFIG.startReputation;
   game.dayNumber = 1;
+  game.weather = weatherForDay(1);   // kozmetik; günde bir kez
   game.spawnTimer = 0;
   game.daySpawned = 0;
   game.dayCompleted = 0;
@@ -1111,8 +1146,8 @@ function drawBackground() {
   }, "cover");
 }
 
-// Retro kart HUD (Büfeci kalıbı): iki koyu, kalın kenarlıklı kutu.
-// SOL: GÜN + tarih | SAĞ: para (yeşilimsi) + İTB. Bar/rozet yok (müşteri limiti gizli).
+// Retro kart HUD (Büfeci düzeni): iki koyu, kalın kenarlıklı iki satırlı kutu + ortada EV.
+// SOL: [GÜN N | 📅 tarih] / [HAVA ADI | hava emojisi] — SAĞ: [😊 | %N] / [💵 | 1.100₺]
 function drawHUD() {
   const hud = layout._hud;
   const c = CONFIG.colors;
@@ -1127,20 +1162,31 @@ function drawHUD() {
     strokeRoundRect(bx, hud.y, bwid, hud.h, r, c.panelBorder, bw);
   };
 
-  // SOL kutu: GÜN X + takvim tarihi
-  const lw = hud.w * 0.30;
-  retroBox(hud.x, lw);
-  text("GÜN " + game.dayNumber, hud.x + lw / 2, hud.y + hud.h * 0.32, hud.h * 0.30, c.neon, "center", "800");
-  text(dateShort(), hud.x + lw / 2, hud.y + hud.h * 0.71, hud.h * 0.24, c.creamSoft, "center", "700");
+  const y1 = hud.y + hud.h * 0.30;   // üst satır
+  const y2 = hud.y + hud.h * 0.71;   // alt satır
+  const fs1 = hud.h * 0.26, fs2 = hud.h * 0.23;
 
-  // SAĞ kutu: üstte itibar (emoji + %N, eşikler deterministik), altta para (yeşilimsi)
-  const rw = hud.w * 0.40;
+  // SOL kutu: satır1 solda GÜN, sağda 📅 tarih; satır2 solda hava adı, sağda hava emojisi
+  const lw = hud.w * 0.36;
+  const lpad = lw * 0.09;
+  retroBox(hud.x, lw);
+  const wtr = game.weather || WEATHERS[0];
+  text("GÜN " + game.dayNumber, hud.x + lpad, y1, fs1, c.neon, "left", "800");
+  fitText("📅 " + dateShort(), hud.x + lw - lpad, y1, lw * 0.46, fs2 * 0.9, c.creamSoft, "right", "700");
+  fitText(wtr[0], hud.x + lpad, y2, lw * 0.60, fs2, c.creamSoft, "left", "800");
+  text(wtr[1], hud.x + lw - lpad, y2, fs2, "#000", "right", "400");
+
+  // SAĞ kutu: satır1 solda itibar emojisi, sağda %N; satır2 solda 💵, sağda para
+  const rw = hud.w * 0.36;
   const rx = hud.x + hud.w - rw;
+  const rpad = rw * 0.09;
   retroBox(rx, rw);
   const pct = clamp(Math.round(game.reputation), 0, 100);
   const repEmoji = pct < 35 ? "😡" : pct < 70 ? "😑" : "😊";
-  text(repEmoji + " %" + pct, rx + rw / 2, hud.y + hud.h * 0.30, hud.h * 0.27, c.repBar, "center", "800");
-  fitText("₺" + game.money, rx + rw / 2, hud.y + hud.h * 0.71, rw * 0.84, hud.h * 0.30, "#8fe3a8", "center", "800");
+  text(repEmoji, rx + rpad, y1, fs1, "#000", "left", "400");
+  text("%" + pct, rx + rw - rpad, y1, fs1, c.neon, "right", "800");
+  text("💵", rx + rpad, y2, fs2, "#000", "left", "400");
+  fitText(formatMoney(game.money), rx + rw - rpad, y2, rw * 0.64, fs2, "#8fe3a8", "right", "800");
 
   // ORTA: kare EV butonu — menüye döner (oyun verisi silinmez)
   const hs = hud.h * 0.78;
@@ -1152,7 +1198,8 @@ function drawHUD() {
   fillRoundRect(hx, hy, hs, hs, hs * 0.18, c.panelBgSolid);
   ctx.restore();
   strokeRoundRect(hx, hy, hs, hs, hs * 0.18, c.panelBorder, Math.max(2, hs * 0.06));
-  text("🏠", hx + hs / 2, hy + hs * 0.54, hs * 0.48, "#000", "center", "400");
+  // emoji tam merkez + minik optik offset (emoji baseline'ı hafif yukarı render olur)
+  text("🏠", hx + hs / 2, hy + hs / 2 + hs * 0.03, hs * 0.48, "#000", "center", "400");
 }
 
 // ---- kuyruk yerleşimi: pozisyon değerini sahne koordinatına çevir ----
