@@ -358,6 +358,7 @@ const STATE = { MENU: "MENU", PLAYING: "PLAYING", DAYEND: "DAYEND", GAMEOVER: "G
 
 const game = {
   state: STATE.MENU,      // açılışta menü; BAŞLA'ya basınca PLAYING
+  hasRun: false,          // devam eden oyun var mı (menüde DEVAM ET için; gameover'da false)
   money: CONFIG.startMoney,
   reputation: CONFIG.startReputation,
 
@@ -975,6 +976,7 @@ function startNewGame() {
   initStock();            // stok yalnızca yeni oyunda sıfırlanır (günler arası kalıcı)
   game.dayStats = { served: 0, correct: 0, wrong: 0, angry: 0, money: 0 };
   game.state = STATE.PLAYING;
+  game.hasRun = true;               // menüde DEVAM ET görünebilir
   rebuildCounterSlots();
   spawnPatient();
 }
@@ -988,6 +990,7 @@ function loseReputation(amount) {
 // Oyun biter: kuyruk olduğu yerde donar (update PLAYING dışında çalışmaz).
 function triggerGameOver() {
   game.state = STATE.GAMEOVER;
+  game.hasRun = false;              // bitmiş oyuna DEVAM ET yok
   game.feedback = null;
 }
 
@@ -1130,12 +1133,26 @@ function drawHUD() {
   text("GÜN " + game.dayNumber, hud.x + lw / 2, hud.y + hud.h * 0.32, hud.h * 0.30, c.neon, "center", "800");
   text(dateShort(), hud.x + lw / 2, hud.y + hud.h * 0.71, hud.h * 0.24, c.creamSoft, "center", "700");
 
-  // SAĞ kutu: para (yeşilimsi) + itibar (İTB etiketi)
+  // SAĞ kutu: üstte itibar (emoji + %N, eşikler deterministik), altta para (yeşilimsi)
   const rw = hud.w * 0.40;
   const rx = hud.x + hud.w - rw;
   retroBox(rx, rw);
-  fitText("₺" + game.money, rx + rw / 2, hud.y + hud.h * 0.32, rw * 0.84, hud.h * 0.32, "#8fe3a8", "center", "800");
-  text("İTB " + Math.round(game.reputation), rx + rw / 2, hud.y + hud.h * 0.71, hud.h * 0.24, c.repBar, "center", "800");
+  const pct = clamp(Math.round(game.reputation), 0, 100);
+  const repEmoji = pct < 35 ? "😡" : pct < 70 ? "😑" : "😊";
+  text(repEmoji + " %" + pct, rx + rw / 2, hud.y + hud.h * 0.30, hud.h * 0.27, c.repBar, "center", "800");
+  fitText("₺" + game.money, rx + rw / 2, hud.y + hud.h * 0.71, rw * 0.84, hud.h * 0.30, "#8fe3a8", "center", "800");
+
+  // ORTA: kare EV butonu — menüye döner (oyun verisi silinmez)
+  const hs = hud.h * 0.78;
+  const hx = hud.x + hud.w / 2 - hs / 2;
+  const hy = hud.y + (hud.h - hs) / 2;
+  layout.homeBtn = { x: hx, y: hy, w: hs, h: hs };
+  ctx.save();
+  ctx.shadowColor = c.panelShadow; ctx.shadowBlur = 8; ctx.shadowOffsetY = 2;
+  fillRoundRect(hx, hy, hs, hs, hs * 0.18, c.panelBgSolid);
+  ctx.restore();
+  strokeRoundRect(hx, hy, hs, hs, hs * 0.18, c.panelBorder, Math.max(2, hs * 0.06));
+  text("🏠", hx + hs / 2, hy + hs * 0.54, hs * 0.48, "#000", "center", "400");
 }
 
 // ---- kuyruk yerleşimi: pozisyon değerini sahne koordinatına çevir ----
@@ -1713,6 +1730,18 @@ function drawShelf() {
       text(String(stock), bx, bcy, br * 1.0, "#f2e6d4", "center", "800");
     }
   }
+
+  // retro scrollbar — SALT görsel gösterge (tıklama hedefi değil, rect kaydedilmez);
+  // sadece içerik taşıyorsa görünür, grid clip'inin içinde kartların sağında
+  if ((layout.shelfMaxScroll || 0) > 0) {
+    const trackW = Math.max(3, area.w * 0.012);
+    const tx = area.x + area.w - trackW;
+    fillRoundRect(tx, area.y, trackW, area.h, trackW / 2, "rgba(20,16,28,0.45)");
+    const contentH = area.h + layout.shelfMaxScroll;
+    const thumbH = Math.max(area.h * 0.12, area.h * (area.h / contentH));
+    const ty = area.y + (area.h - thumbH) * (scroll / layout.shelfMaxScroll);
+    fillRoundRect(tx, ty, trackW, thumbH, trackW / 2, "rgba(255,157,47,0.75)");
+  }
   ctx.restore();
 }
 
@@ -2269,10 +2298,10 @@ function drawMenu() {
   text("ECZACI", cardX + cardW / 2, cardY + cardH * 0.20, cardH * 0.13, c.neon, "center", "800");
   text("Eczane Simülasyonu", cardX + cardW / 2, cardY + cardH * 0.32, cardH * 0.05, c.creamSoft, "center", "600");
 
-  // BAŞLA butonu (drawDayEnd'deki Sonraki Gün ile aynı nabız)
+  // BAŞLA butonu (drawDayEnd'deki Sonraki Gün ile aynı nabız) — her zaman TAM RESET
   const bW = cardW * 0.7, bH = cardH * 0.12;
   const bX = cardX + (cardW - bW) / 2;
-  const bY = cardY + cardH * 0.50 - bH / 2;
+  const bY = cardY + cardH * 0.46 - bH / 2;
   layout.menuStartBtn = { x: bX, y: bY, w: bW, h: bH };
   fillRoundRect(bX, bY, bW, bH, bH * 0.34, c.btnDark);
   ctx.save();
@@ -2287,9 +2316,23 @@ function drawMenu() {
   text("BAŞLA", bX + bW / 2, bY + bH / 2, bH * 0.40, c.neon, "center", "800");
   ctx.restore();
 
+  // DEVAM ET — sadece devam eden oyun varsa (ev butonuyla menüye dönüldüyse); reset yok
+  if (game.hasRun) {
+    const rH = cardH * 0.095;
+    const rW = cardW * 0.58;
+    const rX = cardX + (cardW - rW) / 2;
+    const rY = cardY + cardH * 0.62 - rH / 2;
+    layout.menuResumeBtn = { x: rX, y: rY, w: rW, h: rH };
+    fillRoundRect(rX, rY, rW, rH, rH * 0.34, c.btnDark);
+    strokeRoundRect(rX, rY, rW, rH, rH * 0.34, "rgba(245,170,70,0.6)", Math.max(1.5, rW * 0.008));
+    text("DEVAM ET  (Gün " + game.dayNumber + ")", rX + rW / 2, rY + rH / 2, rH * 0.38, c.cream, "center", "800");
+  } else {
+    layout.menuResumeBtn = null;   // bayat rect kalmasın (ilk açılış / gameover sonrası)
+  }
+
   // kilitli, soluk, dokunulamaz placeholder satırlar (layout rect verilmez)
-  text("⚙️ Ayarlar 🔒", cardX + cardW / 2, cardY + cardH * 0.72, cardH * 0.05, c.creamSoft, "center", "600");
-  text("🏆 En Yüksek Skor 🔒", cardX + cardW / 2, cardY + cardH * 0.83, cardH * 0.05, c.creamSoft, "center", "600");
+  text("⚙️ Ayarlar 🔒", cardX + cardW / 2, cardY + cardH * 0.78, cardH * 0.05, c.creamSoft, "center", "600");
+  text("🏆 En Yüksek Skor 🔒", cardX + cardW / 2, cardY + cardH * 0.88, cardH * 0.05, c.creamSoft, "center", "600");
 }
 
 // ---- Oyun bitti ekranı (kırmızımsı vurgulu koyu kart) ----
@@ -2394,6 +2437,7 @@ function handleTap(px, py) {
 
   if (game.state === STATE.MENU) {
     if (layout.menuStartBtn && pointInRect(px, py, layout.menuStartBtn)) startNewGame();
+    else if (game.hasRun && layout.menuResumeBtn && pointInRect(px, py, layout.menuResumeBtn)) game.state = STATE.PLAYING;  // reset YOK
     return;   // başka dokunuş yutulur
   }
   if (game.state === STATE.GAMEOVER) {
@@ -2407,6 +2451,9 @@ function handleTap(px, py) {
     return;
   }
   if (game.state !== STATE.PLAYING) return;
+
+  // HUD ev butonu → menüye dön (oyun verisi SİLİNMEZ; menüden DEVAM ET ile geri gelinir)
+  if (layout.homeBtn && pointInRect(px, py, layout.homeBtn)) { game.state = STATE.MENU; return; }
 
   // tezgahtaki PC'ye dokun → depo sipariş ekranını aç
   if (layout.pcBtn && pointInRect(px, py, layout.pcBtn)) { openDepot(); return; }
