@@ -1147,7 +1147,7 @@ function drawBackground() {
 }
 
 // Retro kart HUD (Büfeci düzeni): iki koyu, kalın kenarlıklı iki satırlı kutu + ortada EV.
-// SOL: [GÜN N | 📅 tarih] / [HAVA ADI | hava emojisi] — SAĞ: [😊 | %N] / [💵 | 1.100₺]
+// SOL: [GÜN N | tarih] / [HAVA ADI | hava emojisi] — SAĞ: [😊 | %N] / [💵 | 1.100₺]
 function drawHUD() {
   const hud = layout._hud;
   const c = CONFIG.colors;
@@ -1166,13 +1166,13 @@ function drawHUD() {
   const y2 = hud.y + hud.h * 0.71;   // alt satır
   const fs1 = hud.h * 0.26, fs2 = hud.h * 0.23;
 
-  // SOL kutu: satır1 solda GÜN, sağda 📅 tarih; satır2 solda hava adı, sağda hava emojisi
+  // SOL kutu: satır1 solda GÜN, sağda tarih (emojisiz); satır2 solda hava adı, sağda hava emojisi
   const lw = hud.w * 0.36;
   const lpad = lw * 0.09;
   retroBox(hud.x, lw);
   const wtr = game.weather || WEATHERS[0];
   text("GÜN " + game.dayNumber, hud.x + lpad, y1, fs1, c.neon, "left", "800");
-  fitText("📅 " + dateShort(), hud.x + lw - lpad, y1, lw * 0.46, fs2 * 0.9, c.creamSoft, "right", "700");
+  fitText(dateShort(), hud.x + lw - lpad, y1, lw * 0.46, fs2 * 0.9, c.creamSoft, "right", "700");
   fitText(wtr[0], hud.x + lpad, y2, lw * 0.60, fs2, c.creamSoft, "left", "800");
   text(wtr[1], hud.x + lw - lpad, y2, fs2, "#000", "right", "400");
 
@@ -1957,6 +1957,8 @@ function drawFeedback() {
 }
 
 // ---- Gün sonu özet kartı ----
+// Kart yüksekliği İÇERİKTEN hesaplanır (başlık + satırlar + rozet + butonlar + boşluklar).
+// Sıkışıklık boşlukla çözülür, punto küçültülmez; taşma olursa yalnız alt boşluktan kırpılır.
 function drawDayEnd() {
   const w = layout.w, h = layout.h, c = CONFIG.colors;
   const S = layout.stage;
@@ -1967,35 +1969,51 @@ function drawDayEnd() {
   ctx.fillStyle = "rgba(10, 8, 16, 0.55)";
   ctx.fillRect(0, 0, w, h);
 
+  // --- içerik ölçüleri (puntolar eski kartla aynı ya da daha büyük) ---
+  const fs = S.h * 0.028;             // istatistik satırı puntosu
+  const rowStep = fs * 2.1;           // satır aralığı (≥ 1.8× punto)
+  const gap = rowStep * 0.5;          // blok arası nefes payı (rozet/buton/pill)
+  const headerH = fs * 3.0;           // amber başlık şeridi
+  const padTop = rowStep * 0.8;
+  const goalH = fs * 1.8;
+  const btnH = fs * 2.2;
+  const pillH = fs * 1.3;
+  let padBottom = rowStep * 0.6;
+  const nRows = 5;
+  const stackH = () => headerH + padTop + nRows * rowStep + gap + goalH + gap + btnH + gap + pillH + padBottom;
+  let cardH = stackH();
+  const maxH = S.h * 0.88;
+  if (cardH > maxH) {                 // taşma: satır aralığından değil, alt boşluktan kırp
+    padBottom = Math.max(gap * 0.4, padBottom - (cardH - maxH));
+    cardH = stackH();
+  }
+
   const cardW = S.w * 0.82;
-  const cardH = S.h * 0.56;
   const cardX = S.x + (S.w - cardW) / 2;
-  const cardY = S.y + (S.h - cardH) / 2;
+  const cardY = S.y + (S.h - cardH) / 2;   // dikeyde ortalı
+  const cr = cardW * 0.08;
 
   // koyu kart + amber kenarlık
-  drawPanel(cardX, cardY, cardW, cardH, cardW * 0.08, c.panelBgSolid);
+  drawPanel(cardX, cardY, cardW, cardH, cr, c.panelBgSolid);
 
   // başlık şeridi (amber)
   ctx.save();
-  roundRect(cardX, cardY, cardW, cardH, cardW * 0.08);
+  roundRect(cardX, cardY, cardW, cardH, cr);
   ctx.clip();
-  fillRoundRect(cardX, cardY, cardW, cardH * 0.17, cardW * 0.08, c.accent);
   ctx.fillStyle = c.accent;
-  ctx.fillRect(cardX, cardY + cardH * 0.085, cardW, cardH * 0.085);
+  ctx.fillRect(cardX, cardY, cardW, headerH);
   ctx.restore();
-  text("🌙 Gün " + game.dayNumber + " Bitti", cardX + cardW / 2, cardY + cardH * 0.085,
-    cardH * 0.06, "#1a1410", "center", "800");
+  text("🌙 Gün " + game.dayNumber + " Bitti", cardX + cardW / 2, cardY + headerH / 2,
+    fs * 1.2, "#1a1410", "center", "800");
 
-  // satırlar
+  // istatistik satırları
   const lx = cardX + cardW * 0.12;
   const rx = cardX + cardW * 0.88;
-  let ly = cardY + cardH * 0.30;
-  const step = cardH * 0.095;
-  const fs = cardH * 0.05;
+  let ly = cardY + headerH + padTop + rowStep * 0.5;
   const row = (icon, label, val) => {
     text(icon + " " + label, lx, ly, fs, c.cream, "left", "600");
     text(val, rx, ly, fs, c.neon, "right", "800");
-    ly += step;
+    ly += rowStep;
   };
   row("👥", "Servis edilen", String(s.served));
   row("✓", "Doğru", String(s.correct));
@@ -2003,43 +2021,44 @@ function drawDayEnd() {
   row("😠", "Küsen müşteri", String(s.angry));
   row("💰", "Günlük kazanç", s.money + "₺");
 
-  // hedef durumu
-  const goalY = cardY + cardH * 0.71;
+  // hedef durumu rozeti
+  const rowsBottom = cardY + headerH + padTop + nRows * rowStep;
+  const goalY = rowsBottom + gap;
   const goalCol = res.met ? c.good : c.bad;
   const goalTxt = res.met
     ? "🎯 Hedef tuttu! (" + res.goal + "₺)"
     : "⚠️ Hedef tutmadı (" + res.goal + "₺)";
-  fillRoundRect(cardX + cardW * 0.08, goalY, cardW * 0.84, cardH * 0.09, cardH * 0.045,
+  fillRoundRect(cardX + cardW * 0.08, goalY, cardW * 0.84, goalH, goalH * 0.5,
     res.met ? "rgba(94,196,138,0.18)" : "rgba(232,115,107,0.18)");
-  strokeRoundRect(cardX + cardW * 0.08, goalY, cardW * 0.84, cardH * 0.09, cardH * 0.045, goalCol, 1.5);
-  text(goalTxt, cardX + cardW / 2, goalY + cardH * 0.045, cardH * 0.045, goalCol, "center", "800");
+  strokeRoundRect(cardX + cardW * 0.08, goalY, cardW * 0.84, goalH, goalH * 0.5, goalCol, 1.5);
+  text(goalTxt, cardX + cardW / 2, goalY + goalH / 2, fs * 0.95, goalCol, "center", "800");
 
   // Sonraki Gün butonu (neon)
-  const bW = cardW * 0.7, bH = cardH * 0.10;
+  const bW = cardW * 0.7;
   const bX = cardX + (cardW - bW) / 2;
-  const bY = cardY + cardH * 0.85 - bH / 2;
-  layout.nextDayBtn = { x: bX, y: bY, w: bW, h: bH };
-  fillRoundRect(bX, bY, bW, bH, bH * 0.34, c.btnDark);
+  const bY = goalY + goalH + gap;
+  layout.nextDayBtn = { x: bX, y: bY, w: bW, h: btnH };
+  fillRoundRect(bX, bY, bW, btnH, btnH * 0.34, c.btnDark);
   ctx.save();
   const pulse = 0.6 + 0.4 * (0.5 + 0.5 * Math.sin(game.clock * 4));
   ctx.shadowColor = c.neonGlow;
   ctx.shadowBlur = 20 * pulse;
-  strokeRoundRect(bX, bY, bW, bH, bH * 0.34, c.neon, Math.max(2, bW * 0.008));
+  strokeRoundRect(bX, bY, bW, btnH, btnH * 0.34, c.neon, Math.max(2, bW * 0.008));
   ctx.restore();
   ctx.save();
   ctx.shadowColor = c.neonGlow;
   ctx.shadowBlur = 14;
-  text("Sonraki Gün →", bX + bW / 2, bY + bH / 2, bH * 0.38, c.neon, "center", "800");
+  text("Sonraki Gün →", bX + bW / 2, bY + btnH / 2, btnH * 0.40, c.neon, "center", "800");
   ctx.restore();
 
   // 📦 Depodan Sipariş — Sonraki Gün'ün altında soluk pill (aynı depo panelini açar)
-  const dW = cardW * 0.62, dH = cardH * 0.062;
+  const dW = cardW * 0.62;
   const dX = cardX + (cardW - dW) / 2;
-  const dY = cardY + cardH * 0.955 - dH / 2;
-  layout.depotFromDayEndBtn = { x: dX, y: dY, w: dW, h: dH };
-  fillRoundRect(dX, dY, dW, dH, dH * 0.4, c.btnDark);
-  strokeRoundRect(dX, dY, dW, dH, dH * 0.4, "rgba(245,170,70,0.55)", 1.5);
-  text("📦 Depodan Sipariş", dX + dW / 2, dY + dH / 2, dH * 0.5, c.neon, "center", "800");
+  const dY = bY + btnH + gap;
+  layout.depotFromDayEndBtn = { x: dX, y: dY, w: dW, h: pillH };
+  fillRoundRect(dX, dY, dW, pillH, pillH * 0.4, c.btnDark);
+  strokeRoundRect(dX, dY, dW, pillH, pillH * 0.4, "rgba(245,170,70,0.55)", 1.5);
+  text("📦 Depodan Sipariş", dX + dW / 2, dY + pillH / 2, pillH * 0.5, c.neon, "center", "800");
 }
 
 // Tezgahın SAĞ tarafında duran bilgisayar (kapalı defterin simetriği) — depo
