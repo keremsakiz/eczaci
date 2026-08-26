@@ -216,6 +216,66 @@ const avgCost  = MED_AVG.cost;    // tüm ilaçların ortalama alış fiyatı (�
   CONFIG.fakeApproveMoneyPenalty = Math.round(avgPrice * 2);         // sahteyi servis etme cezası
 })();
 
+// =====================================================================
+//  ECZANE GELİŞTİRMELERİ — kalıcı, seviyeli, paranın harcandığı yer
+// =====================================================================
+// Her kalem Lv1'de BAŞLAR (Lv1 = oyunun mevcut varsayılan davranışı, bedava).
+// costK[i] = i'inci SEVİYENİN fiyat katsayısı; costK.length === maxLevel.
+// Lv1 zaten elde olduğu için costK[0] hiç tahsil edilmez — ilk satın alma Lv2'dir.
+// Fiyat = round100(avgPrice × costK[hedefSeviye-1]) → fiyat tablosu değişirse ölçeklenir.
+const UPGRADES = [
+  {
+    id: "tezgah", name: "Tezgah", emoji: "🧾", maxLevel: 3, costK: [15, 30, 55],
+    desc: "Aynı anda bekleyebilen hasta sayısı",
+    valueAt: lv => (CONFIG.maxQueue + (lv - 1)) + " hasta"
+  },
+  {
+    id: "depo", name: "Depo Rafı", emoji: "📦", maxLevel: 3, costK: [15, 30, 55],
+    desc: "İlaç başına stok tavanı",
+    valueAt: lv => (CONFIG.maxStock + (lv - 1) * 15) + " kutu"
+  },
+  {
+    id: "vitrin", name: "Vitrin", emoji: "🪟", maxLevel: 3, costK: [15, 30, 55],
+    desc: "Günlük müşteri sayısı",
+    valueAt: lv => (lv === 1 ? "normal" : "+" + ((lv - 1) * 2) + " müşteri")
+  },
+  {
+    id: "bekleme", name: "Bekleme Alanı", emoji: "🪑", maxLevel: 3, costK: [15, 30, 55],
+    desc: "Hasta sabır süresi",
+    valueAt: lv => (lv === 1 ? "normal" : "+%" + Math.round((lv - 1) * 20))
+  },
+  {
+    id: "medula", name: "Medula Terminali", emoji: "🖥️", maxLevel: 2, costK: [20, 45],
+    desc: "Reçetede kusurlu alanı otomatik işaretler",
+    // hints[lv-1] = kaç kusur işaretlenir. Lv1 = 0: satın alınmamış terminal ipucu vermez.
+    // (Şartnamedeki "1 (Lv2'de 2)" okuması Lv1'de bedava ipucu demek olurdu; bu, sahte
+    //  reçete incelemesini daha 1. günde çözerdi. Öyle istenirse: hints: [1, 2].)
+    hints: [0, 1],
+    valueAt: lv => UPGRADE_BY_ID.medula.hints[lv - 1] + " kusur işaretlenir"
+  }
+];
+const UPGRADE_BY_ID = {};
+for (const u of UPGRADES) UPGRADE_BY_ID[u.id] = u;
+
+// hedef seviyenin fiyatı (₺). Lv1 zaten elde => 0.
+function upgradeCost(id, targetLevel) {
+  const u = UPGRADE_BY_ID[id];
+  if (!u || targetLevel <= 1 || targetLevel > u.maxLevel) return 0;
+  return Math.round(avgPrice * u.costK[targetLevel - 1] / 100) * 100;
+}
+function upgradeLevel(id) {
+  const lv = game.upgrades ? game.upgrades[id] : 1;
+  return lv || 1;
+}
+function upgradeMaxed(id) { return upgradeLevel(id) >= UPGRADE_BY_ID[id].maxLevel; }
+
+// --- Efektif değerler: kod ARTIK CONFIG.maxQueue/maxStock/basePatience'ı doğrudan okumaz ---
+function effMaxQueue()    { return CONFIG.maxQueue + (upgradeLevel("tezgah") - 1); }        // 3 / 4 / 5
+function effMaxStock()    { return CONFIG.maxStock + (upgradeLevel("depo") - 1) * 15; }     // 30 / 45 / 60
+function effExtraPatients() { return (upgradeLevel("vitrin") - 1) * 2; }                    // 0 / +2 / +4
+function effPatience()    { return CONFIG.basePatience * (1 + (upgradeLevel("bekleme") - 1) * 0.2); }
+function effMedulaHints() { return UPGRADE_BY_ID.medula.hints[upgradeLevel("medula") - 1]; }
+
 // Kategori sekmeleri (ölçeklenebilir; boş gruplar otomatik gizlenir)
 const GROUPS = [
   { id: "agri_ates",  emoji: "💊", label: "Ağrı" },
@@ -425,7 +485,9 @@ const game = {
 
   // stok + ecza deposu
   stock: {},              // ilaç id -> adet (ilaç bazında; günler arası kalıcı)
-  depotOpen: false,       // depo (PC sipariş ekranı) açık mı (modal; oyun donar)
+  depotOpen: false,       // PC ekranı açık mı (modal; oyun donar) — hangi ekran: pcScreen
+  pcScreen: "depot",      // "home" | "depot" | "upgrades"
+  upgrades: {},           // geliştirme id -> seviye (stok gibi kalıcı; startNewGame kurar)
   depotGroup: null,       // depo panelinde seçili kategori (oyun sekmesinden bağımsız)
   depotPending: {},       // ilaç id -> sipariş sepetindeki adet (panel kapanınca sıfırlanır)
   stockToast: null,       // { text, until } — kısa "stok yok" uyarısı (game.feedback'i ezmez)
@@ -443,6 +505,7 @@ let layout = {
   nextDayBtn: { x: 0, y: 0, w: 0, h: 0 },
   // depo (PC ekranı) rect'leri (ilgili draw fonksiyonlarında hesaplanır — nextDayBtn kalıbı)
   pcBtn: null, depotFromDayEndBtn: null,
+  pcMenuBtns: null, pcBackBtn: null, upgradeRows: null,
   depotPanel: null, depotCloseBtn: null, depotTabs: [], depotRows: [],
   depotOrderBtn: null
 };
@@ -698,6 +761,11 @@ function mulberry32(seed) {
 function withSeed(seed, fn) {
   const prevSrc = _rngSource, prevDoc = game.lastDoctor;
   _rngSource = mulberry32(seed);
+  // lastDoctor SIFIRLANIR (yalnız geri yüklenmesi yetmez): pickKnownDoctor
+  // "d.name === game.lastDoctor" olduğu sürece döngüde kalıp fazladan rng() harcar.
+  // Dışarıdan gelen bir isim ilk çekilişle çakışırsa tüm RNG akışı kayar ve aynı gün
+  // farklı üretilir. Sıfırlamak üretimi dış duruma tamamen kapatır.
+  game.lastDoctor = null;
   try { return fn(); }
   finally { _rngSource = prevSrc; game.lastDoctor = prevDoc; }
 }
@@ -710,8 +778,15 @@ function lerp(a, b, t) { return a + (b - a) * t; }
 function activePatient() { return game.queue.length ? game.queue[0] : null; }
 
 // o günün müşteri limiti (gün bağımsız hesap; hedef fonksiyonu da bunu kullanır)
-function patientLimitFor(day) { return CONFIG.patientsPerDayBase + (day - 1) * CONFIG.patientsPerDayStep; }
-function patientsForDay() { return patientLimitFor(game.dayNumber); }
+function patientLimitFor(day) {
+  return CONFIG.patientsPerDayBase + (day - 1) * CONFIG.patientsPerDayStep + effExtraPatients();
+}
+// OYNANAN gün, üretildiği andaki listeye SABİTLENİR — gün ortasında vitrin yükseltilirse
+// o günün müşteri sayısı ve hedefi değişmez, etki bir sonraki günden başlar.
+function patientsForDay() {
+  if (game.daySchedule && game.daySchedule.day === game.dayNumber) return game.daySchedule.N;
+  return patientLimitFor(game.dayNumber);
+}
 
 // hasta başına izinli hata oranı — gün ilerledikçe daralır, floor'un altına inmez
 function missRateFor(day) {
@@ -782,6 +857,11 @@ function buildDaySchedule(day) {
 
 // gün listesi cache'i — hedef sorulunca üretilir, oynanınca AYNI liste kullanılır (iki kez üretilmez)
 const _dayScheduleCache = {};
+// Vitrin seviyesi patientLimitFor'u değiştirir => önden üretilmiş günler ve hedefleri
+// geçersizleşir. Oynanan gün game.daySchedule snapshot'ından okunduğu için etkilenmez.
+function invalidateDaySchedules() {
+  for (const k in _dayScheduleCache) delete _dayScheduleCache[k];
+}
 function getDaySchedule(day) {
   if (!_dayScheduleCache[day]) _dayScheduleCache[day] = buildDaySchedule(day);
   return _dayScheduleCache[day];
@@ -795,7 +875,10 @@ function effectiveGoalRatio(day) {
   const sch = getDaySchedule(day);
   return sch.R > 0 ? sch.goal / sch.R : 0;
 }
-function goalForDay() { return dailyGoalFor(game.dayNumber); }
+function goalForDay() {
+  if (game.daySchedule && game.daySchedule.day === game.dayNumber) return game.daySchedule.goal;
+  return dailyGoalFor(game.dayNumber);
+}
 
 // --- tarih sistemi: gün 1 = 17 Haziran 2026, her gün +1 ---
 const MONTHS_TR = ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"];
@@ -870,6 +953,24 @@ function detectableFlawsOf(req) {
   if (req.items.some(it => it.qty >= 8)) out.push("aşırı doz (×" + Math.max.apply(null, req.items.map(it => it.qty)) + ")");
   if (req.expired) out.push("tarihi geçmiş (" + req.date + ")");
   return out;
+}
+
+// Medula terminalinin işaretleyebileceği KUSURLU ALANLAR (sabit sıra — frame'de oynamaz).
+// SADECE görsel ipucu üretir; sahtelik kararına (request.fake) HİÇBİR etkisi yoktur.
+function flawFieldsOf(req) {
+  const out = [];
+  if (!req || req.type !== "prescription") return out;
+  if (!KNOWN_DOCTORS.some(d => d.name === req.doctor)) out.push("doctor");
+  if (req.hasStamp === false) out.push("stamp");
+  if (req.expired) out.push("date");
+  if (req.items.some(it => it.qty >= 8)) out.push("qty");
+  if (req.sig === "???" || req.sig === "—" || req.sig === "") out.push("sig");
+  return out;
+}
+// o an işaretlenecek alanlar (terminal seviyesi kadar)
+function medulaMarks(req) {
+  const n = effMedulaHints();
+  return n > 0 ? flawFieldsOf(req).slice(0, n) : [];
 }
 
 // reçete üret (gerçek/sahte + kusurlar). fakeForce: true/false => zorla; undefined => rastgele
@@ -947,7 +1048,7 @@ function makePatient(opts) {
     request,
     line: request.type === "prescription" ? pick(PRESCRIPTION_LINES) : null,  // balon repliği (üretimde sabitlenir)
     decided: null,            // reçeteliler için: null | "approve" | "reject"
-    maxPatience: CONFIG.basePatience,
+    maxPatience: CONFIG.basePatience,   // taban; enqueuePatient güncel seviyeyle ezer
     patience: CONFIG.basePatience,
     enterT: 0,
     posCurrent: 0,            // kuyruğa girerken ayarlanır
@@ -957,6 +1058,10 @@ function makePatient(opts) {
 
 // hastayı kuyruğa al (giriş animasyonu + sayaç). Program dışı (bonus) hastalar sayılmaz.
 function enqueuePatient(patient) {
+  // sabır sahneye çıkış anındaki Bekleme Alanı seviyesine göre kurulur (gün ortasında
+  // yükseltme yapılırsa sonraki hastalar hemen faydalanır)
+  patient.maxPatience = effPatience();
+  patient.patience = patient.maxPatience;
   patient.posCurrent = game.queue.length + 0.85;   // sağdan kayarak girsin
   game.queue.push(patient);
   if (!patient.bonus) game.daySpawned++;
@@ -966,7 +1071,7 @@ function enqueuePatient(patient) {
 // opts YOKSA: günün ÖNCEDEN ÜRETİLMİŞ listesinden sıradakini çeker (hedef bu listeden hesaplandı).
 // opts VARSA: cheat enjeksiyonu — anlık üretilir, bonus işaretlenir, hedefe/sayaca karışmaz.
 function spawnPatient(opts) {
-  if (game.queue.length >= CONFIG.maxQueue) return;
+  if (game.queue.length >= effMaxQueue()) return;
 
   if (opts) {
     const p = makePatient(opts);
@@ -1071,13 +1176,26 @@ function openDepot() {
   if (!game.depotGroup) { const g = groupsWithMeds()[0]; game.depotGroup = g ? g.id : null; }
   game.depotPending = {};      // sepet her açılışta temiz
   game.depotOpen = true;
+  game.pcScreen = "depot";
 }
-function closeDepot() { game.depotOpen = false; game.depotPending = {}; }
+// PC'ye dokununca: doğrudan depo değil, iki butonlu ANA EKRAN
+function openPc() {
+  game.depotPending = {};
+  game.depotOpen = true;
+  game.pcScreen = "home";
+}
+function openUpgrades() {
+  game.depotPending = {};      // depo sepetini taşıma
+  game.depotOpen = true;
+  game.pcScreen = "upgrades";
+}
+function pcHome() { game.depotPending = {}; game.pcScreen = "home"; }
+function closeDepot() { game.depotOpen = false; game.depotPending = {}; game.pcScreen = "home"; }
 
 // sepetteki adedi değiştir: 0..(maxStock - mevcut stok) aralığına clamp
 function changePending(id, delta) {
   const cur = game.depotPending[id] || 0;
-  const maxAdd = Math.max(0, CONFIG.maxStock - (game.stock[id] || 0));
+  const maxAdd = Math.max(0, effMaxStock() - (game.stock[id] || 0));
   game.depotPending[id] = clamp(cur + delta, 0, maxAdd);
 }
 
@@ -1101,9 +1219,25 @@ function placeDepotOrder() {
   for (const id in game.depotPending) {
     const q = game.depotPending[id];
     if (!q) continue;
-    game.stock[id] = Math.min(CONFIG.maxStock, (game.stock[id] || 0) + q);
+    game.stock[id] = Math.min(effMaxStock(), (game.stock[id] || 0) + q);
   }
   game.depotPending = {};
+}
+
+// --- Geliştirme satın alma ---
+// Kasadan düşer, kasa negatife inemez. Vitrin seviyesi gün üretimini etkilediği için
+// önden üretilmiş günler geçersiz kılınır (oynanan gün snapshot'tan okunduğu için değişmez).
+function buyUpgrade(id) {
+  const u = UPGRADE_BY_ID[id];
+  if (!u) return false;
+  const cur = upgradeLevel(id);
+  if (cur >= u.maxLevel) return false;              // TAM — satın alınamaz
+  const cost = upgradeCost(id, cur + 1);
+  if (game.money < cost) return false;              // yetersiz bakiye
+  game.money -= cost;
+  game.upgrades[id] = cur + 1;
+  if (id === "vitrin") invalidateDaySchedules();
+  return true;
 }
 
 // gruplu kutuya tıklayınca o ilaçtan BİR adet çıkar (tek tek geri alma korunur)
@@ -1271,6 +1405,14 @@ function startNextDay() {
   spawnPatient();
 }
 
+// Geliştirmeleri Lv1'e kur. Stok ile AYNI kalıcılık yolu: yalnız startNewGame çağırır,
+// startNextDay dokunmaz => günler arası korunur, DEVAM ET'te korunur, BAŞLA'da sıfırlanır.
+function initUpgrades() {
+  game.upgrades = {};
+  for (const u of UPGRADES) game.upgrades[u.id] = 1;
+  invalidateDaySchedules();
+}
+
 // Stoğu başlangıç değerine kur (her ilaç ayrı). MEDICINES dizisi değişmez; runtime obje.
 function initStock() {
   game.stock = {};
@@ -1292,7 +1434,9 @@ function startNewGame() {
   game.feedback = null;
   game.stockToast = null;
   game.depotOpen = false;
+  game.pcScreen = "home";
   game.depotPending = {};
+  initUpgrades();         // geliştirmeler yalnızca yeni oyunda sıfırlanır (günler arası kalıcı)
   initStock();            // stok yalnızca yeni oyunda sıfırlanır (günler arası kalıcı)
   game.dayStats = { served: 0, correct: 0, wrong: 0, angry: 0, money: 0 };
   game.state = STATE.PLAYING;
@@ -1339,7 +1483,7 @@ function update(dt) {
   game.spawnTimer += dt;
   const prog = goalN > 0 ? game.dayCompleted / goalN : 0;       // gün ilerledikçe hızlan
   const interval = lerp(CONFIG.spawnInterval, CONFIG.minSpawnInterval, prog);
-  if (game.spawnTimer >= interval && game.queue.length < CONFIG.maxQueue && game.daySpawned < goalN) {
+  if (game.spawnTimer >= interval && game.queue.length < effMaxQueue() && game.daySpawned < goalN) {
     game.spawnTimer = 0;
     spawnPatient();
   }
@@ -1880,12 +2024,25 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
   const ink = "#3a3326", inkSoft = "#8a7c5e";
   const req = p.request;
 
+  // Medula terminali: kusurlu alanın ARKASINA amber vurgu (yalnız görsel ipucu).
+  const marks = medulaMarks(req);
+  const markBg = (mx, my, mw, mh) => {
+    fillRoundRect(mx, my, mw, mh, mh * 0.30, "rgba(240, 170, 60, 0.30)");
+    strokeRoundRect(mx, my, mw, mh, mh * 0.30, "rgba(200, 120, 20, 0.75)", Math.max(1, h * 0.004));
+  };
+
   // üst: kaşe (✚) + doktor adı + tarih
   const headY = y + padY + h * 0.045;
   // tarih — sahte/eski olsa da renkle ele vermez; oyuncu tarihi OKUYUP anlamalı
+  if (marks.includes("date")) markBg(rx - innerW * 0.34, headY - h * 0.033, innerW * 0.34, h * 0.066);
   fitText(req.date, rx, headY, innerW * 0.34, h * 0.05, inkSoft, "right", "600");
   // kaşe rozeti (gerçeklerde HER ZAMAN çizilir; no_stamp kusurunda HİÇ çizilmez)
   let docX = lx;
+  if (marks.includes("stamp") && req.hasStamp === false) {
+    // kaşe HİÇ çizilmiyor; olması gereken boşluk işaretlenir
+    const br = h * 0.052;
+    markBg(lx - br * 0.15, headY - br * 1.15, br * 2.3, br * 2.3);
+  }
   if (req.hasStamp !== false) {
     const br = h * 0.052;
     const bx = lx + br, by = headY;
@@ -1896,6 +2053,7 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
     text("✚", bx, by + h * 0.002, br * 1.5, "#2e7d32", "center", "800");
     docX = lx + br * 2 + w * 0.025;
   }
+  if (marks.includes("doctor")) markBg(docX - w * 0.012, headY - h * 0.036, (rx - innerW * 0.36) - docX + w * 0.024, h * 0.072);
   fitText(req.doctor, docX, headY, (rx - innerW * 0.36) - docX, h * 0.052, ink, "left", "700");
 
   // ayraç
@@ -1919,6 +2077,7 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
     ctx.fillStyle = m.color; ctx.fill();
     ctx.strokeStyle = "rgba(0,0,0,0.18)"; ctx.lineWidth = 1; ctx.stroke();
     // adet renkle ele vermez; ×8/×10 yine yazılır ama normal renkte (oyuncu mantığı yakalar)
+    if (marks.includes("qty") && it.qty >= 8) markBg(rx - qtyW, ly - fs * 0.75, qtyW, fs * 1.5);
     fitText("× " + it.qty, rx, ly, qtyW, fs, ink, "right", "800");
     const nameX = lx + dotR * 2 + fs * 0.5;
     fitText(m.name, nameX, ly, rx - qtyW - fs * 0.5 - nameX, fs, ink, "left", "600");
@@ -1937,6 +2096,7 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
     sg -= 0.5;
     ctx.font = "italic 700 " + sg + "px 'Segoe Script','Snell Roundhand','Brush Script MT',cursive";
   }
+  if (marks.includes("sig")) markBg(rx - innerW * 0.58, sep2 + h * 0.055 - h * 0.036, innerW * 0.58, h * 0.072);
   ctx.fillStyle = inkSoft;
   ctx.textAlign = "right"; ctx.textBaseline = "middle";
   ctx.fillText(p.request.sig, rx, sep2 + h * 0.055);
@@ -2482,6 +2642,118 @@ function drawPcScreen(title) {
   return { x: panelX, y: panelY + barH, w: panelW, h: panelH - barH };
 }
 
+// PC ANA EKRANI — iki büyük buton. Depo ekranıyla aynı panel/başlık şeridi kalıbı.
+function drawPcHome() {
+  const c = CONFIG.colors;
+  const r = drawPcScreen("ECZANE SİSTEMİ — Ana Menü");
+
+  text("💰 " + formatMoney(game.money), r.x + r.w * 0.05, r.y + r.h * 0.05, r.h * 0.032, c.cream, "left", "700");
+
+  const bw = r.w * 0.80, bh = r.h * 0.17;
+  const bx = r.x + (r.w - bw) / 2;
+  const gap = r.h * 0.06;
+  const by0 = r.y + r.h * 0.26;
+
+  layout.pcMenuBtns = [];
+  const items = [
+    { key: "depot",    emoji: "📦", label: "ECZA DEPOSU",       sub: "İlaç siparişi ver" },
+    { key: "upgrades", emoji: "🔧", label: "ECZANE GELİŞTİRME", sub: "Kalıcı yükseltmeler" }
+  ];
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    const by = by0 + i * (bh + gap);
+    layout.pcMenuBtns.push({ key: it.key, x: bx, y: by, w: bw, h: bh });
+    fillRoundRect(bx, by, bw, bh, bh * 0.22, c.btnDark);
+    ctx.save();
+    ctx.shadowColor = c.neonGlow; ctx.shadowBlur = 12;
+    strokeRoundRect(bx, by, bw, bh, bh * 0.22, c.neon, Math.max(1.5, bw * 0.004));
+    ctx.restore();
+    text(it.emoji, bx + bw * 0.12, by + bh * 0.5, bh * 0.42, c.cream, "center", "400");
+    fitText(it.label, bx + bw * 0.22, by + bh * 0.38, bw * 0.72, bh * 0.26, c.neon, "left", "800");
+    fitText(it.sub, bx + bw * 0.22, by + bh * 0.68, bw * 0.72, bh * 0.19, c.creamSoft, "left", "600");
+  }
+}
+
+// ECZANE GELİŞTİRME — seviyeli kalemler; satırda seviye, etki ve sonraki seviyenin fiyatı.
+function drawUpgrades() {
+  const c = CONFIG.colors;
+  const r = drawPcScreen("ECZANE GELİŞTİRME");
+
+  text("💰 " + formatMoney(game.money), r.x + r.w * 0.05, r.y + r.h * 0.05, r.h * 0.032, c.cream, "left", "700");
+
+  // GERİ butonu (ana ekrana) — depo ekranındaki buton diliyle aynı
+  const backW = r.w * 0.26, backH = r.h * 0.055;
+  const backX = r.x + r.w * 0.95 - backW, backY = r.y + r.h * 0.028;
+  layout.pcBackBtn = { x: backX, y: backY, w: backW, h: backH };
+  fillRoundRect(backX, backY, backW, backH, backH * 0.35, c.btnDark);
+  strokeRoundRect(backX, backY, backW, backH, backH * 0.35, "rgba(245,170,70,0.55)", 1.5);
+  text("‹ GERİ", backX + backW / 2, backY + backH / 2, backH * 0.46, c.neon, "center", "800");
+
+  const rowH = r.h * 0.132, rowGap = r.h * 0.018;
+  const rx0 = r.x + r.w * 0.05, rw = r.w * 0.90;
+  let ry = r.y + r.h * 0.115;
+
+  layout.upgradeRows = [];
+  for (const u of UPGRADES) {
+    const lv = upgradeLevel(u.id);
+    const maxed = lv >= u.maxLevel;
+    const cost = maxed ? 0 : upgradeCost(u.id, lv + 1);
+    const afford = game.money >= cost;
+    const enabled = !maxed && afford;
+
+    fillRoundRect(rx0, ry, rw, rowH, rowH * 0.20, "rgba(255,255,255,0.05)");
+    strokeRoundRect(rx0, ry, rw, rowH, rowH * 0.20, "rgba(245,170,70,0.28)", 1);
+
+    // sol: emoji + ad + etki
+    text(u.emoji, rx0 + rw * 0.07, ry + rowH * 0.42, rowH * 0.34, c.cream, "center", "400");
+    const nameX = rx0 + rw * 0.14;
+    fitText(u.name, nameX, ry + rowH * 0.26, rw * 0.42, rowH * 0.24, c.cream, "left", "800");
+    fitText(u.desc, nameX, ry + rowH * 0.52, rw * 0.46, rowH * 0.17, c.creamSoft, "left", "600");
+    fitText("Şu an: " + u.valueAt(lv), nameX, ry + rowH * 0.78, rw * 0.46, rowH * 0.19, c.good, "left", "700");
+
+    // seviye noktaları (Lv göstergesi)
+    const dotR = rowH * 0.055, dotGap = dotR * 2.8;
+    const dotsW = (u.maxLevel - 1) * dotGap;
+    const dotsX = rx0 + rw * 0.66 - dotsW / 2;
+    for (let i = 0; i < u.maxLevel; i++) {
+      ctx.beginPath();
+      ctx.arc(dotsX + i * dotGap, ry + rowH * 0.28, dotR, 0, Math.PI * 2);
+      ctx.fillStyle = i < lv ? c.neon : "rgba(255,255,255,0.18)";
+      ctx.fill();
+    }
+    fitText("Lv " + lv + "/" + u.maxLevel, rx0 + rw * 0.66, ry + rowH * 0.50, rw * 0.20, rowH * 0.17, c.creamSoft, "center", "700");
+
+    // sağ: satın alma butonu ya da TAM
+    const bW = rw * 0.24, bH = rowH * 0.44;
+    const bX = rx0 + rw - bW - rw * 0.02, bY = ry + (rowH - bH) / 2;
+    layout.upgradeRows.push({ id: u.id, enabled, maxed, btn: { x: bX, y: bY, w: bW, h: bH } });
+    if (maxed) {
+      fillRoundRect(bX, bY, bW, bH, bH * 0.30, "rgba(94,196,138,0.16)");
+      strokeRoundRect(bX, bY, bW, bH, bH * 0.30, "rgba(94,196,138,0.65)", 1.5);
+      text("TAM", bX + bW / 2, bY + bH / 2, bH * 0.40, c.good, "center", "800");
+    } else {
+      fillRoundRect(bX, bY, bW, bH, bH * 0.30, c.btnDark);
+      ctx.save();
+      if (enabled) { ctx.shadowColor = c.neonGlow; ctx.shadowBlur = 10; }
+      strokeRoundRect(bX, bY, bW, bH, bH * 0.30,
+        enabled ? c.neon : "rgba(232,115,107,0.55)", Math.max(1.2, bW * 0.012));
+      ctx.restore();
+      fitText("Lv " + (lv + 1), bX + bW / 2, bY + bH * 0.32, bW * 0.8, bH * 0.30,
+        enabled ? c.neon : c.neonDim, "center", "800");
+      fitText(formatMoney(cost), bX + bW / 2, bY + bH * 0.70, bW * 0.86, bH * 0.30,
+        enabled ? c.neon : c.bad, "center", "800");
+    }
+    ry += rowH + rowGap;
+  }
+
+  // kasa yetmeyen (ama TAM olmayan) kalem varsa depo ekranıyla AYNI biçimde uyarı
+  const short = layout.upgradeRows.some(x => !x.maxed && !x.enabled);
+  if (short) {
+    text("⛔ Yetersiz bakiye — kasa: " + formatMoney(game.money),
+      rx0 + rw / 2, ry + r.h * 0.022, r.h * 0.022, c.bad, "center", "700");
+  }
+}
+
 // Ecza deposu — PC sipariş ekranı. Satır başına −/+ adımlayıcı ile sepet (pendingQty),
 // altta tek "SİPARİŞ VER" butonu. Rect'ler burada hesaplanır.
 function drawDepot() {
@@ -2490,6 +2762,16 @@ function drawDepot() {
 
   // kasa (sol üst)
   text("💰 " + game.money + "₺", r.x + r.w * 0.05, r.y + r.h * 0.045, r.h * 0.032, c.cream, "left", "700");
+
+  // GERİ butonu (PC ana ekranına)
+  {
+    const backW = r.w * 0.22, backH = r.h * 0.048;
+    const backX = r.x + r.w * 0.95 - backW, backY = r.y + r.h * 0.022;
+    layout.pcBackBtn = { x: backX, y: backY, w: backW, h: backH };
+    fillRoundRect(backX, backY, backW, backH, backH * 0.35, c.btnDark);
+    strokeRoundRect(backX, backY, backW, backH, backH * 0.35, "rgba(245,170,70,0.55)", 1.5);
+    text("‹ GERİ", backX + backW / 2, backY + backH / 2, backH * 0.46, c.neon, "center", "800");
+  }
 
   // --- kategori sekmeleri (tek satır, eşit bölünmüş; depoya özel aktif grup) ---
   const groups = groupsWithMeds();
@@ -2539,14 +2821,14 @@ function drawDepot() {
   for (const m of meds) {
     const stock = game.stock[m.id] || 0;
     const pending = game.depotPending[m.id] || 0;
-    const full = stock + pending >= CONFIG.maxStock;
+    const full = stock + pending >= effMaxStock();
     fillRoundRect(rx0, ry, rw, rowH, rowH * 0.20, "rgba(26,21,36,0.5)");
 
     // SOL: emoji + ad (üst; uzunsa "…" ile kısalır, taşmaz) + stok (alt, soluk)
     text(m.emoji, rx0 + rowH * 0.42, ry + rowH * 0.5, rowH * 0.40, "#f2e6d4", "center", "400");
     const nameX = rx0 + rowH * 0.80;
     ellipsisText(m.name, nameX, ry + rowH * 0.30, colNameR - nameX, rowH * 0.28, c.cream, "left", "700");
-    fitText("Stok " + stock + "/" + CONFIG.maxStock, nameX, ry + rowH * 0.70, colNameR - nameX,
+    fitText("Stok " + stock + "/" + effMaxStock(), nameX, ry + rowH * 0.70, colNameR - nameX,
       rowH * 0.22, stock <= 0 ? c.bad : c.creamSoft, "left", "600");
 
     // ORTA: birim alış (üst) + satır tutarı / DOLU (alt) — kendi alanında, adın üzerine binmez
@@ -2602,6 +2884,45 @@ function drawDepot() {
     text("⛔ Yetersiz bakiye — kasa: " + formatMoney(game.money),
       rx0 + rw / 2, obY + obH + r.h * 0.015, r.h * 0.022, c.bad, "center", "700");
   }
+}
+
+// PC modal'ı: hangi ekran açıksa onu çiz. Rect'ler ilgili draw fonksiyonunda hesaplanır,
+// bu yüzden her frame önce eskiler temizlenir (kapalı ekranın butonu tıklanabilir kalmasın).
+function drawPcPanel() {
+  layout.pcMenuBtns = null;
+  layout.pcBackBtn = null;
+  layout.upgradeRows = null;
+  layout.depotTabs = null;
+  layout.depotRows = null;
+  layout.depotOrderBtn = null;
+  if (game.pcScreen === "home") drawPcHome();
+  else if (game.pcScreen === "upgrades") drawUpgrades();
+  else drawDepot();
+}
+
+// PC ekranı açıkken dokunuşlar — önce ortak (kapat/geri/menü), sonra ekrana özel
+function handlePcTap(px, py) {
+  if (layout.depotCloseBtn && pointInRect(px, py, layout.depotCloseBtn)) { closeDepot(); return; }
+  if (layout.pcBackBtn && pointInRect(px, py, layout.pcBackBtn)) { pcHome(); return; }
+  if (game.pcScreen === "home") {
+    if (layout.pcMenuBtns) {
+      for (const b of layout.pcMenuBtns) {
+        if (pointInRect(px, py, b)) { if (b.key === "depot") openDepot(); else openUpgrades(); return; }
+      }
+    }
+    if (layout.depotPanel && !pointInRect(px, py, layout.depotPanel)) { closeDepot(); return; }
+    return;
+  }
+  if (game.pcScreen === "upgrades") {
+    if (layout.upgradeRows) {
+      for (const row of layout.upgradeRows) {
+        if (pointInRect(px, py, row.btn)) { if (row.enabled) buyUpgrade(row.id); return; }
+      }
+    }
+    if (layout.depotPanel && !pointInRect(px, py, layout.depotPanel)) { closeDepot(); return; }
+    return;
+  }
+  handleDepotTap(px, py);
 }
 
 // depo ekranı açıkken dokunuşlar (adımlayıcı / sipariş / sekme / kapat / dışarı)
@@ -2667,7 +2988,7 @@ function render() {
     drawGameOver();
   }
 
-  if (game.depotOpen) drawDepot();  // ecza deposu paneli (PLAYING/DAYEND üstünde modal)
+  if (game.depotOpen) drawPcPanel();  // PC paneli (PLAYING/DAYEND üstünde modal)
   drawBookOverlay();   // defter açılma animasyonu + açık panel (en üstte)
 }
 
@@ -2827,7 +3148,7 @@ function handleTap(px, py) {
   }
 
   // depo paneli açıkken modal: içi işle, ✕/dışarı kapat, gerisini yut
-  if (game.depotOpen) { handleDepotTap(px, py); return; }
+  if (game.depotOpen) { handlePcTap(px, py); return; }
 
   if (game.state === STATE.MENU) {
     if (layout.menuStartBtn && pointInRect(px, py, layout.menuStartBtn)) startNewGame();
@@ -2850,7 +3171,7 @@ function handleTap(px, py) {
   if (layout.homeBtn && pointInRect(px, py, layout.homeBtn)) { game.state = STATE.MENU; return; }
 
   // tezgahtaki PC'ye dokun → depo sipariş ekranını aç
-  if (layout.pcBtn && pointInRect(px, py, layout.pcBtn)) { openDepot(); return; }
+  if (layout.pcBtn && pointInRect(px, py, layout.pcBtn)) { openPc(); return; }
 
   // tezgahtaki kapalı deftere dokun → açılma animasyonunu başlat
   if (layout.bookClosedRect && pointInRect(px, py, layout.bookClosedRect)) {
@@ -3020,7 +3341,7 @@ window.cheats = {
   },
   setStock(id, n) {
     if (!getMedicine(id)) { console.log("Bilinmeyen ilaç:", id); return; }
-    game.stock[id] = clamp(n | 0, 0, CONFIG.maxStock);
+    game.stock[id] = clamp(n | 0, 0, effMaxStock());
     return game.stock[id];
   },
   emptyStock(id) {
@@ -3045,6 +3366,34 @@ window.cheats = {
     explainDecision(p, game.counter.slice(), "(karar verilmedi)", "explainPatient — mevcut tezgah durumu");
     CONFIG.debugDecisions = prev;
     return p.request;
+  },
+  upgrades() {
+    const out = {};
+    for (const u of UPGRADES) {
+      const lv = upgradeLevel(u.id);
+      const maxed = lv >= u.maxLevel;
+      out[u.name] = {
+        id: u.id,
+        seviye: "Lv " + lv + "/" + u.maxLevel,
+        etki: u.valueAt(lv),
+        sonraki: maxed ? "TAM" : u.valueAt(lv + 1),
+        fiyat: maxed ? "—" : upgradeCost(u.id, lv + 1) + "₺"
+      };
+    }
+    console.table(out);
+    console.log("kasa: " + formatMoney(game.money) +
+      " | efektif: kuyruk=" + effMaxQueue() + " stokTavan=" + effMaxStock() +
+      " günMüşteri(gün " + game.dayNumber + ")=" + patientLimitFor(game.dayNumber) +
+      " sabır=" + effPatience().toFixed(1) + "sn medulaİpucu=" + effMedulaHints());
+    return out;
+  },
+  setUpgrade(id, level) {
+    const u = UPGRADE_BY_ID[id];
+    if (!u) { console.log("Bilinmeyen geliştirme:", id, "— geçerli:", UPGRADES.map(x => x.id).join(", ")); return; }
+    game.upgrades[id] = clamp(level | 0, 1, u.maxLevel);
+    if (id === "vitrin") invalidateDaySchedules();
+    console.log(u.name + " → Lv " + game.upgrades[id] + " (" + u.valueAt(game.upgrades[id]) + ")");
+    return game.upgrades[id];
   },
   balance() {
     const marj = MEDICINES.reduce((a, m) => a + (1 - m.cost / m.price), 0) / (MEDICINES.length || 1);
@@ -3072,7 +3421,7 @@ window.cheats = {
       };
     }
     console.table(rows);
-    verifyGoalBalance(true);
+    verifyGoalBalanceAllTiers(true);
     return { avgPrice, avgCost, marj, startMoney: CONFIG.startMoney };
   },
   assetStatus() {
@@ -3223,7 +3572,37 @@ function verifyGoalBalance(verbose, days) {
   if (verbose) console.log(allOk ? "Denge doğrulaması: TÜM GÜNLER GEÇTİ ✓" : "Denge doğrulaması: BAŞARISIZ ✗");
   return allOk;
 }
-verifyGoalBalance(false);   // boot'ta sessiz; yalnız denge bozuksa uyarır
+// Belirli geliştirme seviyeleri altında fn'i çalıştır (gün cache'i her iki yönde de
+// geçersiz kılınır — vitrin seviyesi gün üretimini değiştirir).
+function withUpgradeLevels(levels, fn) {
+  const prev = game.upgrades;
+  const prevSch = game.daySchedule;
+  game.upgrades = levels;
+  game.daySchedule = null;          // snapshot sabitlemesi doğrulamayı maskelemesin
+  invalidateDaySchedules();
+  try { return fn(); }
+  finally {
+    game.upgrades = prev;
+    game.daySchedule = prevSch;
+    invalidateDaySchedules();
+  }
+}
+function allLevels(pick) {
+  const o = {};
+  for (const u of UPGRADES) o[u.id] = pick(u);
+  return o;
+}
+
+// Denge hem TÜM SEVİYELER 1'de hem TÜM SEVİYELER MAKSİMUMDA tutmalı.
+function verifyGoalBalanceAllTiers(verbose) {
+  let ok = true;
+  if (verbose) console.log("— Denge: tüm geliştirmeler Lv1 —");
+  ok = withUpgradeLevels(allLevels(() => 1), () => verifyGoalBalance(verbose)) && ok;
+  if (verbose) console.log("— Denge: tüm geliştirmeler MAKS —");
+  ok = withUpgradeLevels(allLevels(u => u.maxLevel), () => verifyGoalBalance(verbose)) && ok;
+  return ok;
+}
+verifyGoalBalanceAllTiers(false);   // boot'ta sessiz; yalnız denge bozuksa uyarır
 
 // =====================================================================
 //  KALICI SELF-TEST — boot'ta sessiz çalışır, yalnız sorun varsa console.warn
@@ -3255,6 +3634,42 @@ function selfTestPatients(days) {
         warn.push("Sahte doktor '" + f.name + "' ile defterdeki '" + k + "' ad aynı + soyad öneki — ayırt edilemez");
     }
   }
+
+  // 0c) geliştirmeler: her seviye geçerli efektif değer üretmeli, maks seviyede satın alma yok
+  const prevUp = game.upgrades, prevMoney = game.money;
+  for (const u of UPGRADES) {
+    if (!(u.maxLevel >= 2)) warn.push("Geliştirme '" + u.id + "' maxLevel geçersiz: " + u.maxLevel);
+    if (u.costK.length !== u.maxLevel) warn.push("Geliştirme '" + u.id + "' costK uzunluğu (" + u.costK.length + ") maxLevel (" + u.maxLevel + ") ile uyuşmuyor");
+    let prevCost = -1;
+    for (let lv = 1; lv <= u.maxLevel; lv++) {
+      game.upgrades = allLevels(x => x.id === u.id ? lv : 1);
+      const vals = { tezgah: effMaxQueue(), depo: effMaxStock(), vitrin: patientLimitFor(1), bekleme: effPatience(), medula: effMedulaHints() };
+      for (const k in vals) {
+        const v = vals[k];
+        if (typeof v !== "number" || !isFinite(v) || v < 0)
+          warn.push("Geliştirme '" + u.id + "' Lv" + lv + " geçersiz efektif değer (" + k + "=" + v + ")");
+      }
+      if (effMaxQueue() < 1) warn.push("'" + u.id + "' Lv" + lv + ": kuyruk kapasitesi 1'in altına düştü");
+      if (effMaxStock() < CONFIG.startStock) warn.push("'" + u.id + "' Lv" + lv + ": stok tavanı başlangıç stoğunun altına düştü");
+      if (effPatience() <= 0) warn.push("'" + u.id + "' Lv" + lv + ": sabır süresi pozitif değil");
+      if (patientLimitFor(1) < 1) warn.push("'" + u.id + "' Lv" + lv + ": gün 1 müşteri sayısı 1'in altına düştü");
+      if (typeof u.valueAt(lv) !== "string" || !u.valueAt(lv)) warn.push("'" + u.id + "' Lv" + lv + ": etki metni üretilemedi");
+      if (lv < u.maxLevel) {
+        const cost = upgradeCost(u.id, lv + 1);
+        if (!(cost > 0)) warn.push("'" + u.id + "' Lv" + (lv + 1) + " fiyatı geçersiz: " + cost);
+        if (cost <= prevCost) warn.push("'" + u.id + "' Lv" + (lv + 1) + " fiyatı bir öncekinden yüksek değil (" + prevCost + " → " + cost + ")");
+        prevCost = cost;
+      } else {
+        // maks seviyede satın alma DENENEMEZ olmalı
+        game.money = 9e9;
+        if (buyUpgrade(u.id) !== false) warn.push("'" + u.id + "' maks seviyedeyken satın alınabildi");
+        if (upgradeLevel(u.id) !== u.maxLevel) warn.push("'" + u.id + "' maks seviyede satın alma seviyeyi değiştirdi");
+        if (upgradeCost(u.id, u.maxLevel + 1) !== 0) warn.push("'" + u.id + "' maks üstü seviye için fiyat üretiliyor");
+      }
+    }
+  }
+  game.upgrades = prevUp; game.money = prevMoney;
+  invalidateDaySchedules();
 
   // 1..4) üretilmiş günlerdeki her hasta
   for (let d = 1; d <= days; d++) {
