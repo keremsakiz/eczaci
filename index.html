@@ -41,7 +41,7 @@ const CONFIG = {
   repLossWrong: 5,          // yanlış serviste itibar kaybı
 
   // --- Sahte reçete inceleme ---
-  fakeChance: 0.28,             // reçetenin sahte olma ihtimali
+  fakeChance: 0.42,             // reçetenin sahte olma ihtimali (inceleme mekaniği yeterince devreye girsin)
   fakeApproveRepLoss: 15,       // sahteyi onaylayıp ilaç verince itibar cezası
   fakeApproveMoneyPenalty: 0,   // sahteyi onaylayınca para cezası (₺) — deriveEconomy: round(avgPrice × 2)
   fakeCatchRepGain: 8,          // sahteyi reddedince (yakalayınca) itibar
@@ -81,6 +81,12 @@ const CONFIG = {
   nightPatienceMultiplier: 1.2,// gece hastası daha sabırlı (gidecek başka yeri yok)
   nightIntroDuration: 2.2,     // "NÖBET BAŞLIYOR" kartının otomatik kapanma süresi (sn)
   nightFadeTime: 0.9,          // gece katmanının oturma süresi (sn)
+
+  // --- Medula / e-reçete (terminal Lv2 alınınca açılır) ---
+  medulaPatientRatio: 0.30,    // terminal açıkken reçeteli hastaların ~%30'u Medula hastası
+  medulaPayDelayDays: 2,       // SGK ödemesi hizmetten kaç gün sonra kasaya girer
+  medulaCodeLen: 6,            // kod uzunluğu (ilk karakter daima "2")
+  medulaToastDuration: 3.2,    // "ödeme yattı" bilgi şeridi süresi (sn)
   debugDecisions: true,     // her servis/red kararında konsola teşhis bloğu bas
 
   // --- Stok + ecza deposu (toptancı) ---
@@ -257,11 +263,8 @@ const UPGRADES = [
   },
   {
     id: "medula", name: "Medula Terminali", emoji: "🖥️", maxLevel: 2, costK: [30],
-    desc: "Reçetede kontrol edilecek alanı işaretler",
-    // hints[lv-1] = kaç alan işaretlenir. Lv1 = 0: satın alınmamış terminal ipucu vermez.
-    // İşaret sahte/gerçek ayrımı YAPMAZ — gerçek reçetede de aynı sayıda alan işaretlenir.
-    hints: [0, 1],
-    valueAt: lv => UPGRADE_BY_ID.medula.hints[lv - 1] + " alan işaretlenir"
+    desc: "E-reçete sistemi: kodla ilaç listesi sorgulama",
+    valueAt: lv => lv >= 2 ? "açık — e-reçete hastaları gelir" : "kilitli"
   }
 ];
 const UPGRADE_BY_ID = {};
@@ -285,7 +288,9 @@ function effMaxQueue()    { return CONFIG.maxQueue + (upgradeLevel("tezgah") - 1
 function effMaxStock()    { return CONFIG.maxStock + (upgradeLevel("depo") - 1) * 15; }     // 30 / 45 / 60
 function effExtraPatients() { return (upgradeLevel("vitrin") - 1) * 2; }                    // 0 / +2 / +4
 function effPatience()    { return CONFIG.basePatience * (1 + (upgradeLevel("bekleme") - 1) * 0.2); }
-function effMedulaHints() { return UPGRADE_BY_ID.medula.hints[upgradeLevel("medula") - 1]; }
+// Terminal Lv2'de açılır: PC'de MEDULA SİSTEMİ sekmesinin kilidi kalkar ve
+// Medula hastaları gelmeye başlar. Reçete sahteliğiyle HİÇBİR ilgisi yoktur.
+function medulaUnlocked() { return upgradeLevel("medula") >= 2; }
 
 // Kategori sekmeleri (ölçeklenebilir; boş gruplar otomatik gizlenir)
 const GROUPS = [
@@ -345,6 +350,17 @@ const SYMPTOMS = [
   { emoji: "🧼", category: "Cilt/Dış",        label: "Sivilcelerim çıktı" },
   { emoji: "🦶", category: "Cilt/Dış",        label: "Ayağımda mantar var" },
   { emoji: "🚫", category: "Alerji",           label: "Çok kaşınıyorum" }
+];
+
+// semptomlarda geçen kategoriler (sabit sıra — çok kalemli isteklerde karıştırılır)
+const SYMPTOM_CATEGORIES = SYMPTOMS.map(x => x.category).filter((c, i, a) => a.indexOf(c) === i);
+
+// Medula hastasının repliği — kodu balonda ayrıca büyük punto ile gösterilir
+const MEDULA_LINES = [
+  "E-reçetem var, kodu vereyim.",
+  "Medula'dan bakar mısınız?",
+  "Reçetem sistemde, kodu şu:",
+  "Doktor sisteme yazdı, kod bu."
 ];
 
 // Reçeteli hastanın baş üstü balon replikleri — SPAWN'DA bir kez seçilir (frame'de rastgele yok)
@@ -475,13 +491,12 @@ const game = {
 
   // gün / müşteri limiti
   dayNumber: 1,
-  weather: null,          // günün kozmetik havası [ad, emoji]; gün başında weatherForDay ile seçilir
   spawnTimer: 0,          // yeni hasta sayacı
   daySchedule: null,      // o günün ÖNCEDEN üretilmiş hasta listesi + ekonomisi (hedef bundan)
   dayScheduleIdx: 0,      // listeden sahneye çıkarılan sıradaki hasta
   daySpawned: 0,          // bu gün sahneye çıkan programlı müşteri sayısı
   dayCompleted: 0,        // bu gün tamamlanan (servis/red/küs) müşteri sayısı
-  dayStats: { served: 0, correct: 0, wrong: 0, angry: 0, money: 0, moneyDay: 0, moneyNight: 0 },
+  dayStats: { served: 0, correct: 0, wrong: 0, angry: 0, money: 0, moneyDay: 0, moneyNight: 0, medulaAccrued: 0 },
 
   // ilaç sekmeleri
   activeGroup: null,      // seçili kategori (boşsa ilk dolu gruba ayarlanır)
@@ -502,6 +517,14 @@ const game = {
   nightT: 0,              // gece katmanı geçiş ilerlemesi (0..1)
   nightIntro: null,       // "NÖBET BAŞLIYOR" kartı açıkken geçen süre (sn); null = kapalı
   upgrades: {},           // geliştirme id -> seviye (stok gibi kalıcı; startNewGame kurar)
+  receivables: [],        // SGK alacak defteri: [{ dueDay, amount }] — kalıcı, startNewGame sıfırlar
+  medulaRevealed: {},     // "gün:kod" -> true (sorgulanmış kodlar; kuyruktaki hasta için kalıcı)
+  medulaInput: "",        // Medula ekranındaki tuş takımı girişi
+  medulaResult: null,     // { code, items } sorgu sonucu | { error: "..." }
+  collectedToday: 0,      // bugün kasaya giren SGK ödemesi (DAYEND satırı için)
+  medulaBooked: 0,        // bu oyunda deftere yazılan TOPLAM Medula satışı (denetim için)
+  medulaCollected: 0,     // bu oyunda kasaya giren TOPLAM SGK ödemesi (denetim için)
+  infoToast: null,        // { text, until } — bilgi şeridi (stok uyarısından ayrı)
   depotGroup: null,       // depo panelinde seçili kategori (oyun sekmesinden bağımsız)
   depotPending: {},       // ilaç id -> sipariş sepetindeki adet (panel kapanınca sıfırlanır)
   stockToast: null,       // { text, until } — kısa "stok yok" uyarısı (game.feedback'i ezmez)
@@ -520,6 +543,7 @@ let layout = {
   // depo (PC ekranı) rect'leri (ilgili draw fonksiyonlarında hesaplanır — nextDayBtn kalıbı)
   pcBtn: null, depotFromDayEndBtn: null,
   pcMenuBtns: null, pcBackBtn: null, upgradeRows: null,
+  medulaKeys: null, medulaOk: null, medulaDel: null,
   depotPanel: null, depotCloseBtn: null, depotTabs: [], depotRows: [],
   depotOrderBtn: null
 };
@@ -839,7 +863,8 @@ function allowedMissesFor(day) {
 // fiyatına uygulanır — mal maliyeti (cost) değişmez.
 function refValuesFor(request, priceMul) {
   const mul = priceMul || 1;
-  if (request.type === "prescription") {
+  // Medula: kağıt reçete gibi hesaplanır, ASLA sahte olmaz => daima geçerli
+  if (request.type === "prescription" || request.type === "medula") {
     if (request.fake) return { rev: 0, cost: 0, valid: false };   // doğru oynanış = reddetmek
     let rev = 0, cost = 0;
     for (const it of request.items) {
@@ -848,11 +873,17 @@ function refValuesFor(request, priceMul) {
     }
     return { rev: rev * mul, cost, valid: true };
   }
-  const cands = MEDICINES.filter(m => m.category === request.symptom.category);
-  if (!cands.length) return { rev: 0, cost: 0, valid: false };
+  // Semptomlu hasta: her kalem için o kategorinin ORTALAMASI × adet.
   let rev = 0, cost = 0;
-  for (const m of cands) { rev += m.price; cost += m.cost; }
-  return { rev: (rev / cands.length) * mul, cost: cost / cands.length, valid: true };
+  for (const it of (request.items || [{ symptom: request.symptom, qty: 1 }])) {
+    const cands = MEDICINES.filter(m => m.category === it.symptom.category);
+    if (!cands.length) return { rev: 0, cost: 0, valid: false };
+    let r = 0, c = 0;
+    for (const m of cands) { r += m.price; c += m.cost; }
+    rev += (r / cands.length) * it.qty;
+    cost += (c / cands.length) * it.qty;
+  }
+  return { rev: rev * mul, cost, valid: true };
 }
 
 // --- Günün tam listesini seed'li üret ve ekonomisini çıkar ---
@@ -870,11 +901,26 @@ function buildDaySchedule(day) {
       for (let i = 0; i < dayN; i++) out.push(makePatient());
       // NÖBET bölümü — listenin sonuna eklenir, spawn sırayla çektiği için gece sonra gelir
       for (let i = 0; i < nightN; i++) out.push(makePatient({ night: true }));
-      // Gece bölümünde EN AZ BİR gerçek (servis edilebilir) reçete garanti edilir:
-      // aksi halde nöbet yalnızca red kararlarından ibaret olabiliyor.
-      if (nightN > 0) {
-        const hasReal = out.slice(dayN).some(p => p.request.type === "prescription" && !p.request.fake);
-        if (!hasReal) out[out.length - 1] = makePatient({ night: true, forcePrescription: true, forceFake: false });
+
+      // --- Reçete garantileri (hepsi withSeed içinde => determinizm bozulmaz) ---
+      const isRx = p => p.request.type === "prescription";
+      const isReal = p => isRx(p) && !p.request.fake;
+      const isFake = p => isRx(p) && p.request.fake;
+
+      // (a) Günde EN AZ BİR gerçek reçete: yoksa ilk gündüz hastası gerçek reçeteli olur.
+      if (!out.some(isReal)) out[0] = makePatient({ forcePrescription: true, forceFake: false });
+
+      // (b) 2. GÜNDEN İTİBAREN günde en az bir SAHTE reçete: inceleme mekaniği her gün
+      // devreye girsin. Gün 1 öğretici kalır, garanti uygulanmaz.
+      // Hedef olarak SON gündüz hastası seçilir — (a)'nın koyduğu 0. indeks korunur.
+      if (day >= 2 && !out.some(isFake) && dayN >= 2) {
+        out[dayN - 1] = makePatient({ forcePrescription: true, forceFake: true });
+      }
+
+      // (c) Gece bölümünde EN AZ BİR gerçek reçete: aksi halde nöbet yalnızca red
+      // kararlarından ibaret olabiliyor (servis yok, ciro yok, karşıt örnek yok).
+      if (nightN > 0 && !out.slice(dayN).some(isReal)) {
+        out[out.length - 1] = makePatient({ night: true, forcePrescription: true, forceFake: false });
       }
       return out;
     });
@@ -899,8 +945,10 @@ function buildDaySchedule(day) {
   // geri alır (gün 1'de hedefi 648.6 → 650 yapıp gereken doğruyu 6'dan 7'ye çıkarıyordu).
   const goal = Math.floor(clamp(raw, R * lo, R * hi) / 10) * 10;
 
+  // Güvenlik bandı devreye girdi mi? (girdiyse hedef artık tolerans türevli DEĞİLDİR)
+  const clampedAt = raw < R * lo ? "lo" : (raw > R * hi ? "hi" : null);
   return { day, patients, N, dayN, nightN, isNight: nightN > 0,
-           R, C, validCount, fakeCount: N - validCount, misses, missCost, raw, goal };
+           R, C, validCount, fakeCount: N - validCount, misses, missCost, raw, goal, clampedAt };
 }
 
 // gün listesi cache'i — hedef sorulunca üretilir, oynanınca AYNI liste kullanılır (iki kez üretilmez)
@@ -948,17 +996,6 @@ function dateShort() {
   return _dateCacheStr;
 }
 
-// --- KOZMETİK hava durumu: gün başında DETERMİNİSTİK seçilir, mantığa etkisi yok ---
-const WEATHERS = [
-  ["GÜNEŞLİ", "☀️"],
-  ["BULUTLU", "⛅"],
-  ["PARÇALI", "🌤️"],
-  ["YAĞMURLU", "🌧️"]
-];
-// sabit pseudo-random karışım (ardışık tekrar yok; dizide dönerek tekrar hissi vermez)
-const WEATHER_SEQ = [0, 2, 1, 0, 3, 1, 2, 0, 1, 3, 2, 0, 3, 1, 0, 2];
-function weatherForDay(n) { return WEATHERS[WEATHER_SEQ[(n - 1) % WEATHER_SEQ.length]]; }
-
 // Türkçe binlik ayraçlı para formatı: 1100 → "1.100₺" (toLocaleString YOK — her ortamda
 // aynı görünüm). Basit cache: para değişmediği sürece string yeniden hesaplanmaz.
 let _moneyCacheVal = null, _moneyCacheStr = "";
@@ -987,7 +1024,9 @@ function pickKnownDoctor() {
 // --- Kusur sınıfları ---
 // DETECTABLE: yalnız reçete kağıdına + doktor defterine bakarak doğrulanabilir.
 // SUBTLE: alan bilgisi ister (ilaç etkileşimi); tek başına kusur olarak KULLANILMAZ.
-const DETECTABLE_FLAWS = ["fake_doctor", "expired", "overdose", "no_stamp", "bad_signature"];
+// NOT: "overdose" (aşırı adet) KUSUR OLMAKTAN ÇIKARILDI. Yüksek adet artık normal bir
+// reçete özelliğidir — doktor 5-6 kutu yazabilir ve bu reçeteyi sahte yapmaz.
+const DETECTABLE_FLAWS = ["fake_doctor", "expired", "no_stamp", "bad_signature"];
 const SUBTLE_FLAWS = ["conflict"];
 
 // bir reçetede oyuncunun kağıttan tespit edebileceği kusurları döndür (teşhis + self-test)
@@ -998,48 +1037,30 @@ function detectableFlawsOf(req) {
   if (!known) out.push("doktor defterde yok (" + req.doctor + ")");
   if (req.hasStamp === false) out.push("kaşe yok");
   if (req.sig === "???" || req.sig === "—" || req.sig === "") out.push("imza geçersiz");
-  if (req.items.some(it => it.qty >= 8)) out.push("aşırı doz (×" + Math.max.apply(null, req.items.map(it => it.qty)) + ")");
   if (req.expired) out.push("tarihi geçmiş (" + req.date + ")");
   return out;
 }
 
-// Reçetede gerçekten kusurlu olan alanlar (self-test ve ipucu sıralaması için).
-// SADECE teşhis amaçlı; sahtelik kararına (request.fake) HİÇBİR etkisi yoktur.
-function flawFieldsOf(req) {
-  const out = [];
-  if (!req || req.type !== "prescription") return out;
-  if (!KNOWN_DOCTORS.some(d => d.name === req.doctor)) out.push("doctor");
-  if (req.hasStamp === false) out.push("stamp");
-  if (req.expired) out.push("date");
-  if (req.items.some(it => it.qty >= 8)) out.push("qty");
-  if (req.sig === "???" || req.sig === "—" || req.sig === "") out.push("sig");
+// Sorgulanmış kod kaydı — gün+kod ile anahtarlanır (istek nesnesi cache'le PAYLAŞILDIĞI
+// için oraya YAZILMAZ; yoksa yeni oyunda eski sorgular açık gelirdi).
+function medulaKey(code) { return game.dayNumber + ":" + code; }
+function medulaIsRevealed(code) { return !!game.medulaRevealed[medulaKey(code)]; }
+function medulaReveal(code) { game.medulaRevealed[medulaKey(code)] = true; }
+
+// --- MEDULA KODU ---
+// 6 karakter, DAİMA "2" ile başlar. Karıştırılabilir karakterler yok: I, O, Q, 0, 1 dışarıda.
+const MEDULA_ALPHABET = "23456789ABCDEFGHJKLMNPRSTUVWXYZ";
+function makeMedulaCode() {
+  let out = "2";
+  for (let i = 1; i < CONFIG.medulaCodeLen; i++) out += MEDULA_ALPHABET.charAt(rand(MEDULA_ALPHABET.length));
   return out;
 }
 
-// --- MEDULA İPUCU ---
-// İpucu "buraya bak" der, "yakaladım" DEMEZ: hem sahte hem GERÇEK reçetede aynı sayıda
-// alan işaretlenir. Sahtede kusurlu alanlar öne alınır, gerçekte alanlar tamamen rastgeledir.
-// Böylece işaretin VARLIĞI sahtelik bilgisi taşımaz; sadece bakılacak yeri daraltır.
-// Sıra ÜRETİM anında (seed'li rng altında) kurulur → aynı gün = aynı işaretler, frame'de oynamaz.
-const HINT_FIELDS = ["doctor", "stamp", "sig", "qty", "date"];
+// Karıştırma yardımcısı (semptom kategorisi seçiminde ve Medula kodunda kullanılır)
 function shuffledCopy(arr) {
   const a = arr.slice();
   for (let i = a.length - 1; i > 0; i--) { const j = rand(i + 1); const t = a[i]; a[i] = a[j]; a[j] = t; }
   return a;
-}
-// üretim anında çağrılır (makePrescription sonu). Tüm alanları kapsayan bir sıra döner:
-// önce (varsa) kusurlu alanlar karışık, sonra kalanlar karışık.
-function buildHintFields(req) {
-  const flawed = flawFieldsOf(req);
-  const rest = HINT_FIELDS.filter(f => flawed.indexOf(f) < 0);
-  return shuffledCopy(flawed).concat(shuffledCopy(rest));
-}
-// o an işaretlenecek alanlar (terminal seviyesi kadar) — rng TÜKETMEZ, sadece dilim alır
-function medulaMarks(req) {
-  const n = effMedulaHints();
-  if (n <= 0 || !req || req.type !== "prescription") return [];
-  const src = req.hintFields || flawFieldsOf(req);   // eski kayıtlar için güvenli düşüş
-  return src.slice(0, n);
 }
 
 // reçete üret (gerçek/sahte + kusurlar). fakeForce: true/false => zorla; undefined => rastgele
@@ -1050,8 +1071,9 @@ function makePrescription(fakeForce, fakeChance) {
   const items = [];
   for (let i = 0; i < count && pool.length; i++) {
     const m = pool.splice(rand(pool.length), 1)[0];
+    // adet dağılımı — yüksek adet NORMAL bir reçete özelliği (sahtelikle ilgisi yok)
     const roll = rng();
-    const qty = roll < 0.70 ? 1 : roll < 0.92 ? 2 : 3;
+    const qty = roll < 0.70 ? 1 : roll < 0.90 ? 2 : roll < 0.97 ? 3 : pick([4, 5, 6]);
     items.push({ id: m.id, qty });
   }
 
@@ -1086,25 +1108,87 @@ function makePrescription(fakeForce, fakeChance) {
     items.push({ id: pick(sleepIds), qty: 1 });
     items.push({ id: pick(energyIds), qty: 1 });
   }
-  if (flaws.includes("overdose")) {
-    items[rand(items.length)].qty = pick([8, 10]);
-  }
   if (flaws.includes("fake_doctor")) { const f = pick(FAKE_DOCTORS); doctor = f.name; sig = f.sig; }
   if (flaws.includes("expired")) { expired = true; date = dateRx(-183); }  // ~6 ay önce
   if (flaws.includes("no_stamp")) { hasStamp = false; }
   if (flaws.includes("bad_signature")) { sig = pick(["???", "—", ""]); }
 
-  const req = { type: "prescription", items, fake, flaws, doctor, sig, date, hasStamp, expired };
-  // Medula ipucu sırası ve "doz" işareti hangi kaleme düşecek — ikisi de seed'li rng ile,
-  // üretim anında sabitlenir (çizimde rastgelelik yok).
-  const odIdx = items.findIndex(it => it.qty >= 8);
-  req.hintQty = odIdx >= 0 ? odIdx : (items.length ? rand(items.length) : 0);
-  req.hintFields = buildHintFields(req);
-  return req;
+  return { type: "prescription", items, fake, flaws, doctor, sig, date, hasStamp, expired };
+}
+
+// --- SEMPTOMLU HASTA İSTEĞİ ---
+// 1-3 kalem; her kalem FARKLI kategoriden (oyuncu birden çok sekmeye gitmek zorunda kalsın).
+// Adet semptomlu hastada 1 veya 2 ile sınırlı.
+function trLower1(str) { return str.charAt(0).toLocaleLowerCase("tr") + str.slice(1); }
+
+// Doğal Türkçe cümle — her kombinasyon için şablon yazmak yerine 2-3 kalıptan kurulur.
+function buildSymptomLine(items) {
+  const L = items.map(it => it.symptom.label);
+  if (items.length === 1) {
+    if (items[0].qty === 2) return L[0] + ", iki kutu alayım.";
+    return pick([L[0] + ".", L[0] + ", bir şey verir misiniz?", L[0] + ", ne önerirsiniz?"]);
+  }
+  if (items.length === 2) {
+    return pick([
+      "Hem " + trLower1(L[0]) + " hem " + trLower1(L[1]) + ", ikisine de bakar mısınız?",
+      L[0] + ", ayrıca " + trLower1(L[1]) + ". İkisi için de lazım.",
+      L[0] + " bir de " + trLower1(L[1]) + ", ikisini de alayım."
+    ]);
+  }
+  return pick([
+    L[0] + ", " + trLower1(L[1]) + ", bir de " + trLower1(L[2]) + ". Üçüne de bakar mısınız?",
+    "Hem " + trLower1(L[0]) + " hem " + trLower1(L[1]) + " hem de " + trLower1(L[2]) + ", hepsine bir şey lazım."
+  ]);
+}
+
+function makeSymptomRequest() {
+  const roll = rng();
+  const n = roll < 0.60 ? 1 : roll < 0.90 ? 2 : 3;   // %60 / %30 / %10
+  // farklı KATEGORİLERDEN seç: önce kategorileri karıştır, sonra her birinden bir semptom
+  const cats = shuffledCopy(SYMPTOM_CATEGORIES);
+  const items = [];
+  for (let i = 0; i < n && i < cats.length; i++) {
+    const pool = SYMPTOMS.filter(x => x.category === cats[i]);
+    if (!pool.length) continue;
+    const qty = rng() < 0.20 ? 2 : 1;               // ara sıra "iki kutu"
+    items.push({ symptom: pick(pool), qty });
+  }
+  return {
+    type: "symptom",
+    items,
+    symptom: items[0].symptom,        // geriye uyum: tek kalemli yollar ve emoji
+    line: buildSymptomLine(items)
+  };
+}
+
+// semptomlu hastanın istediği KATEGORİ çoklu-kümesi (adet dahil, id tekrarlı liste kalıbı)
+function expectedCategoryList(request) {
+  const out = [];
+  for (const it of (request.items || [{ symptom: request.symptom, qty: 1 }])) {
+    for (let i = 0; i < it.qty; i++) out.push(it.symptom.category);
+  }
+  return out;
 }
 
 // tek hasta nesnesi üret (kuyruğa EKLEMEZ). opts: {forcePrescription, forceFake}
 // Gün listesi bunu seed altında toplu çağırır; cheat'ler tek tek çağırır.
+// Medula (e-reçete) isteği — kağıt YOK, kod var. ASLA sahte değildir: sahtelik kontrolü,
+// doktor defteri ve kusur mantığı bu hastada hiç çalışmaz.
+function makeMedulaRequest() {
+  const count = CONFIG.minPrescriptionItems +
+    rand(CONFIG.maxPrescriptionItems - CONFIG.minPrescriptionItems + 1);
+  const pool = MEDICINES.slice();
+  const items = [];
+  for (let i = 0; i < count && pool.length; i++) {
+    const m = pool.splice(rand(pool.length), 1)[0];
+    const roll = rng();
+    const qty = roll < 0.70 ? 1 : roll < 0.90 ? 2 : roll < 0.97 ? 3 : pick([4, 5, 6]);
+    items.push({ id: m.id, qty });
+  }
+  return { type: "medula", items, code: makeMedulaCode(), fake: false };
+}
+
+// opts: {forcePrescription, forceFake, forceMedula, night}
 function makePatient(opts) {
   opts = opts || {};
   const night = !!opts.night;
@@ -1113,18 +1197,23 @@ function makePatient(opts) {
 
   let request;
   if (isPrescription) {
+    // Terminal açıksa reçeteli hastaların bir kısmı kağıt yerine Medula kodu getirir.
+    // forceFake verilmişse (garanti mekanizması) Medula'ya çevrilmez — Medula sahte olamaz.
+    const medula = opts.forceMedula ||
+      (medulaUnlocked() && opts.forceFake === undefined && rng() < CONFIG.medulaPatientRatio);
+    if (medula) request = makeMedulaRequest();
     // gece: sahte reçete girişimi artar (tavanla sınırlı)
-    request = makePrescription(opts.forceFake, night ? nightFakeChance() : CONFIG.fakeChance);
+    else request = makePrescription(opts.forceFake, night ? nightFakeChance() : CONFIG.fakeChance);
   } else {
-    const symptom = pick(SYMPTOMS);
-    request = { type: "symptom", symptom };
+    request = makeSymptomRequest();
   }
 
   return {
     avatar: avatarDef.emoji,
     avatarKey: avatarDef.assetKey,
     request,
-    line: request.type === "prescription" ? pick(PRESCRIPTION_LINES) : null,  // balon repliği (üretimde sabitlenir)
+    line: request.type === "prescription" ? pick(PRESCRIPTION_LINES)
+        : request.type === "medula" ? pick(MEDULA_LINES) : request.line,   // balon repliği (üretimde sabitlenir)
     decided: null,            // reçeteliler için: null | "approve" | "reject"
     maxPatience: CONFIG.basePatience,   // taban; enqueuePatient güncel seviyeyle ezer
     patience: CONFIG.basePatience,
@@ -1170,13 +1259,20 @@ function spawnPatient(opts) {
 function expectedMedicineIds() {
   const p = activePatient();
   if (!p) return [];
-  if (p.request.type === "prescription") {
+  if (p.request.type === "prescription" || p.request.type === "medula") {
     const out = [];
     for (const it of p.request.items) for (let i = 0; i < it.qty; i++) out.push(it.id);
     return out;
-  } else {
-    return MEDICINES.filter(m => m.category === p.request.symptom.category).map(m => m.id);
   }
+  // Semptomlu hasta: kategoride birden çok ilaç doğru kabul edilir, tek "doğru liste" yok.
+  // Burada TEMSİLİ bir doğru cevap döndürülür (her kalem için o kategorinin ilk ilacı, adetli);
+  // gerçek karar checkOrder içinde KATEGORİ çoklu-kümesi karşılaştırmasıyla verilir.
+  const out = [];
+  for (const it of (p.request.items || [{ symptom: p.request.symptom, qty: 1 }])) {
+    const m = MEDICINES.find(x => x.category === it.symptom.category);
+    if (m) for (let i = 0; i < it.qty; i++) out.push(m.id);
+  }
+  return out;
 }
 
 // iki listeyi çoklu-küme olarak karşılaştır (sıra önemsiz, adet önemli)
@@ -1191,6 +1287,7 @@ function sameMultiset(a, b) {
 // reçeteli hasta henüz ONAYLA/REDDET kararı bekliyor mu?
 function activeNeedsDecision() {
   const p = activePatient();
+  // Medula hastasında sahtelik incelemesi YOKTUR — ONAYLA/REDDET fazı hiç çalışmaz.
   return !!(p && !game.feedback && p.request.type === "prescription" && !p.decided);
 }
 // ilaç seçip servis edilebilir mi? (semptom => evet; reçete => onaylanmışsa)
@@ -1268,6 +1365,13 @@ function openUpgrades() {
   game.depotOpen = true;
   game.pcScreen = "upgrades";
 }
+function openMedulaScreen() {
+  game.depotPending = {};
+  game.depotOpen = true;
+  game.pcScreen = "medula";
+  game.medulaInput = "";
+  game.medulaResult = null;
+}
 function pcHome() { game.depotPending = {}; game.pcScreen = "home"; }
 function closeDepot() { game.depotOpen = false; game.depotPending = {}; game.pcScreen = "home"; }
 
@@ -1315,9 +1419,34 @@ function buyUpgrade(id) {
   if (game.money < cost) return false;              // yetersiz bakiye
   game.money -= cost;
   game.upgrades[id] = cur + 1;
-  if (id === "vitrin") invalidateDaySchedules();
+  // Vitrin gün büyüklüğünü, Medula ise hasta tiplerini değiştirir => önden üretilmiş
+  // günler geçersizleşir. Oynanan gün snapshot'tan okunduğu için etkilenmez.
+  if (id === "vitrin" || id === "medula") invalidateDaySchedules();
   return true;
 }
+
+// --- MEDULA SORGUSU ---
+// Kod KUYRUKTAKİ hastalar arasında aranır (gelmemiş hastanın kodunu oyuncu zaten bilemez).
+// Bulunursa kayıt açılır ve o hasta için kalıcı olur; bulunmazsa giriş temizlenir.
+function medulaSubmit() {
+  const code = game.medulaInput;
+  if (code.length !== CONFIG.medulaCodeLen) return;
+  const hit = game.queue.find(p => p.request.type === "medula" && p.request.code === code);
+  if (!hit) {
+    game.medulaResult = { error: "Kayıt bulunamadı" };
+    game.medulaInput = "";
+    return;
+  }
+  medulaReveal(code);                       // zaten girilmişse de sorun değil, yine gösterilir
+  game.medulaResult = { code: code, items: hit.request.items.slice() };
+  game.medulaInput = "";
+}
+function medulaKeyPress(ch) {
+  if (game.medulaInput.length >= CONFIG.medulaCodeLen) return;
+  game.medulaInput += ch;
+  if (game.medulaResult && game.medulaResult.error) game.medulaResult = null;
+}
+function medulaBackspace() { game.medulaInput = game.medulaInput.slice(0, -1); }
 
 // gruplu kutuya tıklayınca o ilaçtan BİR adet çıkar (tek tek geri alma korunur)
 function removeOneFromCounter(id) {
@@ -1345,7 +1474,15 @@ function explainDecision(p, given, verdict, reason) {
   const r = p.request;
   const L = [];
   L.push("── KARAR · Gün " + game.dayNumber + " · " + (p.bonus ? "BONUS hasta (cheat)" : "programlı hasta"));
-  if (r.type === "prescription") {
+  if (r.type === "medula") {
+    const need = [];
+    for (const it of r.items) for (let i = 0; i < it.qty; i++) need.push(it.id);
+    L.push("   tip      : MEDULA (e-reçete) · kod " + r.code + " · sorgulandı: " + (medulaIsRevealed(r.code) ? "evet" : "hayır"));
+    L.push("   istenen  : " + fmtCounts(need));
+    L.push("   verilen  : " + fmtCounts(given));
+    L.push("   not      : Medula reçetesi asla sahte değildir; sahtelik/doktor kontrolü çalışmaz.");
+    L.push("   ödeme    : gün kazancına BUGÜN, kasaya gün " + (game.dayNumber + CONFIG.medulaPayDelayDays) + "'de");
+  } else if (r.type === "prescription") {
     const need = [];
     for (const it of r.items) for (let i = 0; i < it.qty; i++) need.push(it.id);
     L.push("   tip      : reçete" + (r.fake ? " (SAHTE)" : " (gerçek)") + " · karar: " + (p.decided || "—"));
@@ -1358,18 +1495,76 @@ function explainDecision(p, given, verdict, reason) {
       "doktor " + (known ? "✓" : "✗") +
       " | kaşe " + (r.hasStamp === false ? "✗ (yok)" : "✓") +
       " | imza " + ((r.sig === "???" || r.sig === "—" || r.sig === "") ? "✗ " + JSON.stringify(r.sig) : "✓ " + JSON.stringify(r.sig)) +
-      " | doz " + (r.items.some(it => it.qty >= 8) ? "✗ (×" + Math.max.apply(null, r.items.map(it => it.qty)) + ")" : "✓") +
+      " | doz " + Math.max.apply(null, r.items.map(it => it.qty)) + " (kusur değil) " +
       " | tarih " + (r.expired ? "✗" : "✓") + " (reçete " + r.date + " ↔ oyun " + today + ")");
     L.push("   iç bayrak: fake=" + r.fake + " flaws=[" + (r.flaws || []).join(", ") + "]");
     L.push("   tespit edilebilir kusur: " + (detectableFlawsOf(r).join(" · ") || "(yok)"));
   } else {
-    const cands = MEDICINES.filter(m => m.category === r.symptom.category);
-    L.push("   tip      : semptom · " + JSON.stringify(r.symptom.label) + " [kategori: " + r.symptom.category + "]");
-    L.push("   kabul    : " + cands.map(m => m.name).join(", ") + "  (tek kutu, herhangi biri)");
+    const items = r.items || [{ symptom: r.symptom, qty: 1 }];
+    L.push("   tip      : semptom · " + items.length + " kalem · " + JSON.stringify(r.line || ""));
+    for (const it of items) {
+      const cands = MEDICINES.filter(m => m.category === it.symptom.category);
+      L.push("     · " + JSON.stringify(it.symptom.label) + " ×" + it.qty +
+        " [" + it.symptom.category + "] → kabul: " + cands.map(m => m.name).join(", "));
+    }
+    L.push("   istenen kategoriler: " + expectedCategoryList(r).join(", "));
     L.push("   verilen  : " + fmtCounts(given));
+    L.push("   verilen kategoriler: " + given.map(id => { const m = getMedicine(id); return m ? m.category : "?"; }).join(", "));
   }
   L.push("   SONUÇ    : " + verdict + " — " + reason);
   console.log(L.join("\n"));
+}
+
+// --- SGK ALACAK DEFTERİ ---
+// Medula satışının parası kasaya GECİKMELİ girer. Günün kazanç sayacına (hedefin ölçüldüğü
+// dayStats.money) hizmet günü yazılır — hedef formülü, R ve missCost hiç etkilenmez.
+function addReceivable(amount) {
+  if (!(amount > 0)) return;
+  const due = game.dayNumber + CONFIG.medulaPayDelayDays;
+  const row = game.receivables.find(r => r.dueDay === due);
+  if (row) row.amount += amount;
+  else game.receivables.push({ dueDay: due, amount: amount });
+  game.medulaBooked += amount;
+}
+
+// Defter bütünlüğü: deftere yazılan toplam === kasaya giren + hâlâ bekleyen.
+// Bir kuruş kaybolursa/iki kez sayılırsa burada yakalanır.
+function verifyMedulaLedger() {
+  const diff = game.medulaBooked - (game.medulaCollected + pendingReceivables());
+  if (Math.abs(diff) > 0.5) {
+    console.warn("[medula] Alacak defteri tutmuyor: yazılan " + Math.round(game.medulaBooked) +
+      "₺ ≠ yatan " + Math.round(game.medulaCollected) + "₺ + bekleyen " + pendingReceivables() +
+      "₺ (fark " + Math.round(diff) + "₺)");
+    return false;
+  }
+  return true;
+}
+
+// Gün başında o güne (ve geçmişe kalmışsa ona) düşen alacakları kasaya aktar.
+function collectReceivables() {
+  let total = 0;
+  game.receivables = game.receivables.filter(r => {
+    if (r.dueDay <= game.dayNumber) { total += r.amount; return false; }
+    return true;
+  });
+  game.collectedToday = Math.round(total);
+  if (game.collectedToday > 0) {
+    game.money += game.collectedToday;
+    game.medulaCollected += game.collectedToday;
+    flashInfoToast("🏦 SGK ödemesi yattı: +" + formatMoney(game.collectedToday));
+  }
+  verifyMedulaLedger();
+  return game.collectedToday;
+}
+function pendingReceivables() {
+  let t = 0;
+  for (const r of game.receivables) t += r.amount;
+  return Math.round(t);
+}
+
+// bilgi şeridi — stok uyarısından ayrı kanal (birbirini ezmezler)
+function flashInfoToast(txt) {
+  game.infoToast = { text: txt, until: game.clock + CONFIG.medulaToastDuration };
 }
 
 // Günlük kazanç sayacına yaz — aktif bölüme (gündüz/gece) de ayrı işlenir.
@@ -1400,10 +1595,14 @@ function checkOrder() {
   const given = game.counter.slice();
 
   let correct = false;
-  if (p.request.type === "prescription") {
+  if (p.request.type === "prescription" || p.request.type === "medula") {
     correct = sameMultiset(expected, given);   // doğru ilaçlar + doğru adet
   } else {
-    correct = given.length === 1 && expected.includes(given[0]);
+    // Semptomlu hasta: verilen ilaçların KATEGORİ çoklu-kümesi, istenen semptomların
+    // kategori çoklu-kümesiyle birebir eşleşmeli (aynı sameMultiset kalıbı, id yerine kategori).
+    const wantCats = expectedCategoryList(p.request);
+    const gotCats = given.map(id => { const m = getMedicine(id); return m ? m.category : "?"; });
+    correct = sameMultiset(wantCats, gotCats);
   }
 
   game.dayStats.served++;
@@ -1413,12 +1612,21 @@ function checkOrder() {
     // kazanç = servis edilen ilaçların satış fiyatı toplamı (adet dahil; given id tekrarlı liste)
     let earn = 0;
     for (const gid of given) { const gm = getMedicine(gid); if (gm) earn += gm.price; }
-    if (p.night) earn = Math.round(earn * CONFIG.nightPriceMultiplier);   // nöbet farkı
-    game.money += earn;
+    if (p.night) earn = Math.round(earn * CONFIG.nightPriceMultiplier);   // nöbet farkı (Medula'ya da uygulanır)
+    if (p.request.type === "medula") {
+      // SGK ödemesi GECİKMELİ: günün kazancına BUGÜN yazılır (hedef ölçümü değişmez),
+      // kasaya medulaPayDelayDays gün sonra girer.
+      addReceivable(earn);
+      game.dayStats.medulaAccrued += earn;
+    } else {
+      game.money += earn;
+    }
     addDayMoney(earn);
     game.dayStats.correct++;
     game.reputation = clamp(game.reputation + CONFIG.repGainCorrect, CONFIG.minReputation, CONFIG.maxReputation);
-    game.feedback = { ok: true, angry: false, text: "✓ Teşekkürler!  +" + earn + "₺", t: 0 };
+    game.feedback = p.request.type === "medula"
+      ? { ok: true, angry: false, text: "✓ Medula kaydı işlendi!  +" + earn + "₺ (SGK, gün " + (game.dayNumber + CONFIG.medulaPayDelayDays) + ")", t: 0 }
+      : { ok: true, angry: false, text: "✓ Teşekkürler!  +" + earn + "₺", t: 0 };
     explainDecision(p, given, "DOĞRU", "istenen ilaç(lar) tam eşleşti (+" + earn + "₺)");
   } else {
     // yanlış ilaç: kutu açıldı sayılır — stok düşer, para GELMEZ, üstüne o ilaçların
@@ -1435,9 +1643,9 @@ function checkOrder() {
     game.dayStats.wrong++;
     game.feedback = { ok: false, angry: false, text: "✗ Yanlış ilaç!  -" + loss + "₺", t: 0 };
     explainDecision(p, given, "YANLIŞ",
-      p.request.type === "prescription"
-        ? "reçete kalem/adet eşleşmedi (istenen ile verilen farklı)"
-        : "verilen ilaç semptom kategorisinde değil ya da tek kutu verilmedi");
+      (p.request.type === "prescription" || p.request.type === "medula")
+        ? "kalem/adet eşleşmedi (istenen ile verilen farklı)"
+        : "verilen ilaçların kategorileri istenen semptomlarla eşleşmedi");
     loseReputation(CONFIG.repLossWrong);
   }
 }
@@ -1493,7 +1701,7 @@ function startNextDay() {
   game.dayNumber++;
   game.phase = "day";
   game.nightIntro = null;
-  game.weather = weatherForDay(game.dayNumber);   // kozmetik; günde bir kez
+  collectReceivables();          // vadesi gelen SGK alacakları kasaya girer
   beginDaySchedule(game.dayNumber);
   game.spawnTimer = CONFIG.spawnInterval;
   game.daySpawned = 0;
@@ -1501,7 +1709,7 @@ function startNextDay() {
   game.queue = [];
   game.counter = [];
   game.feedback = null;
-  game.dayStats = { served: 0, correct: 0, wrong: 0, angry: 0, money: 0, moneyDay: 0, moneyNight: 0 };
+  game.dayStats = { served: 0, correct: 0, wrong: 0, angry: 0, money: 0, moneyDay: 0, moneyNight: 0, medulaAccrued: 0 };
   rebuildCounterSlots();
   game.state = STATE.PLAYING;
   spawnPatient();
@@ -1529,7 +1737,6 @@ function startNewGame() {
   game.phase = "day";
   game.nightIntro = null;
   game.nightT = 0;
-  game.weather = weatherForDay(1);   // kozmetik; günde bir kez
   beginDaySchedule(1);
   game.spawnTimer = 0;
   game.daySpawned = 0;
@@ -1541,9 +1748,17 @@ function startNewGame() {
   game.depotOpen = false;
   game.pcScreen = "home";
   game.depotPending = {};
+  game.receivables = [];  // SGK alacakları: stok/geliştirme ile aynı kalıcılık yolu
+  game.medulaBooked = 0;
+  game.medulaCollected = 0;
+  game.medulaRevealed = {};
+  game.medulaInput = "";
+  game.medulaResult = null;
+  game.collectedToday = 0;
+  game.infoToast = null;
   initUpgrades();         // geliştirmeler yalnızca yeni oyunda sıfırlanır (günler arası kalıcı)
   initStock();            // stok yalnızca yeni oyunda sıfırlanır (günler arası kalıcı)
-  game.dayStats = { served: 0, correct: 0, wrong: 0, angry: 0, money: 0, moneyDay: 0, moneyNight: 0 };
+  game.dayStats = { served: 0, correct: 0, wrong: 0, angry: 0, money: 0, moneyDay: 0, moneyNight: 0, medulaAccrued: 0 };
   game.state = STATE.PLAYING;
   game.hasRun = true;               // menüde DEVAM ET görünebilir
   rebuildCounterSlots();
@@ -1715,15 +1930,13 @@ function drawHUD() {
   const y2 = hud.y + hud.h * 0.71;   // alt satır
   const fs1 = hud.h * 0.26, fs2 = hud.h * 0.23;
 
-  // SOL kutu: satır1 solda GÜN, sağda tarih (emojisiz); satır2 solda hava adı, sağda hava emojisi
+  // SOL kutu: satır1 GÜN, satır2 tarih. (Hava durumu kaldırıldı; iki öğe kendi satırına
+  // yayıldı — eskiden GÜN ve tarih tek satırı paylaşıp sıkışıyordu.)
   const lw = hud.w * 0.36;
   const lpad = lw * 0.09;
   retroBox(hud.x, lw);
-  const wtr = game.weather || WEATHERS[0];
-  text("GÜN " + game.dayNumber, hud.x + lpad, y1, fs1, c.neon, "left", "800");
-  fitText(dateShort(), hud.x + lw - lpad, y1, lw * 0.46, fs2 * 0.9, c.creamSoft, "right", "700");
-  fitText(wtr[0], hud.x + lpad, y2, lw * 0.60, fs2, c.creamSoft, "left", "800");
-  text(wtr[1], hud.x + lw - lpad, y2, fs2, "#000", "right", "400");
+  fitText("GÜN " + game.dayNumber, hud.x + lpad, y1, lw * 0.82, fs1 * 1.06, c.neon, "left", "800");
+  fitText(dateShort(), hud.x + lpad, y2, lw * 0.82, fs2, c.creamSoft, "left", "700");
 
   // SAĞ kutu: satır1 solda itibar emojisi, sağda %N; satır2 solda 💵, sağda para
   const rw = hud.w * 0.36;
@@ -1878,14 +2091,14 @@ function drawSymptomBubble(p) {
   const headTop = L.baseY - L.charH;
   const cx = L.cx;
 
-  const bubbleW = Math.min(area.w * 0.72, areaH * 1.5);
-  const bubbleH = areaH * 0.25;
+  const bubbleW = Math.min(area.w * 0.76, areaH * 1.6);
+  const bubbleH = areaH * 0.28;
   let bubbleY = headTop - areaH * 0.03 - bubbleH;
   if (bubbleY < area.y) bubbleY = area.y;
   const bubbleX = cx - bubbleW / 2;
   ctx.globalAlpha = a;
   drawSpeechBubble(bubbleX, bubbleY, bubbleW, bubbleH, cx, bubbleY + bubbleH);
-  drawSymptom(p.request.symptom, bubbleX, bubbleY, bubbleW, bubbleH);
+  drawSymptom(p.request, bubbleX, bubbleY, bubbleW, bubbleH);
   ctx.globalAlpha = 1;
 }
 
@@ -1953,6 +2166,9 @@ function drawQueue() {
   if (p0.request.type === "prescription") {
     drawPrescriptionPanel(p0);
     drawPrescriptionBubble(p0);
+  } else if (p0.request.type === "medula") {
+    if (medulaIsRevealed(p0.request.code)) drawMedulaRecordPanel(p0);   // sorgulanmışsa liste solda kalır
+    drawMedulaBubble(p0);
   } else {
     drawSymptomBubble(p0);
   }
@@ -2241,30 +2457,13 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
   const ink = "#3a3326", inkSoft = "#8a7c5e";
   const req = p.request;
 
-  // Medula terminali: İNCELENECEK alanın arkasına nötr (mavi) vurgu. Kasıtlı olarak
-  // uyarı rengi DEĞİL — işaret "kusur bulundu" değil "buraya bak" demeli; gerçek
-  // reçetelerde de aynı sayıda işaret çıkar.
-  const marks = medulaMarks(req);
-  const markBg = (mx, my, mw, mh) => {
-    fillRoundRect(mx, my, mw, mh, mh * 0.30, "rgba(70, 130, 200, 0.20)");
-    ctx.save();
-    ctx.setLineDash([Math.max(2, h * 0.012), Math.max(2, h * 0.010)]);
-    strokeRoundRect(mx, my, mw, mh, mh * 0.30, "rgba(45, 95, 160, 0.80)", Math.max(1, h * 0.0035));
-    ctx.restore();
-  };
 
   // üst: kaşe (✚) + doktor adı + tarih
   const headY = y + padY + h * 0.045;
   // tarih — sahte/eski olsa da renkle ele vermez; oyuncu tarihi OKUYUP anlamalı
-  if (marks.includes("date")) markBg(rx - innerW * 0.34, headY - h * 0.033, innerW * 0.34, h * 0.066);
   fitText(req.date, rx, headY, innerW * 0.34, h * 0.05, inkSoft, "right", "600");
   // kaşe rozeti (gerçeklerde HER ZAMAN çizilir; no_stamp kusurunda HİÇ çizilmez)
   let docX = lx;
-  if (marks.includes("stamp")) {
-    // kaşe varsa rozetin, yoksa olması gereken boşluğun çevresi işaretlenir
-    const br = h * 0.052;
-    markBg(lx - br * 0.15, headY - br * 1.15, br * 2.3, br * 2.3);
-  }
   if (req.hasStamp !== false) {
     const br = h * 0.052;
     const bx = lx + br, by = headY;
@@ -2275,7 +2474,6 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
     text("✚", bx, by + h * 0.002, br * 1.5, "#2e7d32", "center", "800");
     docX = lx + br * 2 + w * 0.025;
   }
-  if (marks.includes("doctor")) markBg(docX - w * 0.012, headY - h * 0.036, (rx - innerW * 0.36) - docX + w * 0.024, h * 0.072);
   fitText(req.doctor, docX, headY, (rx - innerW * 0.36) - docX, h * 0.052, ink, "left", "700");
 
   // ayraç
@@ -2299,9 +2497,6 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
     ctx.fillStyle = m.color; ctx.fill();
     ctx.strokeStyle = "rgba(0,0,0,0.18)"; ctx.lineWidth = 1; ctx.stroke();
     // adet renkle ele vermez; ×8/×10 yine yazılır ama normal renkte (oyuncu mantığı yakalar)
-    if (marks.includes("qty") && items.indexOf(it) === (req.hintQty || 0)) {
-      markBg(rx - qtyW, ly - fs * 0.75, qtyW, fs * 1.5);
-    }
     fitText("× " + it.qty, rx, ly, qtyW, fs, ink, "right", "800");
     const nameX = lx + dotR * 2 + fs * 0.5;
     fitText(m.name, nameX, ly, rx - qtyW - fs * 0.5 - nameX, fs, ink, "left", "600");
@@ -2320,12 +2515,6 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
     sg -= 0.5;
     ctx.font = "italic 700 " + sg + "px 'Segoe Script','Snell Roundhand','Brush Script MT',cursive";
   }
-  // Medula açıklaması — işaretin ne anlama geldiğini net söyler (bulgu değil, görev)
-  if (marks.length) {
-    fitText("🖥️ Medula: işaretli alanı kontrol et", lx, sep2 + h * 0.055, innerW * 0.42, h * 0.036,
-      "rgba(45, 95, 160, 0.95)", "left", "700");
-  }
-  if (marks.includes("sig")) markBg(rx - innerW * 0.58, sep2 + h * 0.055 - h * 0.036, innerW * 0.58, h * 0.072);
   ctx.fillStyle = inkSoft;
   ctx.textAlign = "right"; ctx.textBaseline = "middle";
   ctx.fillText(p.request.sig, rx, sep2 + h * 0.055);
@@ -2334,11 +2523,146 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
   ctx.restore();   // ana
 }
 
+// --- MEDULA: kod balonu ---
+// Hasta kağıt uzatmaz; kodu söyler. Kod her zaman balonda durur (tekrar bakılabilir).
+function drawMedulaBubble(p) {
+  const area = layout._patientArea;
+  const counterLine = layout._counterLine;
+  const areaH = counterLine - area.y;
+  const L = getPatientLayout(p.posCurrent);
+  if (L.active < 0.12) return;
+  const enter = clamp(p.enterT / CONFIG.patientEnterTime, 0, 1);
+  const a = L.active * (1 - Math.pow(1 - enter, 3));
+  const headTop = L.baseY - L.charH;
+  const cx = L.cx;
+
+  const bubbleW = Math.min(area.w * 0.76, areaH * 1.6);
+  const bubbleH = areaH * 0.28;
+  let bubbleY = headTop - areaH * 0.03 - bubbleH;
+  if (bubbleY < area.y) bubbleY = area.y;
+  const bubbleX = cx - bubbleW / 2;
+
+  ctx.globalAlpha = a;
+  drawSpeechBubble(bubbleX, bubbleY, bubbleW, bubbleH, cx, bubbleY + bubbleH);
+  fitText(p.line || "E-reçetem var.", bubbleX + bubbleW / 2, bubbleY + bubbleH * 0.28,
+    bubbleW * 0.88, bubbleH * 0.155, "#3a3326", "center", "700");
+  // kodu okunur ve seçilebilir hissettiren tek satır
+  const codeW = bubbleW * 0.62, codeH = bubbleH * 0.40;
+  const codeX = bubbleX + (bubbleW - codeW) / 2, codeY = bubbleY + bubbleH * 0.48;
+  fillRoundRect(codeX, codeY, codeW, codeH, codeH * 0.28, "rgba(38, 74, 54, 0.92)");
+  strokeRoundRect(codeX, codeY, codeW, codeH, codeH * 0.28, "rgba(140, 220, 170, 0.55)", 1.5);
+  fitText(p.request.code, codeX + codeW / 2, codeY + codeH / 2, codeW * 0.86, codeH * 0.62,
+    "#d8f0e0", "center", "800");
+  ctx.globalAlpha = 1;
+}
+
+// Sorgulanmış Medula kaydı — reçete panelinin yerinde, aynı ölçülerde kart.
+function drawMedulaRecordPanel(p) {
+  const S = layout.stage;
+  const area = layout._patientArea;
+  const L = getPatientLayout(p.posCurrent);
+  if (L.active < 0.12) return;
+  const enter = clamp(p.enterT / CONFIG.patientEnterTime, 0, 1);
+  const a = L.active * (1 - Math.pow(1 - enter, 3));
+
+  const w = S.w * 0.42;
+  const h = Math.min(S.h * 0.40, area.h * 0.94);
+  const x = S.x + S.w * 0.04;
+  const y = area.y + S.h * 0.006;
+  const items = p.request.items;
+
+  ctx.save();
+  ctx.globalAlpha = a;
+  ctx.save();
+  ctx.shadowColor = "rgba(0,0,0,0.28)"; ctx.shadowBlur = h * 0.05; ctx.shadowOffsetY = h * 0.015;
+  fillRoundRect(x, y, w, h, Math.min(w, h) * 0.05, "#eef4ee");
+  ctx.restore();
+  strokeRoundRect(x, y, w, h, Math.min(w, h) * 0.05, "rgba(60, 120, 85, 0.55)", Math.max(1, w * 0.006));
+
+  // sistem başlık şeridi (PC ekranıyla aynı dil)
+  const barH = h * 0.13;
+  ctx.save();
+  roundRect(x, y, w, h, Math.min(w, h) * 0.05); ctx.clip();
+  ctx.fillStyle = "rgba(38, 74, 54, 0.95)";
+  ctx.fillRect(x, y, w, barH);
+  ctx.restore();
+  fitText("MEDULA KAYDI", x + w * 0.5, y + barH * 0.5, w * 0.8, barH * 0.44, "#d8f0e0", "center", "800");
+
+  const padX = w * 0.09;
+  fitText(p.request.code, x + w / 2, y + barH + h * 0.075, w * 0.7, h * 0.058, "#2e7d32", "center", "800");
+
+  const listTop = y + barH + h * 0.14;
+  const lineH = Math.min(h * 0.13, (y + h - h * 0.06 - listTop) / Math.max(1, items.length));
+  const fs = Math.min(lineH * 0.55, h * 0.062);
+  const qtyW = (w - padX * 2) * 0.20;
+  let ly = listTop + lineH * 0.5;
+  for (const it of items) {
+    const m = getMedicine(it.id);
+    const dotR = fs * 0.36;
+    ctx.beginPath();
+    ctx.arc(x + padX + dotR, ly, dotR, 0, Math.PI * 2);
+    ctx.fillStyle = m.color; ctx.fill();
+    ctx.strokeStyle = "rgba(0,0,0,0.18)"; ctx.lineWidth = 1; ctx.stroke();
+    fitText("× " + it.qty, x + w - padX, ly, qtyW, fs, "#2c3a2c", "right", "800");
+    const nameX = x + padX + dotR * 2 + fs * 0.5;
+    fitText(m.name, nameX, ly, (x + w - padX) - qtyW - fs * 0.5 - nameX, fs, "#2c3a2c", "left", "600");
+    ly += lineH;
+  }
+  ctx.restore();
+}
+
 // semptom balonu içeriği — açık zemin üstüne koyu mürekkep
-function drawSymptom(symptom, x, y, w, h) {
+// Semptom balonu: üstte istenen kalemlerin emojileri (adet 2 ise ×2 rozeti — reçete
+// kağıdındaki "× N" diliyle aynı), altta doğal Türkçe cümle (gerekirse iki satır).
+function drawSymptom(request, x, y, w, h) {
   const ink = "#3a3326";
-  text(symptom.emoji, x + w / 2, y + h * 0.40, h * 0.42, "#000", "center", "400");
-  fitText(symptom.label, x + w / 2, y + h * 0.80, w * 0.86, h * 0.155, ink, "center", "700");
+  const items = request.items || [{ symptom: request.symptom, qty: 1 }];
+
+  // --- emoji satırı ---
+  const eSize = h * (items.length >= 3 ? 0.30 : items.length === 2 ? 0.34 : 0.40);
+  const eGap = eSize * 0.55;
+  const cellW = [];
+  ctx.font = "400 " + eSize + "px " + RX_FONT;
+  for (const it of items) {
+    const badge = it.qty > 1 ? eSize * 0.62 : 0;
+    cellW.push(eSize * 1.05 + badge);
+  }
+  let totalW = cellW.reduce((a, b) => a + b, 0) + eGap * (items.length - 1);
+  const maxRowW = w * 0.88;
+  let scale = totalW > maxRowW ? maxRowW / totalW : 1;
+  const eY = y + h * 0.34;
+  let ex = x + (w - totalW * scale) / 2;
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    const es = eSize * scale;
+    text(it.symptom.emoji, ex + es * 0.525, eY, es, "#000", "center", "400");
+    if (it.qty > 1) {
+      fitText("×" + it.qty, ex + es * 1.05 + es * 0.30, eY + es * 0.08, es * 0.62, es * 0.46,
+        "#7a3a2a", "center", "800");
+    }
+    ex += cellW[i] * scale + eGap * scale;
+  }
+
+  // --- cümle (tek satıra sığmazsa ikiye böl) ---
+  const txt = request.line || (items[0].symptom.label);
+  const fs = h * 0.145;
+  const maxW = w * 0.90;
+  ctx.font = "700 " + fs + "px " + RX_FONT;
+  if (ctx.measureText(txt).width <= maxW) {
+    fitText(txt, x + w / 2, y + h * 0.78, maxW, fs, ink, "center", "700");
+  } else {
+    // boşluklardan ortaya en yakın yerde böl
+    const words = txt.split(" ");
+    let best = 1, bestDiff = Infinity;
+    for (let i = 1; i < words.length; i++) {
+      const a = words.slice(0, i).join(" "), b = words.slice(i).join(" ");
+      const d = Math.abs(ctx.measureText(a).width - ctx.measureText(b).width);
+      if (d < bestDiff) { bestDiff = d; best = i; }
+    }
+    const l1 = words.slice(0, best).join(" "), l2 = words.slice(best).join(" ");
+    fitText(l1, x + w / 2, y + h * 0.70, maxW, fs * 0.92, ink, "center", "700");
+    fitText(l2, x + w / 2, y + h * 0.87, maxW, fs * 0.92, ink, "center", "700");
+  }
 }
 
 // Sekme içeriğini (emoji + metin, bir grup olarak) kutunun yatay/dikey TAM ortasına çiz.
@@ -2684,7 +3008,9 @@ function drawDayEnd() {
   let padBottom = rowStep * 0.6;
   const wasNight = !!(game.daySchedule && game.daySchedule.day === game.dayNumber && game.daySchedule.isNight);
   const nextIsNight = isNightDutyDay(game.dayNumber + 1);
-  const nRows = 5 + (wasNight ? 2 : 0);            // nöbet gecesi: gündüz + gece kazancı ayrı satır
+  const accrued = Math.round(s.medulaAccrued || 0);
+  const collected = Math.round(game.collectedToday || 0);
+  const nRows = 5 + (wasNight ? 2 : 0) + (collected > 0 ? 1 : 0) + (accrued > 0 ? 1 : 0);
   const warnH = nextIsNight ? fs * 1.5 : 0;        // "yarın nöbetçisin" uyarı şeridi
   const warnGap = nextIsNight ? gap * 0.7 : 0;
   const stackH = () => headerH + padTop + nRows * rowStep + gap + goalH + warnGap + warnH + gap + btnH + gap + pillH + padBottom;
@@ -2731,6 +3057,8 @@ function drawDayEnd() {
     row("🌙", "Gece kazancı", Math.round(s.moneyNight) + "₺");
   }
   row("💰", "Günlük kazanç", s.money + "₺");
+  if (collected > 0) row("🏦", "SGK ödemesi yattı", "+" + collected + "₺");
+  if (accrued > 0) row("🧾", "SGK alacağı", accrued + "₺ (gün " + (game.dayNumber + CONFIG.medulaPayDelayDays) + ")");
 
   // hedef durumu rozeti
   const rowsBottom = cardY + headerH + padTop + nRows * rowStep;
@@ -2821,6 +3149,24 @@ function drawCounterPC() {
 }
 
 // Kısa stok uyarısı toast'u (feedback'ten bağımsız, süreli; random yok — clock ile fade).
+// Bilgi şeridi (SGK ödemesi vb.) — stok uyarısından AYRI kanal, birbirini ezmez.
+function drawInfoToast() {
+  const t = game.infoToast;
+  if (!t || game.clock > t.until) return;
+  const S = layout.stage, c = CONFIG.colors;
+  const left = Math.max(0, t.until - game.clock);
+  const a = clamp(Math.min(left / 0.4, 1), 0, 1);
+  const boxW = S.w * 0.76, boxH = S.h * 0.052;
+  const bx = S.x + (S.w - boxW) / 2;
+  const by = layout._hud ? layout._hud.y + layout._hud.h + S.h * 0.015 : S.y + S.h * 0.12;
+  ctx.save();
+  ctx.globalAlpha = a;
+  fillRoundRect(bx, by, boxW, boxH, boxH * 0.32, "rgba(26, 60, 42, 0.94)");
+  strokeRoundRect(bx, by, boxW, boxH, boxH * 0.32, "rgba(140, 220, 170, 0.8)", Math.max(1.5, boxW * 0.004));
+  fitText(t.text, bx + boxW / 2, by + boxH / 2, boxW * 0.9, boxH * 0.42, "#d8f0e0", "center", "800");
+  ctx.restore();
+}
+
 function drawStockToast() {
   const t = game.stockToast;
   if (!t) return;
@@ -2895,29 +3241,141 @@ function drawPcHome() {
 
   text("💰 " + formatMoney(game.money), r.x + r.w * 0.05, r.y + r.h * 0.05, r.h * 0.032, c.cream, "left", "700");
 
-  const bw = r.w * 0.80, bh = r.h * 0.17;
+  const bw = r.w * 0.80, bh = r.h * 0.155;
   const bx = r.x + (r.w - bw) / 2;
-  const gap = r.h * 0.06;
-  const by0 = r.y + r.h * 0.26;
+  const gap = r.h * 0.045;
+  const by0 = r.y + r.h * 0.18;
 
   layout.pcMenuBtns = [];
+  const unlocked = medulaUnlocked();
   const items = [
-    { key: "depot",    emoji: "📦", label: "ECZA DEPOSU",       sub: "İlaç siparişi ver" },
-    { key: "upgrades", emoji: "🔧", label: "ECZANE GELİŞTİRME", sub: "Kalıcı yükseltmeler" }
+    { key: "depot",    emoji: "📦", label: "ECZA DEPOSU",       sub: "İlaç siparişi ver", on: true },
+    { key: "upgrades", emoji: "🔧", label: "ECZANE GELİŞTİRME", sub: "Kalıcı yükseltmeler", on: true },
+    { key: "medula",   emoji: "🖥️", label: "MEDULA SİSTEMİ",
+      sub: unlocked ? "E-reçete kodu sorgula" : "🔒 Geliştirme'den satın al", on: unlocked }
   ];
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
     const by = by0 + i * (bh + gap);
-    layout.pcMenuBtns.push({ key: it.key, x: bx, y: by, w: bw, h: bh });
+    layout.pcMenuBtns.push({ key: it.key, x: bx, y: by, w: bw, h: bh, enabled: it.on });
     fillRoundRect(bx, by, bw, bh, bh * 0.22, c.btnDark);
     ctx.save();
-    ctx.shadowColor = c.neonGlow; ctx.shadowBlur = 12;
-    strokeRoundRect(bx, by, bw, bh, bh * 0.22, c.neon, Math.max(1.5, bw * 0.004));
+    if (it.on) { ctx.shadowColor = c.neonGlow; ctx.shadowBlur = 12; }
+    strokeRoundRect(bx, by, bw, bh, bh * 0.22, it.on ? c.neon : c.neonDim, Math.max(1.5, bw * 0.004));
     ctx.restore();
+    ctx.globalAlpha = it.on ? 1 : 0.55;
     text(it.emoji, bx + bw * 0.12, by + bh * 0.5, bh * 0.42, c.cream, "center", "400");
-    fitText(it.label, bx + bw * 0.22, by + bh * 0.38, bw * 0.72, bh * 0.26, c.neon, "left", "800");
+    fitText(it.label, bx + bw * 0.22, by + bh * 0.38, bw * 0.72, bh * 0.26, it.on ? c.neon : c.neonDim, "left", "800");
     fitText(it.sub, bx + bw * 0.22, by + bh * 0.68, bw * 0.72, bh * 0.19, c.creamSoft, "left", "600");
+    ctx.globalAlpha = 1;
   }
+
+  // bekleyen SGK alacağı özeti (varsa) — ana ekranın altında tek satır
+  const pend = pendingReceivables();
+  if (pend > 0) {
+    const rows = game.receivables.slice().sort((a, b) => a.dueDay - b.dueDay)
+      .map(x => "gün " + x.dueDay + ": " + Math.round(x.amount) + "₺").join("   ");
+    fitText("🏦 Bekleyen SGK alacağı: " + formatMoney(pend), r.x + r.w / 2,
+      by0 + 3 * (bh + gap) + r.h * 0.02, r.w * 0.86, r.h * 0.030, c.cream, "center", "700");
+    fitText(rows, r.x + r.w / 2, by0 + 3 * (bh + gap) + r.h * 0.058, r.w * 0.86, r.h * 0.024,
+      c.creamSoft, "center", "600");
+  }
+}
+
+// --- MEDULA SİSTEMİ ekranı: kod girişi + tuş takımı + sonuç ---
+function drawMedula() {
+  const c = CONFIG.colors;
+  const r = drawPcScreen("MEDULA SİSTEMİ — E-Reçete Sorgu");
+
+  // GERİ (depo/geliştirme ekranlarıyla aynı buton dili)
+  const backW = r.w * 0.26, backH = r.h * 0.055;
+  const backX = r.x + r.w * 0.95 - backW, backY = r.y + r.h * 0.028;
+  layout.pcBackBtn = { x: backX, y: backY, w: backW, h: backH };
+  fillRoundRect(backX, backY, backW, backH, backH * 0.35, c.btnDark);
+  strokeRoundRect(backX, backY, backW, backH, backH * 0.35, "rgba(245,170,70,0.55)", 1.5);
+  text("‹ GERİ", backX + backW / 2, backY + backH / 2, backH * 0.46, c.neon, "center", "800");
+
+  if (!medulaUnlocked()) {
+    fitText("🔒 Medula terminali kurulu değil", r.x + r.w / 2, r.y + r.h * 0.42, r.w * 0.8, r.h * 0.045, c.creamSoft, "center", "800");
+    fitText("ECZANE GELİŞTİRME → Medula Terminali", r.x + r.w / 2, r.y + r.h * 0.50, r.w * 0.8, r.h * 0.032, c.creamSoft, "center", "600");
+    layout.medulaKeys = null; layout.medulaOk = null; layout.medulaDel = null;
+    return;
+  }
+
+  // --- giriş kutusu ---
+  const inW = r.w * 0.72, inH = r.h * 0.075;
+  const inX = r.x + (r.w - inW) / 2, inY = r.y + r.h * 0.10;
+  fillRoundRect(inX, inY, inW, inH, inH * 0.22, "rgba(20, 40, 30, 0.92)");
+  strokeRoundRect(inX, inY, inW, inH, inH * 0.22, "rgba(140, 220, 170, 0.65)", 2);
+  const shown = game.medulaInput + "_".repeat(Math.max(0, CONFIG.medulaCodeLen - game.medulaInput.length));
+  fitText(shown.split("").join(" "), inX + inW / 2, inY + inH / 2, inW * 0.9, inH * 0.55, "#d8f0e0", "center", "800");
+
+  // --- sonuç / uyarı alanı ---
+  const resY = inY + inH + r.h * 0.022;
+  const resH = r.h * 0.20;
+  const res = game.medulaResult;
+  if (res && res.error) {
+    fillRoundRect(inX, resY, inW, r.h * 0.052, r.h * 0.026, "rgba(232,115,107,0.16)");
+    strokeRoundRect(inX, resY, inW, r.h * 0.052, r.h * 0.026, "rgba(232,115,107,0.75)", 1.5);
+    fitText("⚠️ " + res.error, inX + inW / 2, resY + r.h * 0.026, inW * 0.9, r.h * 0.030, c.bad, "center", "800");
+  } else if (res && res.items) {
+    fillRoundRect(inX, resY, inW, resH, r.h * 0.02, "rgba(255,255,255,0.05)");
+    strokeRoundRect(inX, resY, inW, resH, r.h * 0.02, "rgba(140, 220, 170, 0.5)", 1.5);
+    fitText("Kayıt: " + res.code, inX + inW * 0.5, resY + resH * 0.14, inW * 0.8, r.h * 0.028, "#8fe3a8", "center", "800");
+    const n = res.items.length;
+    const lh = (resH * 0.72) / Math.max(1, n);
+    const fs = Math.min(lh * 0.58, r.h * 0.030);
+    let ly = resY + resH * 0.30;
+    for (const it of res.items) {
+      const m = getMedicine(it.id);
+      fitText(m ? m.name : it.id, inX + inW * 0.06, ly, inW * 0.62, fs, c.cream, "left", "700");
+      fitText("× " + it.qty, inX + inW * 0.94, ly, inW * 0.2, fs, c.neon, "right", "800");
+      ly += lh;
+    }
+  } else {
+    fitText("Hastanın verdiği 6 haneli kodu gir", inX + inW / 2, resY + r.h * 0.026, inW * 0.9, r.h * 0.028, c.creamSoft, "center", "600");
+  }
+
+  // --- tuş takımı: alfabe + SİL + TAMAM ---
+  const padTop = resY + resH + r.h * 0.02;
+  const padBot = r.y + r.h * 0.97;
+  const cols = 7;
+  const chars = MEDULA_ALPHABET.split("");
+  const rowsN = Math.ceil(chars.length / cols) + 1;          // +1: aksiyon satırı
+  const gapK = r.w * 0.012;
+  const kw = (r.w * 0.90 - gapK * (cols - 1)) / cols;
+  const kh = Math.min(kw, (padBot - padTop - gapK * (rowsN - 1)) / rowsN);
+  const padX0 = r.x + (r.w - (kw * cols + gapK * (cols - 1))) / 2;
+
+  layout.medulaKeys = [];
+  for (let i = 0; i < chars.length; i++) {
+    const cx = i % cols, cy = Math.floor(i / cols);
+    const kx = padX0 + cx * (kw + gapK), ky = padTop + cy * (kh + gapK);
+    const on = game.medulaInput.length < CONFIG.medulaCodeLen;
+    layout.medulaKeys.push({ ch: chars[i], x: kx, y: ky, w: kw, h: kh, enabled: on });
+    fillRoundRect(kx, ky, kw, kh, kh * 0.22, c.btnDark);
+    strokeRoundRect(kx, ky, kw, kh, kh * 0.22, on ? "rgba(245,170,70,0.55)" : c.neonDim, 1.2);
+    fitText(chars[i], kx + kw / 2, ky + kh / 2, kw * 0.7, kh * 0.52, on ? c.cream : c.neonDim, "center", "800");
+  }
+
+  // aksiyon satırı: SİL (sol yarı) + TAMAM (sağ yarı)
+  const ay = padTop + Math.ceil(chars.length / cols) * (kh + gapK);
+  const aW = (kw * cols + gapK * (cols - 1) - gapK) / 2;
+  const delOn = game.medulaInput.length > 0;
+  const okOn = game.medulaInput.length === CONFIG.medulaCodeLen;
+  layout.medulaDel = { x: padX0, y: ay, w: aW, h: kh, enabled: delOn };
+  fillRoundRect(padX0, ay, aW, kh, kh * 0.22, c.btnDark);
+  strokeRoundRect(padX0, ay, aW, kh, kh * 0.22, delOn ? "rgba(232,115,107,0.75)" : c.neonDim, 1.5);
+  fitText("⌫ SİL", padX0 + aW / 2, ay + kh / 2, aW * 0.8, kh * 0.42, delOn ? c.bad : c.neonDim, "center", "800");
+
+  const okX = padX0 + aW + gapK;
+  layout.medulaOk = { x: okX, y: ay, w: aW, h: kh, enabled: okOn };
+  fillRoundRect(okX, ay, aW, kh, kh * 0.22, c.btnDark);
+  ctx.save();
+  if (okOn) { ctx.shadowColor = c.neonGlow; ctx.shadowBlur = 12; }
+  strokeRoundRect(okX, ay, aW, kh, kh * 0.22, okOn ? c.neon : c.neonDim, 1.5);
+  ctx.restore();
+  fitText("✓ SORGULA", okX + aW / 2, ay + kh / 2, aW * 0.86, kh * 0.42, okOn ? c.neon : c.neonDim, "center", "800");
 }
 
 // ECZANE GELİŞTİRME — seviyeli kalemler; satırda seviye, etki ve sonraki seviyenin fiyatı.
@@ -3141,8 +3599,12 @@ function drawPcPanel() {
   layout.depotTabs = null;
   layout.depotRows = null;
   layout.depotOrderBtn = null;
+  layout.medulaKeys = null;
+  layout.medulaOk = null;
+  layout.medulaDel = null;
   if (game.pcScreen === "home") drawPcHome();
   else if (game.pcScreen === "upgrades") drawUpgrades();
+  else if (game.pcScreen === "medula") drawMedula();
   else drawDepot();
 }
 
@@ -3153,9 +3615,25 @@ function handlePcTap(px, py) {
   if (game.pcScreen === "home") {
     if (layout.pcMenuBtns) {
       for (const b of layout.pcMenuBtns) {
-        if (pointInRect(px, py, b)) { if (b.key === "depot") openDepot(); else openUpgrades(); return; }
+        if (!pointInRect(px, py, b)) continue;
+        if (!b.enabled) return;                       // kilitli sekme: dokunuş yutulur
+        if (b.key === "depot") openDepot();
+        else if (b.key === "upgrades") openUpgrades();
+        else openMedulaScreen();
+        return;
       }
     }
+    if (layout.depotPanel && !pointInRect(px, py, layout.depotPanel)) { closeDepot(); return; }
+    return;
+  }
+  if (game.pcScreen === "medula") {
+    if (layout.medulaKeys) {
+      for (const k of layout.medulaKeys) {
+        if (pointInRect(px, py, k)) { if (k.enabled) medulaKeyPress(k.ch); return; }
+      }
+    }
+    if (layout.medulaDel && pointInRect(px, py, layout.medulaDel)) { if (layout.medulaDel.enabled) medulaBackspace(); return; }
+    if (layout.medulaOk && pointInRect(px, py, layout.medulaOk)) { if (layout.medulaOk.enabled) medulaSubmit(); return; }
     if (layout.depotPanel && !pointInRect(px, py, layout.depotPanel)) { closeDepot(); return; }
     return;
   }
@@ -3209,6 +3687,7 @@ function render() {
     drawShelf();        // seçili kategorinin ilaçları
     if (activeNeedsDecision()) drawDecisionButtons(); else drawServeButton();
     drawStockToast();   // kısa stok uyarısı (feedback'ten bağımsız)
+    drawInfoToast();    // SGK ödeme bildirimi (ayrı kanal)
     drawFeedback();
   } else if (game.state === STATE.DAYEND) {
     // arka planda son kareyi koru + kart
@@ -3563,7 +4042,7 @@ window.cheats = {
       tip: p.request.type === "prescription" ? (p.request.fake ? "reçete(SAHTE)" : "reçete") : "semptom",
       istek: p.request.type === "prescription"
         ? p.request.items.map(it => it.id + "×" + it.qty).join(", ")
-        : p.request.symptom.label,
+        : (p.request.items || []).map(it => it.symptom.label + "×" + it.qty).join(" + "),
       ciro: Math.round(p.refRevenue) + "₺",
       mal: Math.round(p.refCost) + "₺"
     })));
@@ -3615,6 +4094,32 @@ window.cheats = {
     explainDecision(p, game.counter.slice(), "(karar verilmedi)", "explainPatient — mevcut tezgah durumu");
     CONFIG.debugDecisions = prev;
     return p.request;
+  },
+  medula() {
+    console.log("Medula terminali: " + (medulaUnlocked() ? "AÇIK" : "KİLİTLİ") +
+      " | hasta oranı %" + Math.round(CONFIG.medulaPatientRatio * 100) +
+      " | ödeme gecikmesi " + CONFIG.medulaPayDelayDays + " gün | bugün: gün " + game.dayNumber);
+    const led = {};
+    for (const r of game.receivables.slice().sort((a, b) => a.dueDay - b.dueDay)) {
+      led["gün " + r.dueDay] = { tutar: Math.round(r.amount) + "₺", "kalan gün": r.dueDay - game.dayNumber };
+    }
+    console.log("— Bekleyen SGK alacağı: " + formatMoney(pendingReceivables()) +
+      " | bugün yatan: " + formatMoney(game.collectedToday || 0));
+    if (Object.keys(led).length) console.table(led); else console.log("  (defter boş)");
+    const q = {};
+    game.queue.forEach((p, i) => {
+      if (p.request.type !== "medula") return;
+      q["#" + (i + 1) + " " + p.request.code] = {
+        sorgulandı: medulaIsRevealed(p.request.code) ? "evet" : "hayır",
+        liste: p.request.items.map(it => { const m = getMedicine(it.id); return (m ? m.name : it.id) + "×" + it.qty; }).join(", ")
+      };
+    });
+    console.log("— Defter denetimi: yazılan " + Math.round(game.medulaBooked) + "₺ = yatan " +
+      Math.round(game.medulaCollected) + "₺ + bekleyen " + pendingReceivables() + "₺ → " +
+      (verifyMedulaLedger() ? "TUTUYOR ✓" : "TUTMUYOR ✗"));
+    console.log("— Kuyruktaki Medula hastaları:");
+    if (Object.keys(q).length) console.table(q); else console.log("  (yok)");
+    return { receivables: game.receivables.slice(), pending: pendingReceivables() };
   },
   nightDuty() {
     const rows = {};
@@ -3675,14 +4180,14 @@ window.cheats = {
     console.log("kasa: " + formatMoney(game.money) +
       " | efektif: kuyruk=" + effMaxQueue() + " stokTavan=" + effMaxStock() +
       " günMüşteri(gün " + game.dayNumber + ")=" + patientLimitFor(game.dayNumber) +
-      " sabır=" + effPatience().toFixed(1) + "sn medulaİpucu=" + effMedulaHints());
+      " sabır=" + effPatience().toFixed(1) + "sn medula=" + (medulaUnlocked() ? "açık" : "kilitli"));
     return out;
   },
   setUpgrade(id, level) {
     const u = UPGRADE_BY_ID[id];
     if (!u) { console.log("Bilinmeyen geliştirme:", id, "— geçerli:", UPGRADES.map(x => x.id).join(", ")); return; }
     game.upgrades[id] = clamp(level | 0, 1, u.maxLevel);
-    if (id === "vitrin") invalidateDaySchedules();
+    if (id === "vitrin" || id === "medula") invalidateDaySchedules();
     console.log(u.name + " → Lv " + game.upgrades[id] + " (" + u.valueAt(game.upgrades[id]) + ")");
     return game.upgrades[id];
   },
@@ -3817,6 +4322,20 @@ function verifyGoalBalance(verbose, days) {
     const mInt = Math.floor(sch.misses + 1e-9);
     const g = sch.goal;
 
+    // Güvenlik bandı devreye girdiyse hedef KASITLI olarak tolerans değerinde değildir;
+    // tolerans ölçütü bu günde geçerli olmaz. Tipik sebep: günün büyük kısmı sahte reçete
+    // olduğunda R küçülür, izinli hata (N × missRate, N sahteleri de sayar) geçerli hasta
+    // sayısına göre absürtleşir ve alt bant hedefi yukarı çeker. Bu bir denge hatası değil,
+    // bandın işini yapmasıdır — ama sessiz geçmesin diye verbose'ta bildirilir.
+    if (sch.clampedAt) {
+      if (verbose) {
+        console.log("Gün " + d + " | hedef " + g + "₺ | GÜVENLİK BANDI (" + sch.clampedAt +
+          ") devrede: ham hedef " + Math.round(sch.raw) + "₺ → banda çekildi" +
+          " (geçerli hasta " + sch.validCount + "/" + sch.N + ", izinli hata " + sch.misses.toFixed(2) + ")");
+      }
+      continue;
+    }
+
     // 1) formül ölçütü (kesin)
     const avgPass = simulateDayScenario(d, mInt, "ortalama");
     const avgFail = simulateDayScenario(d, mInt + 1, "ortalama");
@@ -3895,6 +4414,22 @@ function verifyGoalBalanceAllTiers(verbose) {
 }
 verifyGoalBalanceAllTiers(false);   // boot'ta sessiz; yalnız denge bozuksa uyarır
 
+// Semptom isteği için birkaç geçerli cevap üret: her kalemin kategorisindeki İLK ve SON
+// ilaç ayrı ayrı denenir (kategori içi her ilaç doğru sayılmalı).
+function symptomAnswerCombos(items) {
+  const mk = pickIdx => {
+    const out = [];
+    for (const it of items) {
+      const cands = MEDICINES.filter(m => m.category === it.symptom.category);
+      if (!cands.length) return null;
+      const m = cands[pickIdx === "last" ? cands.length - 1 : 0];
+      for (let i = 0; i < it.qty; i++) out.push(m.id);
+    }
+    return out;
+  };
+  return [mk("first"), mk("last")].filter(Boolean);
+}
+
 // =====================================================================
 //  KALICI SELF-TEST — boot'ta sessiz çalışır, yalnız sorun varsa console.warn
 // =====================================================================
@@ -3934,7 +4469,7 @@ function selfTestPatients(days) {
     let prevCost = -1;
     for (let lv = 1; lv <= u.maxLevel; lv++) {
       game.upgrades = allLevels(x => x.id === u.id ? lv : 1);
-      const vals = { tezgah: effMaxQueue(), depo: effMaxStock(), vitrin: patientLimitFor(1), bekleme: effPatience(), medula: effMedulaHints() };
+      const vals = { tezgah: effMaxQueue(), depo: effMaxStock(), vitrin: patientLimitFor(1), bekleme: effPatience(), medula: medulaUnlocked() ? 1 : 0 };
       for (const k in vals) {
         const v = vals[k];
         if (typeof v !== "number" || !isFinite(v) || v < 0)
@@ -3962,36 +4497,61 @@ function selfTestPatients(days) {
   game.upgrades = prevUp; game.money = prevMoney;
   invalidateDaySchedules();
 
-  // 0d) MEDULA İPUCU SIZDIRMAMALI — işaretin varlığı sahtelik bilgisi taşımamalı.
-  // Terminal maks seviyeye alınıp gün 1..10'daki TÜM reçeteler taranır: hem sahte hem
-  // gerçek reçetelerde aynı sayıda işaret çıkmalı, aksi halde ipucu oyunu çözer.
+  // 0d2) REÇETE GARANTİLERİ — her günde ≥1 gerçek reçete; 2. günden itibaren ≥1 sahte
+  for (let d = 1; d <= days; d++) {
+    const sch = getDaySchedule(d);
+    const rx = sch.patients.filter(p => p.request.type === "prescription");
+    if (!rx.some(p => !p.request.fake) && !sch.patients.some(p => p.request.type === "medula"))
+      warn.push("Gün " + d + ": günde hiç GERÇEK reçete yok");
+    if (d >= 2 && !rx.some(p => p.request.fake))
+      warn.push("Gün " + d + ": günde hiç SAHTE reçete yok (2. günden itibaren en az 1 olmalı)");
+    // aşırı adet artık kusur değil: yüksek adetli GERÇEK reçete olabilmeli, ceza olmamalı
+    for (const p of rx) {
+      if (!p.request.fake && (p.request.flaws || []).length)
+        warn.push("Gün " + d + ": gerçek reçetede kusur bayrağı var");
+      if ((p.request.flaws || []).indexOf("overdose") >= 0)
+        warn.push("Gün " + d + ": 'overdose' kusuru hâlâ üretiliyor (kaldırılmalıydı)");
+    }
+  }
+
+  // 0d3) MEDULA kuralları — terminal AÇIKKEN üretilen günler üzerinden
   {
-    const prevUp2 = game.upgrades;
+    const prevUp3 = game.upgrades;
     game.upgrades = allLevels(x => x.id === "medula" ? x.maxLevel : 1);
-    const n = effMedulaHints();
-    let fakeTot = 0, fakeMarked = 0, realTot = 0, realMarked = 0, wrongCount = 0, noHint = 0;
+    invalidateDaySchedules();
+    let mtot = 0;
     for (let d = 1; d <= days; d++) {
-      for (const pt of getDaySchedule(d).patients) {
-        const r = pt.request;
-        if (r.type !== "prescription") continue;
-        if (!r.hintFields || !r.hintFields.length) noHint++;
-        const m = medulaMarks(r);
-        const want = Math.min(n, (r.hintFields || []).length);
-        if (m.length !== want) wrongCount++;
-        if (r.fake) { fakeTot++; if (m.length > 0) fakeMarked++; }
-        else { realTot++; if (m.length > 0) realMarked++; }
+      const sch = getDaySchedule(d);
+      const med = sch.patients.filter(p => p.request.type === "medula");
+      mtot += med.length;
+      const seen = {};
+      for (const p of med) {
+        const code = p.request.code;
+        // kod biçimi
+        if (typeof code !== "string" || code.length !== CONFIG.medulaCodeLen)
+          warn.push("Gün " + d + ": Medula kodu " + CONFIG.medulaCodeLen + " karakter değil: " + JSON.stringify(code));
+        else {
+          if (code.charAt(0) !== "2") warn.push("Gün " + d + ": Medula kodu '2' ile başlamıyor: " + code);
+          for (const ch of code) {
+            if (MEDULA_ALPHABET.indexOf(ch) < 0)
+              warn.push("Gün " + d + ": Medula kodunda yasak karakter '" + ch + "' (" + code + ")");
+          }
+        }
+        // gün içinde benzersiz
+        if (seen[code]) warn.push("Gün " + d + ": aynı Medula kodu iki hastada: " + code);
+        seen[code] = true;
+        // asla sahte olamaz
+        if (p.request.fake) warn.push("Gün " + d + ": Medula hastası sahte işaretli (" + code + ")");
+        if ((p.request.flaws || []).length) warn.push("Gün " + d + ": Medula isteğinde kusur bayrağı var");
+        if (!p.request.items || !p.request.items.length) warn.push("Gün " + d + ": Medula isteğinde kalem yok (" + code + ")");
+        if (!p.refValid) warn.push("Gün " + d + ": Medula hastası geçersiz sayılıyor (R'ye girmiyor)");
       }
     }
-    game.upgrades = prevUp2;
-    if (noHint) warn.push("Medula: " + noHint + " reçetede hintFields üretilmemiş");
-    if (wrongCount) warn.push("Medula: " + wrongCount + " reçetede işaret sayısı terminal seviyesiyle uyuşmuyor");
-    const fakeRate = fakeTot ? fakeMarked / fakeTot : 0;
-    const realRate = realTot ? realMarked / realTot : 0;
-    if (n > 0 && Math.abs(fakeRate - realRate) > 1e-9) {
-      warn.push("Medula ipucu SAHTELİK SIZDIRIYOR: sahtelerin %" + Math.round(fakeRate * 100) +
-        "'inde, gerçeklerin %" + Math.round(realRate * 100) + "'inde işaret var (eşit olmalı) — " +
-        "işaretin varlığı reçetenin sahte olduğunu ele veriyor");
-    }
+    if (medulaUnlocked() && mtot === 0) warn.push("Terminal açıkken gün 1.." + days + " içinde hiç Medula hastası üretilmedi");
+    // alacak defteri bütünlüğü: yazılan toplam = yatan + bekleyen
+    if (!verifyMedulaLedger()) warn.push("Medula alacak defteri tutarları tutmuyor (yukarıdaki [medula] uyarısına bakın)");
+    game.upgrades = prevUp3;
+    invalidateDaySchedules();
   }
 
   // 0e) NÖBET kuralları
@@ -4007,7 +4567,7 @@ function selfTestPatients(days) {
         warn.push("Gün " + d + " nöbetçi ama gece hastası " + sch.nightN + " (< " + CONFIG.nightPatientMin + ")");
       if (nightPs.length !== sch.nightN)
         warn.push("Gün " + d + ": night işaretli hasta sayısı (" + nightPs.length + ") nightN (" + sch.nightN + ") ile uyuşmuyor");
-      const nightRx = nightPs.filter(p => p.request.type === "prescription");
+      const nightRx = nightPs.filter(p => p.request.type === "prescription" || p.request.type === "medula");
       if (!nightRx.some(p => !p.request.fake))
         warn.push("Gün " + d + " gece bölümünde hiç GERÇEK reçete yok (nöbet yalnız redden ibaret kalır)");
       if (sch.patients.slice(0, sch.dayN).some(p => p.night))
@@ -4027,15 +4587,31 @@ function selfTestPatients(days) {
       const r = sch.patients[i].request;
 
       if (r.type === "symptom") {
-        // tam ihtiyaç verilince DAİMA doğru olmalı
-        const cands = MEDICINES.filter(m => m.category === r.symptom.category);
-        if (!cands.length) { warn.push(tag + "semptom '" + r.symptom.label + "' için hiç ilaç yok (kategori: " + r.symptom.category + ")"); continue; }
-        for (const c of cands) {
-          if (!(([c.id]).length === 1 && cands.map(m => m.id).includes(c.id)))
-            warn.push(tag + "'" + r.symptom.label + "' için " + c.name + " doğru sayılmıyor");
+        const items = r.items || [{ symptom: r.symptom, qty: 1 }];
+        if (!items.length) { warn.push(tag + "semptom isteğinde hiç kalem yok"); continue; }
+        if (items.length > 3) warn.push(tag + "semptom isteğinde " + items.length + " kalem (en fazla 3 olmalı)");
+        // (i) her kalem FARKLI kategoriden olmalı
+        const cats = items.map(it => it.symptom.category);
+        if (new Set(cats).size !== cats.length)
+          warn.push(tag + "çok kalemli semptom isteğinde AYNI kategoriden iki kalem var: " + cats.join(", "));
+        // (ii) her kalem için o kategoride en az bir ilaç olmalı + adet 1..2
+        for (const it of items) {
+          const cands = MEDICINES.filter(m => m.category === it.symptom.category);
+          if (!cands.length) warn.push(tag + "semptom '" + it.symptom.label + "' için hiç ilaç yok (kategori: " + it.symptom.category + ")");
+          if (!(it.qty === 1 || it.qty === 2)) warn.push(tag + "semptom kaleminde geçersiz adet: " + it.qty + " (1 veya 2 olmalı)");
+        }
+        if (!r.line) warn.push(tag + "semptom isteğinde konuşma cümlesi (line) üretilmemiş");
+        // (iii) TAM DOĞRU servis daima doğru sayılmalı — gerçek eşleşme koduyla sınanır
+        const want = expectedCategoryList(r);
+        for (const combo of symptomAnswerCombos(items)) {
+          const got = combo.map(id => { const m = getMedicine(id); return m ? m.category : "?"; });
+          if (!sameMultiset(want, got))
+            warn.push(tag + "doğru servis yanlış sayılıyor: [" + combo.join(", ") + "] ↔ istenen [" + want.join(", ") + "]");
         }
         continue;
       }
+
+      if (r.type === "medula") continue;   // Medula kuralları 0d3'te ayrıca sınanıyor
 
       // reçete: tam kalem+adet verilince eşleşme doğru olmalı
       const need = [];
