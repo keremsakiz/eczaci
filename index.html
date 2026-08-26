@@ -70,6 +70,17 @@ const CONFIG = {
   missRateFloor: 0.10,      // oran bunun altına inmez
   goalRatioClamp: [0.40, 0.90],  // hedef/R oranı güvenlik bandı
   daySeedBase: 20260617,    // gün üretimi seed tabanı (değiştirmek tüm günleri yeniden kurar)
+
+  // --- Nöbetçi eczane (aynı günün İKİNCİ bölümü; ayrı gün tipi değil) ---
+  nightDutyEvery: 4,           // her 4. gün nöbetçi (gün 4, 8, 12…)
+  nightPatientRatio: 0.4,      // gündüz müşteri sayısının oranı; taban 3
+  nightPatientMin: 3,          // gece en az bu kadar hasta
+  nightFakeRateBoost: 1.8,     // gece sahte reçete oranı çarpanı
+  nightFakeRateCap: 0.60,      // …ama bu tavanı aşmaz (gecede bile ≥ %40 gerçek)
+  nightPriceMultiplier: 1.25,  // nöbet farkı — YALNIZ gece hastalarının satış fiyatına
+  nightPatienceMultiplier: 1.2,// gece hastası daha sabırlı (gidecek başka yeri yok)
+  nightIntroDuration: 2.2,     // "NÖBET BAŞLIYOR" kartının otomatik kapanma süresi (sn)
+  nightFadeTime: 0.9,          // gece katmanının oturma süresi (sn)
   debugDecisions: true,     // her servis/red kararında konsola teşhis bloğu bas
 
   // --- Stok + ecza deposu (toptancı) ---
@@ -470,7 +481,7 @@ const game = {
   dayScheduleIdx: 0,      // listeden sahneye çıkarılan sıradaki hasta
   daySpawned: 0,          // bu gün sahneye çıkan programlı müşteri sayısı
   dayCompleted: 0,        // bu gün tamamlanan (servis/red/küs) müşteri sayısı
-  dayStats: { served: 0, correct: 0, wrong: 0, angry: 0, money: 0 },
+  dayStats: { served: 0, correct: 0, wrong: 0, angry: 0, money: 0, moneyDay: 0, moneyNight: 0 },
 
   // ilaç sekmeleri
   activeGroup: null,      // seçili kategori (boşsa ilk dolu gruba ayarlanır)
@@ -487,6 +498,9 @@ const game = {
   stock: {},              // ilaç id -> adet (ilaç bazında; günler arası kalıcı)
   depotOpen: false,       // PC ekranı açık mı (modal; oyun donar) — hangi ekran: pcScreen
   pcScreen: "depot",      // "home" | "depot" | "upgrades"
+  phase: "day",           // "day" | "night" — nöbet, günün İKİNCİ bölümü
+  nightT: 0,              // gece katmanı geçiş ilerlemesi (0..1)
+  nightIntro: null,       // "NÖBET BAŞLIYOR" kartı açıkken geçen süre (sn); null = kapalı
   upgrades: {},           // geliştirme id -> seviye (stok gibi kalıcı; startNewGame kurar)
   depotGroup: null,       // depo panelinde seçili kategori (oyun sekmesinden bağımsız)
   depotPending: {},       // ilaç id -> sipariş sepetindeki adet (panel kapanınca sıfırlanır)
@@ -788,13 +802,32 @@ function patientsForDay() {
   return patientLimitFor(game.dayNumber);
 }
 
+// --- NÖBET ---
+// Nöbet, günün ikinci bölümüdür: aynı gün programına night:true hastalar eklenir.
+// Böylece R, C ve hedef mevcut formülle kendiliğinden doğru çıkar (formüle dokunulmadı).
+const _forcedNightDays = {};   // yalnız cheats.forceNight() doldurur; normal oyunda boş
+function isNightDutyDay(day) {
+  if (_forcedNightDays[day]) return true;
+  return CONFIG.nightDutyEvery > 0 && day % CONFIG.nightDutyEvery === 0;
+}
+function nightPatientsFor(day) {
+  if (!isNightDutyDay(day)) return 0;
+  return Math.max(CONFIG.nightPatientMin, Math.round(patientLimitFor(day) * CONFIG.nightPatientRatio));
+}
+// gece sahte reçete ihtimali — çarpan uygulanır ama tavanı aşamaz
+function nightFakeChance() {
+  return Math.min(CONFIG.nightFakeRateCap, CONFIG.fakeChance * CONFIG.nightFakeRateBoost);
+}
+// günün TOPLAM hasta sayısı (gündüz + gece)
+function totalPatientsFor(day) { return patientLimitFor(day) + nightPatientsFor(day); }
+
 // hasta başına izinli hata oranı — gün ilerledikçe daralır, floor'un altına inmez
 function missRateFor(day) {
   return Math.max(CONFIG.missRateFloor, CONFIG.missRateBase - (day - 1) * CONFIG.missRateDecay);
 }
 // o gün kaç yanlış servise tolerans var — müşteri sayısıyla ÖLÇEKLENİR
 function allowedMissesFor(day) {
-  return patientLimitFor(day) * missRateFor(day);
+  return totalPatientsFor(day) * missRateFor(day);
 }
 
 // --- Bir siparişin referans değeri (doğru servis edilirse ciro / mal maliyeti) ---
@@ -802,7 +835,10 @@ function allowedMissesFor(day) {
 // Semptom: o kategorideki ilaçların ORTALAMASI; oyuncu kategoriden herhangi birini
 // verebilir ve hepsi doğru sayılır, tek "doğru fiyat" yoktur. Kategori içi fiyat
 // yayılımı genel havuzdan çok daha dar olduğu için tahmin hatası küçüktür.
-function refValuesFor(request) {
+// priceMul: gece hastalarında CONFIG.nightPriceMultiplier (nöbet farkı). Yalnız SATIŞ
+// fiyatına uygulanır — mal maliyeti (cost) değişmez.
+function refValuesFor(request, priceMul) {
+  const mul = priceMul || 1;
   if (request.type === "prescription") {
     if (request.fake) return { rev: 0, cost: 0, valid: false };   // doğru oynanış = reddetmek
     let rev = 0, cost = 0;
@@ -810,33 +846,44 @@ function refValuesFor(request) {
       const m = getMedicine(it.id);
       if (m) { rev += m.price * it.qty; cost += m.cost * it.qty; }
     }
-    return { rev, cost, valid: true };
+    return { rev: rev * mul, cost, valid: true };
   }
   const cands = MEDICINES.filter(m => m.category === request.symptom.category);
   if (!cands.length) return { rev: 0, cost: 0, valid: false };
   let rev = 0, cost = 0;
   for (const m of cands) { rev += m.price; cost += m.cost; }
-  return { rev: rev / cands.length, cost: cost / cands.length, valid: true };
+  return { rev: (rev / cands.length) * mul, cost: cost / cands.length, valid: true };
 }
 
 // --- Günün tam listesini seed'li üret ve ekonomisini çıkar ---
 // Aynı seed + aynı gün => aynı liste (test edilebilirlik).
 function buildDaySchedule(day) {
-  const N = patientLimitFor(day);
+  const dayN = patientLimitFor(day);
+  const nightN = nightPatientsFor(day);
+  const N = dayN + nightN;
   const prevDateDay = _dateDayOverride;
   _dateDayOverride = day;                 // reçete tarihleri o güne göre damgalansın
   let patients;
   try {
     patients = withSeed(CONFIG.daySeedBase + day * 7919, function () {
       const out = [];
-      for (let i = 0; i < N; i++) out.push(makePatient());
+      for (let i = 0; i < dayN; i++) out.push(makePatient());
+      // NÖBET bölümü — listenin sonuna eklenir, spawn sırayla çektiği için gece sonra gelir
+      for (let i = 0; i < nightN; i++) out.push(makePatient({ night: true }));
+      // Gece bölümünde EN AZ BİR gerçek (servis edilebilir) reçete garanti edilir:
+      // aksi halde nöbet yalnızca red kararlarından ibaret olabiliyor.
+      if (nightN > 0) {
+        const hasReal = out.slice(dayN).some(p => p.request.type === "prescription" && !p.request.fake);
+        if (!hasReal) out[out.length - 1] = makePatient({ night: true, forcePrescription: true, forceFake: false });
+      }
       return out;
     });
   } finally { _dateDayOverride = prevDateDay; }
 
   let R = 0, C = 0, validCount = 0;
   for (const p of patients) {
-    const v = refValuesFor(p.request);
+    // nöbet farkı: gece hastalarının satış fiyatı çarpanlı olarak R'ye girer
+    const v = refValuesFor(p.request, p.night ? CONFIG.nightPriceMultiplier : 1);
     p.refRevenue = v.rev;                 // teşhis/doğrulama için hastada da dursun
     p.refCost = v.cost;
     p.refValid = v.valid;
@@ -852,7 +899,8 @@ function buildDaySchedule(day) {
   // geri alır (gün 1'de hedefi 648.6 → 650 yapıp gereken doğruyu 6'dan 7'ye çıkarıyordu).
   const goal = Math.floor(clamp(raw, R * lo, R * hi) / 10) * 10;
 
-  return { day, patients, N, R, C, validCount, fakeCount: N - validCount, misses, missCost, raw, goal };
+  return { day, patients, N, dayN, nightN, isNight: nightN > 0,
+           R, C, validCount, fakeCount: N - validCount, misses, missCost, raw, goal };
 }
 
 // gün listesi cache'i — hedef sorulunca üretilir, oynanınca AYNI liste kullanılır (iki kez üretilmez)
@@ -995,7 +1043,7 @@ function medulaMarks(req) {
 }
 
 // reçete üret (gerçek/sahte + kusurlar). fakeForce: true/false => zorla; undefined => rastgele
-function makePrescription(fakeForce) {
+function makePrescription(fakeForce, fakeChance) {
   const count = CONFIG.minPrescriptionItems +
     rand(CONFIG.maxPrescriptionItems - CONFIG.minPrescriptionItems + 1);
   const pool = MEDICINES.slice();
@@ -1007,7 +1055,8 @@ function makePrescription(fakeForce) {
     items.push({ id: m.id, qty });
   }
 
-  const fake = (fakeForce === undefined) ? (rng() < CONFIG.fakeChance) : !!fakeForce;
+  const chance = (fakeChance === undefined) ? CONFIG.fakeChance : fakeChance;
+  const fake = (fakeForce === undefined) ? (rng() < chance) : !!fakeForce;
   const flaws = [];
   if (fake) {
     // Sahte reçetenin EN AZ BİR kusuru kağıda bakarak doğrulanabilir olmalı.
@@ -1058,12 +1107,14 @@ function makePrescription(fakeForce) {
 // Gün listesi bunu seed altında toplu çağırır; cheat'ler tek tek çağırır.
 function makePatient(opts) {
   opts = opts || {};
+  const night = !!opts.night;
   const avatarDef = pick(PATIENT_AVATARS);
   const isPrescription = opts.forcePrescription ? true : (rng() < CONFIG.prescriptionChance);
 
   let request;
   if (isPrescription) {
-    request = makePrescription(opts.forceFake);
+    // gece: sahte reçete girişimi artar (tavanla sınırlı)
+    request = makePrescription(opts.forceFake, night ? nightFakeChance() : CONFIG.fakeChance);
   } else {
     const symptom = pick(SYMPTOMS);
     request = { type: "symptom", symptom };
@@ -1079,7 +1130,8 @@ function makePatient(opts) {
     patience: CONFIG.basePatience,
     enterT: 0,
     posCurrent: 0,            // kuyruğa girerken ayarlanır
-    bonus: false              // true => cheat ile enjekte, günün programı dışında
+    bonus: false,             // true => cheat ile enjekte, günün programı dışında
+    night: night              // true => günün NÖBET bölümüne ait
   };
 }
 
@@ -1087,7 +1139,7 @@ function makePatient(opts) {
 function enqueuePatient(patient) {
   // sabır sahneye çıkış anındaki Bekleme Alanı seviyesine göre kurulur (gün ortasında
   // yükseltme yapılırsa sonraki hastalar hemen faydalanır)
-  patient.maxPatience = effPatience();
+  patient.maxPatience = effPatience() * (patient.night ? CONFIG.nightPatienceMultiplier : 1);
   patient.patience = patient.maxPatience;
   patient.posCurrent = game.queue.length + 0.85;   // sağdan kayarak girsin
   game.queue.push(patient);
@@ -1165,7 +1217,7 @@ function rejectPrescription() {
   if (p.request.fake) {
     // doğru yakalama
     game.money += CONFIG.fakeCatchBonus;
-    game.dayStats.money += CONFIG.fakeCatchBonus;
+    addDayMoney(CONFIG.fakeCatchBonus);
     game.dayStats.correct++;
     game.reputation = clamp(game.reputation + CONFIG.fakeCatchRepGain, CONFIG.minReputation, CONFIG.maxReputation);
     game.feedback = { ok: true, angry: false, text: "✓ Sahte reçete yakaladın!  +" + CONFIG.fakeCatchBonus + "₺", t: 0 };
@@ -1320,6 +1372,13 @@ function explainDecision(p, given, verdict, reason) {
   console.log(L.join("\n"));
 }
 
+// Günlük kazanç sayacına yaz — aktif bölüme (gündüz/gece) de ayrı işlenir.
+function addDayMoney(delta) {
+  game.dayStats.money += delta;
+  if (game.phase === "night") game.dayStats.moneyNight += delta;
+  else game.dayStats.moneyDay += delta;
+}
+
 function checkOrder() {
   const p = activePatient();
   if (!servingAllowed() || !p) return;
@@ -1330,7 +1389,7 @@ function checkOrder() {
     game.dayStats.served++;
     game.dayStats.wrong++;
     game.money = Math.max(0, game.money - CONFIG.fakeApproveMoneyPenalty);
-    game.dayStats.money -= CONFIG.fakeApproveMoneyPenalty;
+    addDayMoney(-CONFIG.fakeApproveMoneyPenalty);
     game.feedback = { ok: false, angry: false, text: "⚠️ Sahte reçeteye ilaç verdin!  -" + CONFIG.fakeApproveMoneyPenalty + "₺", t: 0 };
     explainDecision(p, game.counter.slice(), "YANLIŞ", "reçete SAHTE — ilaçlar doğru olsa bile onaylamak hatalı");
     loseReputation(CONFIG.fakeApproveRepLoss);
@@ -1354,8 +1413,9 @@ function checkOrder() {
     // kazanç = servis edilen ilaçların satış fiyatı toplamı (adet dahil; given id tekrarlı liste)
     let earn = 0;
     for (const gid of given) { const gm = getMedicine(gid); if (gm) earn += gm.price; }
+    if (p.night) earn = Math.round(earn * CONFIG.nightPriceMultiplier);   // nöbet farkı
     game.money += earn;
-    game.dayStats.money += earn;
+    addDayMoney(earn);
     game.dayStats.correct++;
     game.reputation = clamp(game.reputation + CONFIG.repGainCorrect, CONFIG.minReputation, CONFIG.maxReputation);
     game.feedback = { ok: true, angry: false, text: "✓ Teşekkürler!  +" + earn + "₺", t: 0 };
@@ -1371,7 +1431,7 @@ function checkOrder() {
     }
     loss = Math.round(loss);
     game.money = Math.max(0, game.money - loss);
-    game.dayStats.money -= loss;
+    addDayMoney(-loss);
     game.dayStats.wrong++;
     game.feedback = { ok: false, angry: false, text: "✗ Yanlış ilaç!  -" + loss + "₺", t: 0 };
     explainDecision(p, given, "YANLIŞ",
@@ -1392,7 +1452,20 @@ function onFeedbackEnd() {
   rebuildCounterSlots();
   if (done && done.bonus) return;          // cheat hastası: günün programına sayılmaz
   game.dayCompleted++;
+  const sch = game.daySchedule;
+  // gündüz bölümü bitti ve o gün nöbetçiyse: DAYEND'e gitme, gece bölümüne geç
+  if (sch && game.phase === "day" && sch.nightN > 0 && game.dayCompleted >= sch.dayN) {
+    beginNightShift();
+    return;
+  }
   if (game.dayCompleted >= patientsForDay()) endDay();
+}
+
+// Gündüz bitti → NÖBET bölümü. Kuyruk boş, kısa geçiş kartı, sahne kararır.
+function beginNightShift() {
+  game.phase = "night";
+  game.nightIntro = 0;                       // geçiş kartı açılır (tap ya da süreyle kapanır)
+  game.spawnTimer = CONFIG.spawnInterval;    // gece ilk hasta hemen dalmasın
 }
 
 function endDay() {
@@ -1418,6 +1491,8 @@ function beginDaySchedule(day) {
 
 function startNextDay() {
   game.dayNumber++;
+  game.phase = "day";
+  game.nightIntro = null;
   game.weather = weatherForDay(game.dayNumber);   // kozmetik; günde bir kez
   beginDaySchedule(game.dayNumber);
   game.spawnTimer = CONFIG.spawnInterval;
@@ -1426,7 +1501,7 @@ function startNextDay() {
   game.queue = [];
   game.counter = [];
   game.feedback = null;
-  game.dayStats = { served: 0, correct: 0, wrong: 0, angry: 0, money: 0 };
+  game.dayStats = { served: 0, correct: 0, wrong: 0, angry: 0, money: 0, moneyDay: 0, moneyNight: 0 };
   rebuildCounterSlots();
   game.state = STATE.PLAYING;
   spawnPatient();
@@ -1451,6 +1526,9 @@ function startNewGame() {
   game.money = CONFIG.startMoney;
   game.reputation = CONFIG.startReputation;
   game.dayNumber = 1;
+  game.phase = "day";
+  game.nightIntro = null;
+  game.nightT = 0;
   game.weather = weatherForDay(1);   // kozmetik; günde bir kez
   beginDaySchedule(1);
   game.spawnTimer = 0;
@@ -1465,7 +1543,7 @@ function startNewGame() {
   game.depotPending = {};
   initUpgrades();         // geliştirmeler yalnızca yeni oyunda sıfırlanır (günler arası kalıcı)
   initStock();            // stok yalnızca yeni oyunda sıfırlanır (günler arası kalıcı)
-  game.dayStats = { served: 0, correct: 0, wrong: 0, angry: 0, money: 0 };
+  game.dayStats = { served: 0, correct: 0, wrong: 0, angry: 0, money: 0, moneyDay: 0, moneyNight: 0 };
   game.state = STATE.PLAYING;
   game.hasRun = true;               // menüde DEVAM ET görünebilir
   rebuildCounterSlots();
@@ -1500,8 +1578,23 @@ function update(dt) {
     if (game.bookT <= 0) { game.bookT = 0; game.bookState = "closed"; }
   }
 
+  // gece katmanı yumuşak otursun (panel açıkken de ilerlesin; ani geçiş olmasın)
+  {
+    const target = (game.phase === "night" && game.state !== STATE.MENU) ? 1 : 0;
+    const step = dt / Math.max(0.01, CONFIG.nightFadeTime);
+    if (game.nightT < target) game.nightT = Math.min(target, game.nightT + step);
+    else if (game.nightT > target) game.nightT = Math.max(target, game.nightT - step);
+  }
+
   // depo paneli açıkken oyun donsun (sabır/spawn/feedback işlemesin) — clock akmaya devam eder
   if (game.depotOpen) return;
+
+  // "NÖBET BAŞLIYOR" kartı açıkken oyun donar (depo paneliyle aynı kalıp)
+  if (game.nightIntro !== null) {
+    game.nightIntro += dt;
+    if (game.nightIntro >= CONFIG.nightIntroDuration) game.nightIntro = null;
+    return;
+  }
 
   if (game.state !== STATE.PLAYING) return;
 
@@ -1643,6 +1736,27 @@ function drawHUD() {
   text("%" + pct, rx + rw - rpad, y1, fs1, c.neon, "right", "800");
   text("💵", rx + rpad, y2, fs2, "#000", "left", "400");
   fitText(formatMoney(game.money), rx + rw - rpad, y2, rw * 0.64, fs2, "#8fe3a8", "right", "800");
+
+  // NÖBET rozeti — sol kutu ile EV butonu arasındaki boşlukta (HUD düzeni değişmez).
+  // Nöbet günü boyunca durur; gece bölümünde dolgusu parlar.
+  if (isNightDutyDay(game.dayNumber)) {
+    // Rozet, sol kutu ile EV butonu arasındaki BOŞLUĞA sığdırılır (ikisine de binmez).
+    const homeS = hud.h * 0.78;                       // EV butonu ölçüsü (aşağıda aynısı)
+    const gapL = hud.x + lw;                          // sol kutunun sağ kenarı
+    const gapR = hud.x + hud.w / 2 - homeS / 2;       // EV butonunun sol kenarı
+    const bs = Math.min(hud.h * 0.56, Math.max(0, gapR - gapL) * 0.78);
+    const bx = gapL + ((gapR - gapL) - bs) / 2;       // boşlukta ortala
+    const by = hud.y + (hud.h - bs) / 2;
+    if (bs > hud.h * 0.18) {
+    const on = game.phase === "night";
+    ctx.save();
+    ctx.globalAlpha = on ? 1 : 0.75;
+    fillRoundRect(bx, by, bs, bs, bs * 0.30, on ? "rgba(96, 78, 168, 0.95)" : "rgba(40, 34, 68, 0.85)");
+    strokeRoundRect(bx, by, bs, bs, bs * 0.30, on ? "#c9b6ff" : "rgba(160, 140, 235, 0.7)", Math.max(1.5, bs * 0.07));
+    text("🌙", bx + bs / 2, by + bs / 2 + bs * 0.03, bs * 0.56, "#000", "center", "400");
+    ctx.restore();
+    }
+  }
 
   // ORTA: kare EV butonu — menüye döner (oyun verisi silinmez)
   const hs = hud.h * 0.78;
@@ -1967,6 +2081,82 @@ function drawBookOverlay() {
     drawOpenBookImage(cur);
     ctx.globalAlpha = 1;
   }
+}
+
+// --- GECE KATMANI ---
+// Yeni asset yok: mevcut sahnenin üzerine koyu mavi/mor bir katman + tezgahta sıcak ışık.
+// drawBackground'ın hemen ardından çizilir; hasta/tezgah/UI üstte kalır (lambanın altı).
+function drawNightOverlay() {
+  const t = game.nightT || 0;
+  if (t <= 0.002) return;
+  const w = layout.w, h = layout.h;
+
+  ctx.save();
+  ctx.globalCompositeOperation = "multiply";
+  ctx.globalAlpha = 0.66 * t;
+  const g = ctx.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, "#2a2560");      // üstte gece mavisi
+  g.addColorStop(0.55, "#3b2f6b");   // ortada mor
+  g.addColorStop(1, "#4a3a70");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+  ctx.restore();
+
+  // tezgah aydınlatması sıcak kalsın — bandın üstüne yumuşak amber hâle
+  const b = layout._band;
+  if (b) {
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.globalAlpha = 0.30 * t;
+    const cx = b.x + b.w / 2, cy = b.y;
+    const rad = Math.max(b.w * 0.75, b.h * 3);
+    const rg = ctx.createRadialGradient(cx, cy, b.h * 0.15, cx, cy, rad);
+    rg.addColorStop(0, "rgba(255, 196, 120, 0.95)");
+    rg.addColorStop(0.55, "rgba(255, 170, 80, 0.28)");
+    rg.addColorStop(1, "rgba(255, 160, 70, 0)");
+    ctx.fillStyle = rg;
+    ctx.fillRect(cx - rad, cy - rad, rad * 2, rad * 2);
+    ctx.restore();
+  }
+}
+
+// --- "NÖBET BAŞLIYOR" geçiş kartı --- (mevcut kart dili: koyu panel + amber şerit)
+function drawNightIntro() {
+  if (game.nightIntro === null || game.nightIntro === undefined) return;
+  const c = CONFIG.colors, S = layout.stage;
+  const dur = CONFIG.nightIntroDuration;
+  const t = clamp(game.nightIntro / dur, 0, 1);
+  // kısa fade-in / fade-out (ani girip ani çıkmasın)
+  const a = clamp(Math.min(game.nightIntro / 0.25, (dur - game.nightIntro) / 0.35), 0, 1);
+
+  ctx.save();
+  ctx.globalAlpha = a;
+  ctx.fillStyle = "rgba(10, 8, 24, 0.62)";
+  ctx.fillRect(0, 0, layout.w, layout.h);
+
+  const cardW = S.w * 0.74, cardH = S.h * 0.20;
+  const cardX = S.x + (S.w - cardW) / 2;
+  const cardY = S.y + (S.h - cardH) / 2;
+  const cr = cardW * 0.08;
+  drawPanel(cardX, cardY, cardW, cardH, cr, c.panelBgSolid);
+
+  const headerH = cardH * 0.34;
+  ctx.save();
+  roundRect(cardX, cardY, cardW, cardH, cr);
+  ctx.clip();
+  ctx.fillStyle = "#4a3a86";                      // gece moru şerit
+  ctx.fillRect(cardX, cardY, cardW, headerH);
+  ctx.restore();
+  fitText("🌙 NÖBET BAŞLIYOR", cardX + cardW / 2, cardY + headerH / 2, cardW * 0.86, headerH * 0.50,
+    "#f0e6ff", "center", "800");
+
+  const sch = game.daySchedule;
+  const n = sch ? sch.nightN : 0;
+  fitText(n + " gece hastası bekleniyor", cardX + cardW / 2, cardY + headerH + (cardH - headerH) * 0.34,
+    cardW * 0.84, cardH * 0.115, c.cream, "center", "700");
+  fitText("Sahte reçete girişimi artar — dikkatli incele", cardX + cardW / 2,
+    cardY + headerH + (cardH - headerH) * 0.66, cardW * 0.86, cardH * 0.095, c.creamSoft, "center", "600");
+  ctx.restore();
 }
 
 // Krem/açık zeminli kuyruklu konuşma balonu (Büfeci kalıbı) — semptom + reçete replikleri
@@ -2492,8 +2682,12 @@ function drawDayEnd() {
   const btnH = fs * 2.2;
   const pillH = fs * 1.3;
   let padBottom = rowStep * 0.6;
-  const nRows = 5;
-  const stackH = () => headerH + padTop + nRows * rowStep + gap + goalH + gap + btnH + gap + pillH + padBottom;
+  const wasNight = !!(game.daySchedule && game.daySchedule.day === game.dayNumber && game.daySchedule.isNight);
+  const nextIsNight = isNightDutyDay(game.dayNumber + 1);
+  const nRows = 5 + (wasNight ? 2 : 0);            // nöbet gecesi: gündüz + gece kazancı ayrı satır
+  const warnH = nextIsNight ? fs * 1.5 : 0;        // "yarın nöbetçisin" uyarı şeridi
+  const warnGap = nextIsNight ? gap * 0.7 : 0;
+  const stackH = () => headerH + padTop + nRows * rowStep + gap + goalH + warnGap + warnH + gap + btnH + gap + pillH + padBottom;
   let cardH = stackH();
   const maxH = S.h * 0.88;
   if (cardH > maxH) {                 // taşma: satır aralığından değil, alt boşluktan kırp
@@ -2516,8 +2710,8 @@ function drawDayEnd() {
   ctx.fillStyle = c.accent;
   ctx.fillRect(cardX, cardY, cardW, headerH);
   ctx.restore();
-  text("🌙 Gün " + game.dayNumber + " Bitti", cardX + cardW / 2, cardY + headerH / 2,
-    fs * 1.2, "#1a1410", "center", "800");
+  text((wasNight ? "🌙 Gün " + game.dayNumber + " + Nöbet Bitti" : "🌙 Gün " + game.dayNumber + " Bitti"),
+    cardX + cardW / 2, cardY + headerH / 2, fs * 1.2, "#1a1410", "center", "800");
 
   // istatistik satırları
   const lx = cardX + cardW * 0.12;
@@ -2532,6 +2726,10 @@ function drawDayEnd() {
   row("✓", "Doğru", String(s.correct));
   row("✗", "Yanlış", String(s.wrong));
   row("😠", "Küsen müşteri", String(s.angry));
+  if (wasNight) {
+    row("☀️", "Gündüz kazancı", Math.round(s.moneyDay) + "₺");
+    row("🌙", "Gece kazancı", Math.round(s.moneyNight) + "₺");
+  }
   row("💰", "Günlük kazanç", s.money + "₺");
 
   // hedef durumu rozeti
@@ -2546,10 +2744,19 @@ function drawDayEnd() {
   strokeRoundRect(cardX + cardW * 0.08, goalY, cardW * 0.84, goalH, goalH * 0.5, goalCol, 1.5);
   text(goalTxt, cardX + cardW / 2, goalY + goalH / 2, fs * 0.95, goalCol, "center", "800");
 
+  // "Yarın nöbetçisin" uyarısı — oyuncu depoya gidip hazırlanabilsin
+  if (nextIsNight) {
+    const wY = goalY + goalH + warnGap;
+    fillRoundRect(cardX + cardW * 0.08, wY, cardW * 0.84, warnH, warnH * 0.5, "rgba(90, 74, 150, 0.30)");
+    strokeRoundRect(cardX + cardW * 0.08, wY, cardW * 0.84, warnH, warnH * 0.5, "rgba(160, 140, 235, 0.85)", 1.5);
+    fitText("🌙 Yarın nöbetçisin — stoklarını kontrol et", cardX + cardW / 2, wY + warnH / 2,
+      cardW * 0.78, fs * 0.88, "#d8ccff", "center", "800");
+  }
+
   // Sonraki Gün butonu (neon)
   const bW = cardW * 0.7;
   const bX = cardX + (cardW - bW) / 2;
-  const bY = goalY + goalH + gap;
+  const bY = goalY + goalH + warnGap + warnH + gap;
   layout.nextDayBtn = { x: bX, y: bY, w: bW, h: btnH };
   fillRoundRect(bX, bY, bW, btnH, btnH * 0.34, c.btnDark);
   ctx.save();
@@ -2990,6 +3197,7 @@ function render() {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.clearRect(0, 0, layout.w, layout.h);
   drawBackground();
+  if (game.state !== STATE.MENU) drawNightOverlay();   // nöbet gecesi tonlaması
 
   if (game.state === STATE.PLAYING) {
     drawHUD();
@@ -3027,6 +3235,7 @@ function render() {
     drawGameOver();
   }
 
+  drawNightIntro();                   // "NÖBET BAŞLIYOR" geçiş kartı (modal)
   if (game.depotOpen) drawPcPanel();  // PC paneli (PLAYING/DAYEND üstünde modal)
   drawBookOverlay();   // defter açılma animasyonu + açık panel (en üstte)
 }
@@ -3187,6 +3396,7 @@ function handleTap(px, py) {
   }
 
   // depo paneli açıkken modal: içi işle, ✕/dışarı kapat, gerisini yut
+  if (game.nightIntro !== null) { game.nightIntro = null; return; }   // geçiş kartı: tek dokunuş
   if (game.depotOpen) { handlePcTap(px, py); return; }
 
   if (game.state === STATE.MENU) {
@@ -3405,6 +3615,48 @@ window.cheats = {
     explainDecision(p, game.counter.slice(), "(karar verilmedi)", "explainPatient — mevcut tezgah durumu");
     CONFIG.debugDecisions = prev;
     return p.request;
+  },
+  nightDuty() {
+    const rows = {};
+    let listed = 0;
+    for (let d = game.dayNumber; d <= game.dayNumber + 40 && listed < 6; d++) {
+      if (!isNightDutyDay(d)) continue;
+      const sch = getDaySchedule(d);
+      const nightPs = sch.patients.filter(p => p.night);
+      const nightRx = nightPs.filter(p => p.request.type === "prescription");
+      rows["Gün " + d] = {
+        gündüz: sch.dayN,
+        gece: sch.nightN,
+        toplam: sch.N,
+        "gece reçete": nightRx.length,
+        "gece sahte": nightRx.filter(p => p.request.fake).length,
+        "gece cirosu": Math.round(nightPs.reduce((a, p) => a + p.refRevenue, 0)) + "₺",
+        hedef: sch.goal + "₺"
+      };
+      listed++;
+    }
+    console.log("Nöbet: her " + CONFIG.nightDutyEvery + ". gün | gece oranı " + CONFIG.nightPatientRatio +
+      " (taban " + CONFIG.nightPatientMin + ") | gece sahte ihtimali " + nightFakeChance().toFixed(3) +
+      " (tavan " + CONFIG.nightFakeRateCap + ") | nöbet farkı ×" + CONFIG.nightPriceMultiplier);
+    console.table(rows);
+    return rows;
+  },
+  forceNight() {
+    const d = game.dayNumber;
+    _forcedNightDays[d] = true;          // yalnız test; normal üretimi etkilemez
+    invalidateDaySchedules();
+    beginDaySchedule(d);
+    const sch = game.daySchedule;
+    game.dayScheduleIdx = sch.dayN;      // gündüz bölümünü tamamlanmış say
+    game.dayCompleted = sch.dayN;
+    game.daySpawned = sch.dayN;
+    game.queue = []; game.counter = []; game.feedback = null;
+    rebuildCounterSlots();
+    game.state = STATE.PLAYING;
+    beginNightShift();
+    spawnPatient();
+    console.log("Gün " + d + " nöbete çevrildi: " + sch.dayN + " gündüz + " + sch.nightN + " gece, hedef " + sch.goal + "₺");
+    return sch;
   },
   upgrades() {
     const out = {};
@@ -3739,6 +3991,31 @@ function selfTestPatients(days) {
       warn.push("Medula ipucu SAHTELİK SIZDIRIYOR: sahtelerin %" + Math.round(fakeRate * 100) +
         "'inde, gerçeklerin %" + Math.round(realRate * 100) + "'inde işaret var (eşit olmalı) — " +
         "işaretin varlığı reçetenin sahte olduğunu ele veriyor");
+    }
+  }
+
+  // 0e) NÖBET kuralları
+  if (nightFakeChance() > CONFIG.nightFakeRateCap + 1e-9)
+    warn.push("Gece sahte oranı tavanı aşıyor: " + nightFakeChance().toFixed(3) + " > " + CONFIG.nightFakeRateCap);
+  if (CONFIG.nightFakeRateCap > 0.6 + 1e-9)
+    warn.push("Gece sahte tavanı %60'ı aşıyor — gecede en az %40 gerçek reçete kalmalı");
+  for (let d = 1; d <= days; d++) {
+    const sch = getDaySchedule(d);
+    const nightPs = sch.patients.filter(p => p.night);
+    if (isNightDutyDay(d)) {
+      if (sch.nightN < CONFIG.nightPatientMin)
+        warn.push("Gün " + d + " nöbetçi ama gece hastası " + sch.nightN + " (< " + CONFIG.nightPatientMin + ")");
+      if (nightPs.length !== sch.nightN)
+        warn.push("Gün " + d + ": night işaretli hasta sayısı (" + nightPs.length + ") nightN (" + sch.nightN + ") ile uyuşmuyor");
+      const nightRx = nightPs.filter(p => p.request.type === "prescription");
+      if (!nightRx.some(p => !p.request.fake))
+        warn.push("Gün " + d + " gece bölümünde hiç GERÇEK reçete yok (nöbet yalnız redden ibaret kalır)");
+      if (sch.patients.slice(0, sch.dayN).some(p => p.night))
+        warn.push("Gün " + d + ": gündüz bölümünde night:true hasta var (sıralama bozuk)");
+    } else {
+      if (nightPs.length)
+        warn.push("Gün " + d + " nöbetçi DEĞİL ama " + nightPs.length + " gece hastası var");
+      if (sch.nightN !== 0) warn.push("Gün " + d + " nöbetçi değil ama nightN=" + sch.nightN);
     }
   }
 
