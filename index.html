@@ -29,6 +29,8 @@
 //  CONFIG — tüm sayısal ayarlar burada
 // =====================================================================
 const CONFIG = {
+  // startMoney: MEDICINES ortalamalarindan turetilir (asagida deriveEconomy ile atanir).
+  // Amac: oyuncu ilk depo siparisini rahat versin, ikincisinde zorlansin.
   startMoney: 0,
   startReputation: 50,
   maxReputation: 100,
@@ -41,10 +43,10 @@ const CONFIG = {
   // --- Sahte reçete inceleme ---
   fakeChance: 0.28,             // reçetenin sahte olma ihtimali
   fakeApproveRepLoss: 15,       // sahteyi onaylayıp ilaç verince itibar cezası
-  fakeApproveMoneyPenalty: 50,  // sahteyi onaylayınca para cezası (₺)
+  fakeApproveMoneyPenalty: 0,   // sahteyi onaylayınca para cezası (₺) — deriveEconomy: round(avgPrice × 2)
   fakeCatchRepGain: 8,          // sahteyi reddedince (yakalayınca) itibar
   fakeCatchBonus: 20,           // sahteyi yakalayınca küçük para bonusu (₺)
-  wrongRejectRepLoss: 5,        // gerçeği yanlışlıkla reddedince itibar cezası
+  wrongRejectRepLoss: 5,        // gerçeği yanlışlıkla reddedince itibar cezası (PARA CEZASI YOK — sadece satış kaybı)
 
   prescriptionChance: 0.5,  // %50 reçeteli, %50 semptomlu
   minPrescriptionItems: 1,
@@ -57,7 +59,18 @@ const CONFIG = {
   // --- Gün = müşteri limiti (süre değil) ---
   patientsPerDayBase: 8,    // gün 1 müşteri hedefi
   patientsPerDayStep: 2,    // her gün +2 müşteri (gün2=10, gün3=12...)
-  dailyGoal: 150,           // gün başı hedef para (gerçek hedef = dailyGoal * gün no)
+  // --- Günlük para hedefi: ORANSAL TOLERANS + GERÇEK GÜN LİSTESİ ---
+  // Tolerans müşteri sayısıyla ölçeklenir (sabit hata payı büyüyen günde kusursuzluk
+  // dayatıyordu). Hedef, o günün ÖNCEDEN ÜRETİLMİŞ gerçek hasta listesinden hesaplanır:
+  //   izinliHata(gün) = N × missRate(gün)
+  //   hedef(gün)      = floor10( clamp( R − izinliHata × missCost, R×0.40, R×0.90 ) )
+  // R/C/missCost o güne özel gerçek rakamlar (avgPrice/avgCost tahmini değil).
+  missRateBase: 0.25,       // gün 1'de hasta başına izinli hata oranı
+  missRateDecay: 0.015,     // her gün orandan düşen miktar
+  missRateFloor: 0.10,      // oran bunun altına inmez
+  goalRatioClamp: [0.40, 0.90],  // hedef/R oranı güvenlik bandı
+  daySeedBase: 20260617,    // gün üretimi seed tabanı (değiştirmek tüm günleri yeniden kurar)
+  debugDecisions: true,     // her servis/red kararında konsola teşhis bloğu bas
 
   // --- Stok + ecza deposu (toptancı) ---
   startStock: 10,           // her ilaç için oyun başı stok
@@ -133,16 +146,16 @@ const CONFIG = {
 const MEDICINES = [
   // cost = depodan alış (₺), price = hastaya satış (₺). Kâr oranı ilaca göre değişir
   // (temel ağrı kesici ~%18, vitamin ~%40). 2026 TR eczane gerçekçiliğinde elle ayarlı.
-  { id: "agriban",   name: "Ağrıban",     emoji: "💊", color: "#f08a8a", category: "ağrı",       group: "agri_ates",   cost: 34,  price: 42,  assetKey: "med_agriban" },
-  { id: "oksurmez",  name: "Öksürmez",    emoji: "🍯", color: "#f4b160", category: "öksürük",    group: "soguk",       cost: 51,  price: 68,  assetKey: "med_oksurmez" },
-  { id: "nezleson",  name: "Nezleson",    emoji: "🤧", color: "#7fb4e8", category: "nezle",      group: "soguk",       cost: 44,  price: 57,  assetKey: "med_nezleson" },
-  { id: "cvitamin",  name: "C-Vitamin+",  emoji: "🍊", color: "#f6d35b", category: "bağışıklık", group: "vitamin",     cost: 69,  price: 115, assetKey: "med_cvitamin" },
-  { id: "miderahat", name: "Miderahat",   emoji: "🌿", color: "#86cf9a", category: "mide",       group: "sindirim",    cost: 40,  price: 52,  assetKey: "med_miderahat" },
-  { id: "bandajix",  name: "Bandajix",    emoji: "🩹", color: "#f3a8c4", category: "yara",       group: "ilk_yardim",  cost: 23,  price: 29,  assetKey: "med_bandajix" },
-  { id: "atesdus",   name: "Ateşdüş",     emoji: "🌡️", color: "#b07fd6", category: "ates",       group: "agri_ates",   cost: 43,  price: 55,  assetKey: "med_atesdus" },
-  { id: "alerjin",   name: "Alerjin",     emoji: "🤧", color: "#bfe39a", category: "alerji",     group: "alerji",      cost: 62,  price: 89,  assetKey: "med_alerjin" },
-  { id: "goznur",    name: "Göznur",      emoji: "👁️", color: "#5fd0c5", category: "goz",        group: "goz_kulak",   cost: 63,  price: 87,  assetKey: "med_goznur" },
-  { id: "uykutas",   name: "Uykutaş",     emoji: "😴", color: "#5566b0", category: "uyku",       group: "uyku_sinir",  cost: 92,  price: 132, assetKey: "med_uykutas" },
+  { id: "agriban",   name: "Ağrıban",     emoji: "💊", color: "#f08a8a", category: "Ağrı/Ateş",       group: "agri_ates",   cost: 34,  price: 42,  assetKey: "med_agriban" },
+  { id: "oksurmez",  name: "Öksürmez",    emoji: "🍯", color: "#f4b160", category: "Soğuk Algınlığı",  group: "soguk",       cost: 51,  price: 68,  assetKey: "med_oksurmez" },
+  { id: "nezleson",  name: "Nezleson",    emoji: "🤧", color: "#7fb4e8", category: "Soğuk Algınlığı",  group: "soguk",       cost: 44,  price: 57,  assetKey: "med_nezleson" },
+  { id: "cvitamin",  name: "C-Vitamin+",  emoji: "🍊", color: "#f6d35b", category: "Vitamin/Takviye",  group: "vitamin",     cost: 69,  price: 115, assetKey: "med_cvitamin" },
+  { id: "miderahat", name: "Miderahat",   emoji: "🌿", color: "#86cf9a", category: "Sindirim",         group: "sindirim",    cost: 40,  price: 52,  assetKey: "med_miderahat" },
+  { id: "bandajix",  name: "Bandajix",    emoji: "🩹", color: "#f3a8c4", category: "İlk Yardım",       group: "ilk_yardim",  cost: 23,  price: 29,  assetKey: "med_bandajix" },
+  { id: "atesdus",   name: "Ateşdüş",     emoji: "🌡️", color: "#b07fd6", category: "Ağrı/Ateş",       group: "agri_ates",   cost: 43,  price: 55,  assetKey: "med_atesdus" },
+  { id: "alerjin",   name: "Alerjin",     emoji: "🤧", color: "#bfe39a", category: "Alerji",           group: "alerji",      cost: 62,  price: 89,  assetKey: "med_alerjin" },
+  { id: "goznur",    name: "Göznur",      emoji: "👁️", color: "#5fd0c5", category: "Göz/Kulak/Burun",  group: "goz_kulak",   cost: 63,  price: 87,  assetKey: "med_goznur" },
+  { id: "uykutas",   name: "Uykutaş",     emoji: "😴", color: "#5566b0", category: "Sinir/Uyku",       group: "uyku_sinir",  cost: 92,  price: 132, assetKey: "med_uykutas" },
 
   // --- Genişletilmiş havuz (görselsiz; emoji+color fallback, PNG gelince otomatik giyer) ---
   { id: "med_bassakin",     name: "Başsakin",      emoji: "💊", color: "#d24a4a", category: "Ağrı/Ateş",        group: "agri_ates",   cost: 31,  price: 38,  assetKey: "med_bassakin" },
@@ -183,6 +196,26 @@ const MEDICINES = [
   { id: "med_kasintidur",   name: "Kaşıntıdur",    emoji: "🚫", color: "#6a9ad8", category: "Alerji",           group: "alerji",      cost: 52,  price: 74,  assetKey: "med_kasintidur" }
 ];
 
+// =====================================================================
+//  TÜRETİLEN EKONOMİ — tüm denge sayıları MEDICINES'ten hesaplanır (sabit yok)
+// =====================================================================
+const MED_AVG = (function () {
+  let sp = 0, sc = 0;
+  for (const m of MEDICINES) { sp += m.price; sc += m.cost; }
+  const n = MEDICINES.length || 1;
+  return { price: sp / n, cost: sc / n };
+})();
+const avgPrice = MED_AVG.price;   // tüm ilaçların ortalama satış fiyatı (₺)
+const avgCost  = MED_AVG.cost;    // tüm ilaçların ortalama alış fiyatı (₺)
+
+// CONFIG'in fiyat türevli alanlarını doldur (CONFIG yukarıda tanımlı, game aşağıda kurulur)
+// NOT: missCost artık genel ortalamadan değil, her günün kendi listesinden hesaplanır
+// (buildDaySchedule). Buradaki ortalamalar yalnız startMoney ve sabit para cezası için.
+(function deriveEconomy() {
+  CONFIG.startMoney = Math.round(avgCost * 30 / 100) * 100;          // 100'e yuvarlı
+  CONFIG.fakeApproveMoneyPenalty = Math.round(avgPrice * 2);         // sahteyi servis etme cezası
+})();
+
 // Kategori sekmeleri (ölçeklenebilir; boş gruplar otomatik gizlenir)
 const GROUPS = [
   { id: "agri_ates",  emoji: "💊", label: "Ağrı" },
@@ -200,17 +233,20 @@ function medsInGroup(gid) { return MEDICINES.filter(m => m.group === gid); }
 function groupsWithMeds() { return GROUPS.filter(g => MEDICINES.some(m => m.group === g.id)); }
 
 // semptom emojileri -> kategori eşleşmesi (semptomlu hastalar için)
+// KATEGORİ = SEKME ile 1:1. Eskiden aynı rahatsızlığın iki ayrı kategorisi vardı
+// ("ağrı" + "Ağrı/Ateş", "alerji" + "Alerji" …); aynı sekmedeki doğru görünen ilaç
+// yanlış sayılıyordu. Tek taksonomiye indirildi — boot self-test bunu koruyor.
 const SYMPTOMS = [
-  { emoji: "🤕", category: "ağrı",       label: "Başım ağrıyor" },
-  { emoji: "😷", category: "öksürük",    label: "Öksürüyorum" },
-  { emoji: "🤧", category: "nezle",      label: "Nezle oldum" },
-  { emoji: "🥶", category: "bağışıklık", label: "Hâlsizim" },
-  { emoji: "🤢", category: "mide",       label: "Midem bulanıyor" },
-  { emoji: "🩸", category: "yara",       label: "Yaralandım" },
-  { emoji: "🌡️", category: "ates",       label: "Ateşim var" },
-  { emoji: "🤧", category: "alerji",     label: "Alerjim azdı" },
-  { emoji: "👁️", category: "goz",        label: "Gözüm yanıyor" },
-  { emoji: "😴", category: "uyku",       label: "Uyuyamıyorum" },
+  { emoji: "🤕", category: "Ağrı/Ateş",       label: "Başım ağrıyor" },
+  { emoji: "😷", category: "Soğuk Algınlığı", label: "Öksürüyorum" },
+  { emoji: "🤧", category: "Soğuk Algınlığı", label: "Nezle oldum" },
+  { emoji: "🥶", category: "Vitamin/Takviye", label: "Hâlsizim" },
+  { emoji: "🤢", category: "Sindirim",        label: "Midem bulanıyor" },
+  { emoji: "🩸", category: "İlk Yardım",      label: "Yaralandım" },
+  { emoji: "🌡️", category: "Ağrı/Ateş",       label: "Ateşim var" },
+  { emoji: "🤧", category: "Alerji",          label: "Alerjim azdı" },
+  { emoji: "👁️", category: "Göz/Kulak/Burun", label: "Gözüm yanıyor" },
+  { emoji: "😴", category: "Sinir/Uyku",      label: "Uyuyamıyorum" },
 
   // genişletilmiş havuz (grup okunur adlarıyla eşleşir)
   { emoji: "🤕", category: "Ağrı/Ateş",       label: "Başım çok ağrıyor" },
@@ -227,7 +263,7 @@ const SYMPTOMS = [
   { emoji: "⚡", category: "Vitamin/Takviye", label: "Sürekli yorgunum" },
   { emoji: "👂", category: "Göz/Kulak/Burun", label: "Kulağım ağrıyor" },
   { emoji: "👓", category: "Göz/Kulak/Burun", label: "Gözüm bulanık görüyor" },
-  { emoji: "🌬️", category: "Göz/Kulak/Burun", label: "Burnum akıyor" },
+  { emoji: "🌬️", category: "Alerji",           label: "Burnum akıyor" },
   { emoji: "🔥", category: "İlk Yardım",       label: "Elimi yaktım" },
   { emoji: "🩹", category: "İlk Yardım",       label: "Yaram var" },
   { emoji: "✨", category: "İlk Yardım",       label: "Kesik mikrop kapmasın" },
@@ -237,7 +273,7 @@ const SYMPTOMS = [
   { emoji: "🧴", category: "Cilt/Dış",        label: "Cildim çok kuru" },
   { emoji: "🧼", category: "Cilt/Dış",        label: "Sivilcelerim çıktı" },
   { emoji: "🦶", category: "Cilt/Dış",        label: "Ayağımda mantar var" },
-  { emoji: "🚫", category: "Cilt/Dış",        label: "Çok kaşınıyorum" }
+  { emoji: "🚫", category: "Alerji",           label: "Çok kaşınıyorum" }
 ];
 
 // Reçeteli hastanın baş üstü balon replikleri — SPAWN'DA bir kez seçilir (frame'de rastgele yok)
@@ -278,9 +314,9 @@ const KNOWN_DOCTORS = [
 const FAKE_DOCTORS = [
   { name: "Dr. Ayşe Kılıçarslan",  sig: "AKılıçarslan" },
   { name: "Dr. Mehmet Doğanay",    sig: "MDoğanay" },
-  { name: "Dr. Zeynep Kayahan",    sig: "ZKayahan" },
+  { name: "Dr. Sibel Kayahan",     sig: "SKayahan" },   // eski ad "Zeynep": defterdeki "Zeynep Kaya" ile ad AYNI + soyad öneki — ayırt edilemiyordu
   { name: "Dr. Cenk Özkan",        sig: "CÖzkan" },
-  { name: "Dr. Elif Şahiner",      sig: "EŞahiner" },
+  { name: "Dr. Nurcan Şahiner",    sig: "NŞahiner" },   // eski ad "Elif": defterdeki "Elif Şahin" ile ad AYNI + soyad öneki
   { name: "Dr. Murat Aydoğdu",     sig: "MAydoğdu" },
   { name: "Dr. Fatih Çelikkol",    sig: "FÇelikkol" },
   { name: "Dr. Aylin Koçak",       sig: "AKoçak" },
@@ -370,7 +406,9 @@ const game = {
   dayNumber: 1,
   weather: null,          // günün kozmetik havası [ad, emoji]; gün başında weatherForDay ile seçilir
   spawnTimer: 0,          // yeni hasta sayacı
-  daySpawned: 0,          // bu gün üretilen müşteri sayısı
+  daySchedule: null,      // o günün ÖNCEDEN üretilmiş hasta listesi + ekonomisi (hedef bundan)
+  dayScheduleIdx: 0,      // listeden sahneye çıkarılan sıradaki hasta
+  daySpawned: 0,          // bu gün sahneye çıkan programlı müşteri sayısı
   dayCompleted: 0,        // bu gün tamamlanan (servis/red/küs) müşteri sayısı
   dayStats: { served: 0, correct: 0, wrong: 0, angry: 0, money: 0 },
 
@@ -640,21 +678,133 @@ function buildShelf() {
 //  OYUN MANTIĞI
 // =====================================================================
 function getMedicine(id) { return MEDICINES.find(m => m.id === id); }
-function rand(n) { return Math.floor(Math.random() * n); }
+
+// --- Değiştirilebilir rastgelelik kaynağı ---
+// Normalde Math.random; gün listesi üretilirken withSeed() bunu seed'li RNG ile değiştirir.
+// Böylece üretim kodu (makePrescription, makePatient…) hiç değişmeden deterministik olur.
+let _rngSource = Math.random;
+function rng() { return _rngSource(); }
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+// fn'i seed'li RNG altında çalıştırır. pickKnownDoctor game.lastDoctor'a bakıp yazdığı için
+// o da izole edilir — aynı seed + aynı gün her zaman aynı listeyi verir.
+function withSeed(seed, fn) {
+  const prevSrc = _rngSource, prevDoc = game.lastDoctor;
+  _rngSource = mulberry32(seed);
+  try { return fn(); }
+  finally { _rngSource = prevSrc; game.lastDoctor = prevDoc; }
+}
+
+function rand(n) { return Math.floor(rng() * n); }
 function pick(arr) { return arr[rand(arr.length)]; }
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 function lerp(a, b, t) { return a + (b - a) * t; }
 
 function activePatient() { return game.queue.length ? game.queue[0] : null; }
 
-function goalForDay() { return CONFIG.dailyGoal * game.dayNumber; }
-function patientsForDay() { return CONFIG.patientsPerDayBase + (game.dayNumber - 1) * CONFIG.patientsPerDayStep; }
+// o günün müşteri limiti (gün bağımsız hesap; hedef fonksiyonu da bunu kullanır)
+function patientLimitFor(day) { return CONFIG.patientsPerDayBase + (day - 1) * CONFIG.patientsPerDayStep; }
+function patientsForDay() { return patientLimitFor(game.dayNumber); }
+
+// hasta başına izinli hata oranı — gün ilerledikçe daralır, floor'un altına inmez
+function missRateFor(day) {
+  return Math.max(CONFIG.missRateFloor, CONFIG.missRateBase - (day - 1) * CONFIG.missRateDecay);
+}
+// o gün kaç yanlış servise tolerans var — müşteri sayısıyla ÖLÇEKLENİR
+function allowedMissesFor(day) {
+  return patientLimitFor(day) * missRateFor(day);
+}
+
+// --- Bir siparişin referans değeri (doğru servis edilirse ciro / mal maliyeti) ---
+// Reçete: kalemlerin adetli price/cost toplamı — kesin.
+// Semptom: o kategorideki ilaçların ORTALAMASI; oyuncu kategoriden herhangi birini
+// verebilir ve hepsi doğru sayılır, tek "doğru fiyat" yoktur. Kategori içi fiyat
+// yayılımı genel havuzdan çok daha dar olduğu için tahmin hatası küçüktür.
+function refValuesFor(request) {
+  if (request.type === "prescription") {
+    if (request.fake) return { rev: 0, cost: 0, valid: false };   // doğru oynanış = reddetmek
+    let rev = 0, cost = 0;
+    for (const it of request.items) {
+      const m = getMedicine(it.id);
+      if (m) { rev += m.price * it.qty; cost += m.cost * it.qty; }
+    }
+    return { rev, cost, valid: true };
+  }
+  const cands = MEDICINES.filter(m => m.category === request.symptom.category);
+  if (!cands.length) return { rev: 0, cost: 0, valid: false };
+  let rev = 0, cost = 0;
+  for (const m of cands) { rev += m.price; cost += m.cost; }
+  return { rev: rev / cands.length, cost: cost / cands.length, valid: true };
+}
+
+// --- Günün tam listesini seed'li üret ve ekonomisini çıkar ---
+// Aynı seed + aynı gün => aynı liste (test edilebilirlik).
+function buildDaySchedule(day) {
+  const N = patientLimitFor(day);
+  const prevDateDay = _dateDayOverride;
+  _dateDayOverride = day;                 // reçete tarihleri o güne göre damgalansın
+  let patients;
+  try {
+    patients = withSeed(CONFIG.daySeedBase + day * 7919, function () {
+      const out = [];
+      for (let i = 0; i < N; i++) out.push(makePatient());
+      return out;
+    });
+  } finally { _dateDayOverride = prevDateDay; }
+
+  let R = 0, C = 0, validCount = 0;
+  for (const p of patients) {
+    const v = refValuesFor(p.request);
+    p.refRevenue = v.rev;                 // teşhis/doğrulama için hastada da dursun
+    p.refCost = v.cost;
+    p.refValid = v.valid;
+    if (v.valid) { R += v.rev; C += v.cost; validCount++; }
+  }
+
+  const misses = allowedMissesFor(day);
+  // o güne özel gerçek hata maliyeti: kaçan ciro + yazılan cost zararı, geçerli hasta başına
+  const missCost = validCount > 0 ? (R + C) / validCount : 0;
+  const lo = CONFIG.goalRatioClamp[0], hi = CONFIG.goalRatioClamp[1];
+  const raw = R - misses * missCost;
+  // 10'a AŞAĞI yuvarla: yukarı yuvarlamak formülün az önce verdiği toleransın bir kısmını
+  // geri alır (gün 1'de hedefi 648.6 → 650 yapıp gereken doğruyu 6'dan 7'ye çıkarıyordu).
+  const goal = Math.floor(clamp(raw, R * lo, R * hi) / 10) * 10;
+
+  return { day, patients, N, R, C, validCount, fakeCount: N - validCount, misses, missCost, raw, goal };
+}
+
+// gün listesi cache'i — hedef sorulunca üretilir, oynanınca AYNI liste kullanılır (iki kez üretilmez)
+const _dayScheduleCache = {};
+function getDaySchedule(day) {
+  if (!_dayScheduleCache[day]) _dayScheduleCache[day] = buildDaySchedule(day);
+  return _dayScheduleCache[day];
+}
+
+// günlük para hedefi — o günün gerçek hasta listesinden
+function dailyGoalFor(day) { return getDaySchedule(day).goal; }
+
+// hedefin fiilen karşılık geldiği oran (hedef / geçerli ciro) — teşhis için
+function effectiveGoalRatio(day) {
+  const sch = getDaySchedule(day);
+  return sch.R > 0 ? sch.goal / sch.R : 0;
+}
+function goalForDay() { return dailyGoalFor(game.dayNumber); }
 
 // --- tarih sistemi: gün 1 = 17 Haziran 2026, her gün +1 ---
 const MONTHS_TR = ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"];
+// Gün listesi önden üretilirken (buildDaySchedule) reçetelere O GÜNÜN tarihi basılmalı,
+// oynanan günün değil. Üretim sırasında bu override doldurulur.
+let _dateDayOverride = 0;
 function gameDate(offsetDays) {
   const d = new Date(2026, 5, 17);
-  d.setDate(d.getDate() + (game.dayNumber - 1) + (offsetDays || 0));
+  d.setDate(d.getDate() + ((_dateDayOverride || game.dayNumber) - 1) + (offsetDays || 0));
   return d;
 }
 // gün değişmediği sürece cache'lenir (HUD her frame çağırır; frame'de new Date olmasın)
@@ -703,6 +853,25 @@ function pickKnownDoctor() {
   return d;
 }
 
+// --- Kusur sınıfları ---
+// DETECTABLE: yalnız reçete kağıdına + doktor defterine bakarak doğrulanabilir.
+// SUBTLE: alan bilgisi ister (ilaç etkileşimi); tek başına kusur olarak KULLANILMAZ.
+const DETECTABLE_FLAWS = ["fake_doctor", "expired", "overdose", "no_stamp", "bad_signature"];
+const SUBTLE_FLAWS = ["conflict"];
+
+// bir reçetede oyuncunun kağıttan tespit edebileceği kusurları döndür (teşhis + self-test)
+function detectableFlawsOf(req) {
+  const out = [];
+  if (!req || req.type !== "prescription") return out;
+  const known = KNOWN_DOCTORS.some(d => d.name === req.doctor);
+  if (!known) out.push("doktor defterde yok (" + req.doctor + ")");
+  if (req.hasStamp === false) out.push("kaşe yok");
+  if (req.sig === "???" || req.sig === "—" || req.sig === "") out.push("imza geçersiz");
+  if (req.items.some(it => it.qty >= 8)) out.push("aşırı doz (×" + Math.max.apply(null, req.items.map(it => it.qty)) + ")");
+  if (req.expired) out.push("tarihi geçmiş (" + req.date + ")");
+  return out;
+}
+
 // reçete üret (gerçek/sahte + kusurlar). fakeForce: true/false => zorla; undefined => rastgele
 function makePrescription(fakeForce) {
   const count = CONFIG.minPrescriptionItems +
@@ -711,18 +880,25 @@ function makePrescription(fakeForce) {
   const items = [];
   for (let i = 0; i < count && pool.length; i++) {
     const m = pool.splice(rand(pool.length), 1)[0];
-    const roll = Math.random();
+    const roll = rng();
     const qty = roll < 0.70 ? 1 : roll < 0.92 ? 2 : 3;
     items.push({ id: m.id, qty });
   }
 
-  const fake = (fakeForce === undefined) ? (Math.random() < CONFIG.fakeChance) : !!fakeForce;
+  const fake = (fakeForce === undefined) ? (rng() < CONFIG.fakeChance) : !!fakeForce;
   const flaws = [];
   if (fake) {
-    const pool2 = ["fake_doctor", "expired", "overdose", "no_stamp", "bad_signature", "conflict"];
-    for (let i = pool2.length - 1; i > 0; i--) { const j = rand(i + 1); [pool2[i], pool2[j]] = [pool2[j], pool2[i]]; }
-    const k = 1 + rand(2);            // 1 veya 2 kusur
-    for (let i = 0; i < k; i++) flaws.push(pool2[i]);
+    // Sahte reçetenin EN AZ BİR kusuru kağıda bakarak doğrulanabilir olmalı.
+    // "conflict" (uyku ilacı + enerji takviyesi bir arada) oyunun hiçbir yerinde
+    // öğretilmiyor: doktor gerçek, kaşe var, imza düzgün, adetler ×1 → oyuncu için
+    // görünmez bir kusurdu ve tek kusur olarak çıkabiliyordu. Artık yalnız EK kusur.
+    const detectable = DETECTABLE_FLAWS.slice();
+    for (let i = detectable.length - 1; i > 0; i--) { const j = rand(i + 1); [detectable[i], detectable[j]] = [detectable[j], detectable[i]]; }
+    flaws.push(detectable[0]);        // garanti: tespit edilebilir 1 kusur
+    if (rand(2) === 0) {              // %50 ihtimalle 2. kusur (ince kusur da olabilir)
+      const rest = detectable.slice(1).concat(SUBTLE_FLAWS);
+      flaws.push(rest[rand(rest.length)]);
+    }
   }
 
   // varsayılan (gerçek) üst bilgi
@@ -750,13 +926,12 @@ function makePrescription(fakeForce) {
   return { type: "prescription", items, fake, flaws, doctor, sig, date, hasStamp, expired };
 }
 
-// yeni hasta üret ve kuyruğa ekle. opts: {forcePrescription, forceFake}
-function spawnPatient(opts) {
+// tek hasta nesnesi üret (kuyruğa EKLEMEZ). opts: {forcePrescription, forceFake}
+// Gün listesi bunu seed altında toplu çağırır; cheat'ler tek tek çağırır.
+function makePatient(opts) {
   opts = opts || {};
-  if (game.queue.length >= CONFIG.maxQueue) return;
-
   const avatarDef = pick(PATIENT_AVATARS);
-  const isPrescription = opts.forcePrescription ? true : (Math.random() < CONFIG.prescriptionChance);
+  const isPrescription = opts.forcePrescription ? true : (rng() < CONFIG.prescriptionChance);
 
   let request;
   if (isPrescription) {
@@ -766,19 +941,45 @@ function spawnPatient(opts) {
     request = { type: "symptom", symptom };
   }
 
-  const patient = {
+  return {
     avatar: avatarDef.emoji,
     avatarKey: avatarDef.assetKey,
     request,
-    line: request.type === "prescription" ? pick(PRESCRIPTION_LINES) : null,  // balon repliği (spawn'da sabitlenir)
+    line: request.type === "prescription" ? pick(PRESCRIPTION_LINES) : null,  // balon repliği (üretimde sabitlenir)
     decided: null,            // reçeteliler için: null | "approve" | "reject"
     maxPatience: CONFIG.basePatience,
     patience: CONFIG.basePatience,
     enterT: 0,
-    posCurrent: game.queue.length + 0.85  // sağdan kayarak girsin
+    posCurrent: 0,            // kuyruğa girerken ayarlanır
+    bonus: false              // true => cheat ile enjekte, günün programı dışında
   };
+}
+
+// hastayı kuyruğa al (giriş animasyonu + sayaç). Program dışı (bonus) hastalar sayılmaz.
+function enqueuePatient(patient) {
+  patient.posCurrent = game.queue.length + 0.85;   // sağdan kayarak girsin
   game.queue.push(patient);
-  game.daySpawned++;
+  if (!patient.bonus) game.daySpawned++;
+}
+
+// Sıradaki hastayı sahneye çıkar.
+// opts YOKSA: günün ÖNCEDEN ÜRETİLMİŞ listesinden sıradakini çeker (hedef bu listeden hesaplandı).
+// opts VARSA: cheat enjeksiyonu — anlık üretilir, bonus işaretlenir, hedefe/sayaca karışmaz.
+function spawnPatient(opts) {
+  if (game.queue.length >= CONFIG.maxQueue) return;
+
+  if (opts) {
+    const p = makePatient(opts);
+    p.bonus = true;
+    enqueuePatient(p);
+    return p;
+  }
+
+  const sch = game.daySchedule;
+  if (!sch || game.dayScheduleIdx >= sch.patients.length) return;
+  const p = sch.patients[game.dayScheduleIdx++];
+  enqueuePatient(p);
+  return p;
 }
 
 // aktif hastanın beklediği ilaç çoklu-kümesi (adetli => id tekrarlı liste)
@@ -836,10 +1037,12 @@ function rejectPrescription() {
     game.dayStats.correct++;
     game.reputation = clamp(game.reputation + CONFIG.fakeCatchRepGain, CONFIG.minReputation, CONFIG.maxReputation);
     game.feedback = { ok: true, angry: false, text: "✓ Sahte reçete yakaladın!  +" + CONFIG.fakeCatchBonus + "₺", t: 0 };
+    explainDecision(p, [], "DOĞRU", "sahte reçete reddedildi (+" + CONFIG.fakeCatchBonus + "₺)");
   } else {
     // gerçeği boşuna reddetti
     game.dayStats.wrong++;
     game.feedback = { ok: false, angry: false, text: "Müşteriyi boşuna çevirdin", t: 0 };
+    explainDecision(p, [], "YANLIŞ", "geçerli reçete reddedildi (satış kaybı + itibar)");
     loseReputation(CONFIG.wrongRejectRepLoss);
   }
 }
@@ -912,6 +1115,50 @@ function removeOneFromCounter(id) {
   rebuildCounterSlots();
 }
 
+// --- TEŞHİS: her servis/red kararında tek okunabilir blok ---
+// countList: ["a","a","b"] -> "a×2, b×1" (ilaç ADI ile, id de parantezde)
+function fmtCounts(ids) {
+  if (!ids || !ids.length) return "(boş)";
+  const order = [], n = {};
+  for (const id of ids) { if (!(id in n)) { n[id] = 0; order.push(id); } n[id]++; }
+  return order.map(id => {
+    const m = getMedicine(id);
+    return (m ? m.name : "?") + "×" + n[id] + " [" + id + "]";
+  }).join(", ");
+}
+
+function explainDecision(p, given, verdict, reason) {
+  if (!CONFIG.debugDecisions || !p) return;
+  const r = p.request;
+  const L = [];
+  L.push("── KARAR · Gün " + game.dayNumber + " · " + (p.bonus ? "BONUS hasta (cheat)" : "programlı hasta"));
+  if (r.type === "prescription") {
+    const need = [];
+    for (const it of r.items) for (let i = 0; i < it.qty; i++) need.push(it.id);
+    L.push("   tip      : reçete" + (r.fake ? " (SAHTE)" : " (gerçek)") + " · karar: " + (p.decided || "—"));
+    L.push("   istenen  : " + fmtCounts(need));
+    L.push("   verilen  : " + fmtCounts(given));
+    const known = KNOWN_DOCTORS.some(d => d.name === r.doctor);
+    L.push("   doktor   : " + JSON.stringify(r.doctor) + " → defterde " + (known ? "VAR" : "YOK"));
+    const today = dateRx(0);
+    L.push("   kusurlar : " +
+      "doktor " + (known ? "✓" : "✗") +
+      " | kaşe " + (r.hasStamp === false ? "✗ (yok)" : "✓") +
+      " | imza " + ((r.sig === "???" || r.sig === "—" || r.sig === "") ? "✗ " + JSON.stringify(r.sig) : "✓ " + JSON.stringify(r.sig)) +
+      " | doz " + (r.items.some(it => it.qty >= 8) ? "✗ (×" + Math.max.apply(null, r.items.map(it => it.qty)) + ")" : "✓") +
+      " | tarih " + (r.expired ? "✗" : "✓") + " (reçete " + r.date + " ↔ oyun " + today + ")");
+    L.push("   iç bayrak: fake=" + r.fake + " flaws=[" + (r.flaws || []).join(", ") + "]");
+    L.push("   tespit edilebilir kusur: " + (detectableFlawsOf(r).join(" · ") || "(yok)"));
+  } else {
+    const cands = MEDICINES.filter(m => m.category === r.symptom.category);
+    L.push("   tip      : semptom · " + JSON.stringify(r.symptom.label) + " [kategori: " + r.symptom.category + "]");
+    L.push("   kabul    : " + cands.map(m => m.name).join(", ") + "  (tek kutu, herhangi biri)");
+    L.push("   verilen  : " + fmtCounts(given));
+  }
+  L.push("   SONUÇ    : " + verdict + " — " + reason);
+  console.log(L.join("\n"));
+}
+
 function checkOrder() {
   const p = activePatient();
   if (!servingAllowed() || !p) return;
@@ -923,7 +1170,8 @@ function checkOrder() {
     game.dayStats.wrong++;
     game.money = Math.max(0, game.money - CONFIG.fakeApproveMoneyPenalty);
     game.dayStats.money -= CONFIG.fakeApproveMoneyPenalty;
-    game.feedback = { ok: false, angry: false, text: "⚠️ Sahte reçeteye ilaç verdin!", t: 0 };
+    game.feedback = { ok: false, angry: false, text: "⚠️ Sahte reçeteye ilaç verdin!  -" + CONFIG.fakeApproveMoneyPenalty + "₺", t: 0 };
+    explainDecision(p, game.counter.slice(), "YANLIŞ", "reçete SAHTE — ilaçlar doğru olsa bile onaylamak hatalı");
     loseReputation(CONFIG.fakeApproveRepLoss);
     return;
   }
@@ -950,9 +1198,25 @@ function checkOrder() {
     game.dayStats.correct++;
     game.reputation = clamp(game.reputation + CONFIG.repGainCorrect, CONFIG.minReputation, CONFIG.maxReputation);
     game.feedback = { ok: true, angry: false, text: "✓ Teşekkürler!  +" + earn + "₺", t: 0 };
+    explainDecision(p, given, "DOĞRU", "istenen ilaç(lar) tam eşleşti (+" + earn + "₺)");
   } else {
+    // yanlış ilaç: kutu açıldı sayılır — stok düşer, para GELMEZ, üstüne o ilaçların
+    // alış maliyeti (cost) zarar olarak yazılır.
+    let loss = 0;
+    for (const gid of given) {
+      game.stock[gid] = Math.max(0, (game.stock[gid] || 0) - 1);
+      const gm = getMedicine(gid);
+      if (gm) loss += gm.cost;
+    }
+    loss = Math.round(loss);
+    game.money = Math.max(0, game.money - loss);
+    game.dayStats.money -= loss;
     game.dayStats.wrong++;
-    game.feedback = { ok: false, angry: false, text: "✗ Yanlış ilaç!", t: 0 };
+    game.feedback = { ok: false, angry: false, text: "✗ Yanlış ilaç!  -" + loss + "₺", t: 0 };
+    explainDecision(p, given, "YANLIŞ",
+      p.request.type === "prescription"
+        ? "reçete kalem/adet eşleşmedi (istenen ile verilen farklı)"
+        : "verilen ilaç semptom kategorisinde değil ya da tek kutu verilmedi");
     loseReputation(CONFIG.repLossWrong);
   }
 }
@@ -961,10 +1225,11 @@ function checkOrder() {
 function onFeedbackEnd() {
   // feedback bitiminde oyun bittiyse kuyruk kaydırma / yeni gün mantığı çalışmaz
   if (game.state === STATE.GAMEOVER) { game.feedback = null; return; }
-  game.queue.shift();
+  const done = game.queue.shift();
   game.counter = [];
   game.feedback = null;
   rebuildCounterSlots();
+  if (done && done.bonus) return;          // cheat hastası: günün programına sayılmaz
   game.dayCompleted++;
   if (game.dayCompleted >= patientsForDay()) endDay();
 }
@@ -978,9 +1243,22 @@ function endDay() {
   };
 }
 
+// günün listesini hazırla ve sayaçları sıfırla (hedef artık bu listeden geliyor).
+// Cache'teki hasta nesneleri OYNANIRKEN değişir (sabır, decided); aynı gün tekrar
+// oynanabildiği için (yeni oyun) her seferinde taze kopya verilir. request paylaşılır —
+// oynanış sırasında değiştirilmez, sadece okunur.
+function beginDaySchedule(day) {
+  const sch = getDaySchedule(day);
+  game.daySchedule = Object.assign({}, sch, {
+    patients: sch.patients.map(p => Object.assign({}, p))
+  });
+  game.dayScheduleIdx = 0;
+}
+
 function startNextDay() {
   game.dayNumber++;
   game.weather = weatherForDay(game.dayNumber);   // kozmetik; günde bir kez
+  beginDaySchedule(game.dayNumber);
   game.spawnTimer = CONFIG.spawnInterval;
   game.daySpawned = 0;
   game.dayCompleted = 0;
@@ -1005,6 +1283,7 @@ function startNewGame() {
   game.reputation = CONFIG.startReputation;
   game.dayNumber = 1;
   game.weather = weatherForDay(1);   // kozmetik; günde bir kez
+  beginDaySchedule(1);
   game.spawnTimer = 0;
   game.daySpawned = 0;
   game.dayCompleted = 0;
@@ -2318,6 +2597,11 @@ function drawDepot() {
     // para yetmiyorsa toplam kırmızımsı
     text(total + "₺", rx0 + rw * 0.95, obY + obH / 2, obH * 0.38, afford ? c.neon : c.bad, "right", "800");
   }
+  // kasa yetmiyorsa açık uyarı — buton zaten pasif (enabled=false), sebebi yazıyla söyle
+  if (total > 0 && !afford) {
+    text("⛔ Yetersiz bakiye — kasa: " + formatMoney(game.money),
+      rx0 + rw / 2, obY + obH + r.h * 0.015, r.h * 0.022, c.bad, "center", "700");
+  }
 }
 
 // depo ekranı açıkken dokunuşlar (adımlayıcı / sipariş / sekme / kapat / dışarı)
@@ -2469,7 +2753,7 @@ function drawGameOver() {
   let ly = cardY + cardH * 0.34;
   const step = cardH * 0.095;
   const fs = cardH * 0.05;
-  text("📅 Ulaşılan gün", cardX + cardW * 0.12, ly, fs, c.cream, "left", "600");
+  text("Ulaşılan gün", cardX + cardW * 0.12, ly, fs, c.cream, "left", "600");
   text("Gün " + game.dayNumber, cardX + cardW * 0.88, ly, fs, c.neon, "right", "800");
   ly += step;
   text("💰 Toplam para", cardX + cardW * 0.12, ly, fs, c.cream, "left", "600");
@@ -2695,8 +2979,26 @@ window.cheats = {
   skipDay() { if (game.state === STATE.PLAYING) endDay(); },
   setPatience(n) { const p = activePatient(); if (p) p.patience = n; },
   clearQueue() { game.queue = []; game.counter = []; game.feedback = null; rebuildCounterSlots(); },
-  newPatient() { spawnPatient(); },
-  spawnFake() { spawnPatient({ forcePrescription: true, forceFake: true }); },
+  // cheat hastaları BONUS: günün programına, hedefe ve gün sonu sayacına karışmaz
+  newPatient() { return spawnPatient({}); },
+  spawnFake() { return spawnPatient({ forcePrescription: true, forceFake: true }); },
+  daySchedule(day) {
+    const sch = getDaySchedule(day || game.dayNumber);
+    console.log("Gün " + sch.day + " | N=" + sch.N + " geçerli=" + sch.validCount +
+      " sahte=" + sch.fakeCount + " | R=" + Math.round(sch.R) + "₺ C=" + Math.round(sch.C) +
+      "₺ missCost=" + Math.round(sch.missCost) + "₺ | izinli hata=" + sch.misses.toFixed(2) +
+      " | hedef=" + sch.goal + "₺");
+    console.table(sch.patients.map((p, i) => ({
+      "#": i + 1,
+      tip: p.request.type === "prescription" ? (p.request.fake ? "reçete(SAHTE)" : "reçete") : "semptom",
+      istek: p.request.type === "prescription"
+        ? p.request.items.map(it => it.id + "×" + it.qty).join(", ")
+        : p.request.symptom.label,
+      ciro: Math.round(p.refRevenue) + "₺",
+      mal: Math.round(p.refCost) + "₺"
+    })));
+    return sch;
+  },
   menu() { game.state = STATE.MENU; },
   gameOver() { triggerGameOver(); },
   revealFlaws() {
@@ -2735,8 +3037,46 @@ window.cheats = {
     console.table(out);
     return out;
   },
+  explainPatient() {
+    const p = activePatient();
+    if (!p) { console.log("Kuyrukta hasta yok."); return; }
+    const prev = CONFIG.debugDecisions;
+    CONFIG.debugDecisions = true;
+    explainDecision(p, game.counter.slice(), "(karar verilmedi)", "explainPatient — mevcut tezgah durumu");
+    CONFIG.debugDecisions = prev;
+    return p.request;
+  },
+  balance() {
+    const marj = MEDICINES.reduce((a, m) => a + (1 - m.cost / m.price), 0) / (MEDICINES.length || 1);
+    console.log(
+      "avgPrice: " + avgPrice.toFixed(2) + "₺" +
+      " | avgCost: " + avgCost.toFixed(2) + "₺" +
+      " | ort. kâr marjı: %" + (marj * 100).toFixed(1) +
+      " | startMoney: " + CONFIG.startMoney + "₺" +
+      " | daySeedBase: " + CONFIG.daySeedBase
+    );
+    const rows = {};
+    for (let d = 1; d <= 10; d++) {
+      const sch = getDaySchedule(d);
+      rows["Gün " + d] = {
+        missRate: missRateFor(d).toFixed(3),
+        "izinli hata": sch.misses.toFixed(2),
+        N: sch.N,
+        "geçerli": sch.validCount,
+        "R (ciro)": Math.round(sch.R) + "₺",
+        "C (mal)": Math.round(sch.C) + "₺",
+        missCost: Math.round(sch.missCost) + "₺",
+        hedef: sch.goal + "₺",
+        "efektif oran": effectiveGoalRatio(d).toFixed(3),
+        "gereken doğru": neededCorrectFor(d) + "/" + sch.N
+      };
+    }
+    console.table(rows);
+    verifyGoalBalance(true);
+    return { avgPrice, avgCost, marj, startMoney: CONFIG.startMoney };
+  },
   assetStatus() {
-    const keys = ["bg_pharmacy", "counter", "btn_serve"]
+    const keys = ["bg_pharmacy", "counter", "doctor_book", "doctor_book_closed", "pc"]
       .concat(MEDICINES.map(m => m.assetKey))
       .concat(PATIENT_AVATARS.map(a => a.assetKey));
     const out = {};
@@ -2786,11 +3126,205 @@ function loadAssets() {
   Assets.load("patient_grandpa", "assets/patient_grandpa.png");
   Assets.load("patient_worker", "assets/patient_worker.png");
   Assets.load("patient_lady", "assets/patient_lady.png");
-  Assets.load("prescription_paper", "assets/prescription_paper.png");
   Assets.load("doctor_book_closed", "assets/doctor_book_closed.png");
   Assets.load("doctor_book", "assets/doctor_book.png");
   Assets.load("pc", "assets/pc.png");
 }
+
+// hedefi tutturmak için gereken en az DOĞRU işlem sayısı (N üzerinden).
+// Geçerli hastalarda: k×ortCiro − (V−k)×ortCost ≥ hedef  →  k ≥ (hedef + C) / missCost
+// Sahte reçeteler zaten reddedilmek zorunda (0₺ katkı) — onlar da doğru işlem sayılır.
+function neededCorrectFor(day) {
+  const sch = getDaySchedule(day);
+  if (sch.missCost <= 0) return sch.N;
+  const k = Math.ceil((sch.goal + sch.C) / sch.missCost - 1e-9);
+  return Math.min(sch.N, Math.max(0, k) + sch.fakeCount);
+}
+
+// --- Üretilmiş günde senaryo kazancı ---
+// missCount kadar geçerli hasta yanlış ilaç alır (ciro kaçar + cost zararı yazılır),
+// kalan geçerli hastalar doğru servis edilir. order: hataların hangi hastalara düştüğü.
+//   "ucuz"   = en düşük swing'li hastalarda hata (oyuncu lehine EN İYİ hâl)
+//   "pahalı" = en yüksek swing'li hastalarda hata (EN KÖTÜ hâl)
+//   "ortalama" = hatalar ortalama değerli hastalara düşer (formülün varsaydığı hâl)
+// Sahte reçetelerin yakalama bonusu (fakeCatchBonus) KASITLI sayılmaz — hedef de onları
+// 0₺ kabul ediyor; bonus oyuncu lehine ekstra paydır.
+function simulateDayScenario(day, missCount, order) {
+  const sch = getDaySchedule(day);
+  if (order === "ortalama") return sch.R - missCount * sch.missCost;
+  const swing = p => p.refRevenue + p.refCost;
+  const list = sch.patients.filter(p => p.refValid).slice()
+    .sort((a, b) => order === "pahalı" ? swing(b) - swing(a) : swing(a) - swing(b));
+  const m = clamp(missCount, 0, list.length);
+  let earn = sch.R;
+  for (let i = 0; i < m; i++) earn -= swing(list[i]);
+  return earn;
+}
+
+// --- Denge doğrulaması: KESİN (üretilmiş gün listesinden; olasılık/örnekleme yok) ---
+// İki ayrı ölçüt:
+//  1) FORMÜL ÖLÇÜTÜ — hatalar ortalama değerli hastalara düştüğünde izinli hata kadar hata
+//     hedefi tutturmalı, bir fazlası tutturmamalı. (round/clamp bunu bozarsa yakalanır.)
+//  2) ZARF — hatalar EN UCUZ/EN PAHALI hastalara düşerse ne olur. Hastalar heterojen
+//     olduğu için (reçete hastası semptom hastasının ~2.8 katı değerinde) bu aralık geniştir;
+//     sadece patolojik uçlarda uyarı verilir: izinli hata kadar hata EN İYİ hâlde bile
+//     tutmuyorsa hedef imkânsız, bir fazlası EN KÖTÜ hâlde bile tutuyorsa hedef anlamsız.
+function verifyGoalBalance(verbose, days) {
+  days = days || 10;
+  let allOk = true;
+  for (let d = 1; d <= days; d++) {
+    const sch = getDaySchedule(d);
+    const mInt = Math.floor(sch.misses + 1e-9);
+    const g = sch.goal;
+
+    // 1) formül ölçütü (kesin)
+    const avgPass = simulateDayScenario(d, mInt, "ortalama");
+    const avgFail = simulateDayScenario(d, mInt + 1, "ortalama");
+    if (!(avgPass >= g)) {
+      allOk = false;
+      console.warn("[denge] Gün " + d + ": izinli " + sch.misses.toFixed(2) + " hataya rağmen " +
+        mInt + " ortalama hata (" + Math.round(avgPass) + "₺) hedefi (" + g + "₺) TUTMUYOR." +
+        " R=" + Math.round(sch.R) + "₺ C=" + Math.round(sch.C) + "₺ missCost=" + Math.round(sch.missCost) + "₺");
+    }
+    // "bir fazlası tutmamalı" — ama izinli hata 2.99 gibi tam sayıya çok yakınsa, 3. hatanın
+    // beklenen açığı (0.01 × missCost) 10'a yuvarlama adımından küçük olur. Yuvarlamanın
+    // açıklayabildiği ihlal gerçek denge hatası değildir; yalnız onu aşanı bildir.
+    const failMargin = (mInt + 1 - sch.misses) * sch.missCost;
+    if (!(avgFail < g) && failMargin > 10) {
+      allOk = false;
+      console.warn("[denge] Gün " + d + ": " + (mInt + 1) + " ortalama hata (" + Math.round(avgFail) +
+        "₺) hâlâ hedefi (" + g + "₺) tutuyor — hedef fazla GEVŞEK." +
+        " (izinli hata " + sch.misses.toFixed(2) + ", beklenen açık " + Math.round(failMargin) + "₺)");
+    }
+
+    // 2) zarf (patolojik uçlar)
+    const best = simulateDayScenario(d, mInt, "ucuz");
+    const worst = simulateDayScenario(d, mInt, "pahalı");
+    const worstNext = simulateDayScenario(d, mInt + 1, "pahalı");
+    if (best < g) {
+      allOk = false;
+      console.warn("[denge] Gün " + d + ": " + mInt + " hata EN İYİ hâlde bile (" + Math.round(best) +
+        "₺) hedefi (" + g + "₺) tutmuyor — hedef imkânsız.");
+    }
+    if (worstNext >= g) {
+      allOk = false;
+      console.warn("[denge] Gün " + d + ": " + (mInt + 1) + " hata EN KÖTÜ hâlde bile (" +
+        Math.round(worstNext) + "₺) hedefi (" + g + "₺) tutuyor — hedef anlamsız.");
+    }
+
+    if (verbose) {
+      const kesin = worst >= g ? "garanti geçer" : (best < g ? "garanti kalır" : "hangi hastada hata yaptığına bağlı");
+      console.log("Gün " + d + " | hedef " + g + "₺ | ortalama " + mInt + " hata: " + Math.round(avgPass) +
+        "₺ " + (avgPass >= g ? "✓" : "✗") + " | " + (mInt + 1) + " hata: " + Math.round(avgFail) +
+        "₺ " + (avgFail < g ? "✓" : "✗") + " | " + mInt + " hata zarfı: " + Math.round(worst) + "–" +
+        Math.round(best) + "₺ → " + kesin);
+    }
+  }
+  if (verbose) console.log(allOk ? "Denge doğrulaması: TÜM GÜNLER GEÇTİ ✓" : "Denge doğrulaması: BAŞARISIZ ✗");
+  return allOk;
+}
+verifyGoalBalance(false);   // boot'ta sessiz; yalnız denge bozuksa uyarır
+
+// =====================================================================
+//  KALICI SELF-TEST — boot'ta sessiz çalışır, yalnız sorun varsa console.warn
+// =====================================================================
+// Üretilmiş gün 1..10'daki HER hastayı gerçek eşleşme koduyla sınar.
+function selfTestPatients(days) {
+  days = days || 10;
+  const warn = [];
+  const bookNames = KNOWN_DOCTORS.map(d => d.name);
+
+  // 0) taksonomi: kategori ↔ sekme 1:1 olmalı (aynı sekmede iki kategori = doğru ilaç yanlış sayılır)
+  const catToGroups = {};
+  for (const m of MEDICINES) (catToGroups[m.category] = catToGroups[m.category] || new Set()).add(m.group);
+  const groupToCats = {};
+  for (const m of MEDICINES) (groupToCats[m.group] = groupToCats[m.group] || new Set()).add(m.category);
+  for (const c in catToGroups) if (catToGroups[c].size > 1)
+    warn.push("Kategori '" + c + "' birden çok sekmeye dağılmış: " + [...catToGroups[c]].join(", "));
+  for (const g in groupToCats) if (groupToCats[g].size > 1)
+    warn.push("Sekme '" + g + "' birden çok kategori taşıyor (" + [...groupToCats[g]].join(" | ") +
+      ") — aynı sekmedeki doğru görünen ilaç yanlış sayılır");
+
+  // 0b) doktor adları ayırt edilebilir mi (ad aynı + soyad öneki = oyuncu ayıramaz)
+  for (const f of FAKE_DOCTORS) {
+    const fb = f.name.replace("Dr. ", ""), ff = fb.split(" ")[0], fl = fb.slice(ff.length + 1);
+    for (const k of bookNames) {
+      const kb = k.replace("Dr. ", ""), kf = kb.split(" ")[0], kl = kb.slice(kf.length + 1);
+      if (fb === kb) warn.push("Sahte doktor '" + f.name + "' defterde de var — ayırt edilemez");
+      else if (ff === kf && (fl.startsWith(kl) || kl.startsWith(fl)))
+        warn.push("Sahte doktor '" + f.name + "' ile defterdeki '" + k + "' ad aynı + soyad öneki — ayırt edilemez");
+    }
+  }
+
+  // 1..4) üretilmiş günlerdeki her hasta
+  for (let d = 1; d <= days; d++) {
+    const sch = getDaySchedule(d);
+    for (let i = 0; i < sch.patients.length; i++) {
+      const tag = "Gün " + d + " hasta #" + (i + 1) + ": ";
+      const r = sch.patients[i].request;
+
+      if (r.type === "symptom") {
+        // tam ihtiyaç verilince DAİMA doğru olmalı
+        const cands = MEDICINES.filter(m => m.category === r.symptom.category);
+        if (!cands.length) { warn.push(tag + "semptom '" + r.symptom.label + "' için hiç ilaç yok (kategori: " + r.symptom.category + ")"); continue; }
+        for (const c of cands) {
+          if (!(([c.id]).length === 1 && cands.map(m => m.id).includes(c.id)))
+            warn.push(tag + "'" + r.symptom.label + "' için " + c.name + " doğru sayılmıyor");
+        }
+        continue;
+      }
+
+      // reçete: tam kalem+adet verilince eşleşme doğru olmalı
+      const need = [];
+      for (const it of r.items) for (let q = 0; q < it.qty; q++) need.push(it.id);
+      if (!sameMultiset(need, need.slice().reverse()))
+        warn.push(tag + "çoklu-küme karşılaştırması sıralamaya duyarlı");
+      if (!r.items.length) warn.push(tag + "reçetede hiç kalem yok");
+      for (const it of r.items) {
+        if (!getMedicine(it.id)) warn.push(tag + "reçetede bilinmeyen ilaç id'si: " + it.id);
+        if (!(it.qty >= 1)) warn.push(tag + "reçete kalemi geçersiz adet: " + it.id + "×" + it.qty);
+      }
+
+      if (r.fake) {
+        // sahte => oyuncunun tespit edebileceği en az 1 kusur ŞART
+        if (detectableFlawsOf(r).length === 0)
+          warn.push(tag + "SAHTE ama tespit edilebilir kusuru yok (flaws=[" + (r.flaws || []).join(", ") +
+            "], doktor=" + r.doctor + ", kaşe=" + r.hasStamp + ", imza=" + JSON.stringify(r.sig) + ", tarih=" + r.date + ")");
+        // doktoru defterde olan sahte, yalnızca BAŞKA bir kusurla sahte sayılabilmeli
+        if (bookNames.indexOf(r.doctor) >= 0 && (r.flaws || []).indexOf("fake_doctor") >= 0)
+          warn.push(tag + "fake_doctor kusuru var ama doktor defterde: " + r.doctor);
+      } else {
+        // gerçek => hiçbir kusur bayrağı olmamalı ve kağıt temiz olmalı
+        if (r.flaws && r.flaws.length) warn.push(tag + "GERÇEK ama kusur bayrağı var: [" + r.flaws.join(", ") + "]");
+        const fl = detectableFlawsOf(r);
+        if (fl.length) warn.push(tag + "GERÇEK reçetede kusur görünüyor: " + fl.join(" · "));
+        if (bookNames.indexOf(r.doctor) < 0) warn.push(tag + "GERÇEK reçetenin doktoru defterde yok: " + r.doctor);
+        // tarih o günün tarihi olmalı (önden üretimde damgalama doğru mu)
+        const prevOv = _dateDayOverride; _dateDayOverride = d;
+        const expDate = dateRx(0);
+        _dateDayOverride = prevOv;
+        if (r.date !== expDate) warn.push(tag + "GERÇEK reçete tarihi " + r.date + ", oysa o günün tarihi " + expDate);
+      }
+    }
+  }
+
+  for (const w of warn) console.warn("[self-test] " + w);
+  return warn.length === 0;
+}
+selfTestPatients();
+
+// --- Veri sağlık kontrolü: kategori eşleşmeleri (SADECE konsol; oyuncuya görünmez) ---
+function checkDataHealth() {
+  const medCats = new Set(MEDICINES.map(m => m.category));
+  const symCats = new Set(SYMPTOMS.map(s => s.category));
+  for (const cat of medCats) {
+    if (!symCats.has(cat)) console.warn("[veri] Bu ilaç kategorisinin SYMPTOMS karşılığı yok:", cat);
+  }
+  for (const cat of symCats) {
+    if (!medCats.has(cat)) console.warn("[veri] Bu semptom kategorisinin ilacı yok:", cat);
+  }
+}
+checkDataHealth();
 
 loadAssets();
 resize();
