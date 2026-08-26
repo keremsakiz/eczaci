@@ -220,48 +220,48 @@ const avgCost  = MED_AVG.cost;    // tüm ilaçların ortalama alış fiyatı (�
 //  ECZANE GELİŞTİRMELERİ — kalıcı, seviyeli, paranın harcandığı yer
 // =====================================================================
 // Her kalem Lv1'de BAŞLAR (Lv1 = oyunun mevcut varsayılan davranışı, bedava).
-// costK[i] = i'inci SEVİYENİN fiyat katsayısı; costK.length === maxLevel.
-// Lv1 zaten elde olduğu için costK[0] hiç tahsil edilmez — ilk satın alma Lv2'dir.
-// Fiyat = round100(avgPrice × costK[hedefSeviye-1]) → fiyat tablosu değişirse ölçeklenir.
+// costK'da HER SATIN ALMAYA birebir bir katsayı düşer: costK.length === maxLevel - 1.
+// costK[0] = ilk satın alma (Lv1→2), costK[1] = ikinci (Lv2→3) …
+// Fiyat = round100(avgPrice × costK[satınAlmaSırası]) → fiyat tablosu değişirse ölçeklenir.
 const UPGRADES = [
   {
-    id: "tezgah", name: "Tezgah", emoji: "🧾", maxLevel: 3, costK: [15, 30, 55],
+    id: "tezgah", name: "Tezgah", emoji: "🧾", maxLevel: 3, costK: [15, 30],
     desc: "Aynı anda bekleyebilen hasta sayısı",
     valueAt: lv => (CONFIG.maxQueue + (lv - 1)) + " hasta"
   },
   {
-    id: "depo", name: "Depo Rafı", emoji: "📦", maxLevel: 3, costK: [15, 30, 55],
+    id: "depo", name: "Depo Rafı", emoji: "📦", maxLevel: 3, costK: [15, 30],
     desc: "İlaç başına stok tavanı",
     valueAt: lv => (CONFIG.maxStock + (lv - 1) * 15) + " kutu"
   },
   {
-    id: "vitrin", name: "Vitrin", emoji: "🪟", maxLevel: 3, costK: [15, 30, 55],
+    id: "vitrin", name: "Vitrin", emoji: "🪟", maxLevel: 3, costK: [15, 30],
     desc: "Günlük müşteri sayısı",
     valueAt: lv => (lv === 1 ? "normal" : "+" + ((lv - 1) * 2) + " müşteri")
   },
   {
-    id: "bekleme", name: "Bekleme Alanı", emoji: "🪑", maxLevel: 3, costK: [15, 30, 55],
+    id: "bekleme", name: "Bekleme Alanı", emoji: "🪑", maxLevel: 3, costK: [15, 30],
     desc: "Hasta sabır süresi",
     valueAt: lv => (lv === 1 ? "normal" : "+%" + Math.round((lv - 1) * 20))
   },
   {
-    id: "medula", name: "Medula Terminali", emoji: "🖥️", maxLevel: 2, costK: [20, 45],
-    desc: "Reçetede kusurlu alanı otomatik işaretler",
-    // hints[lv-1] = kaç kusur işaretlenir. Lv1 = 0: satın alınmamış terminal ipucu vermez.
-    // (Şartnamedeki "1 (Lv2'de 2)" okuması Lv1'de bedava ipucu demek olurdu; bu, sahte
-    //  reçete incelemesini daha 1. günde çözerdi. Öyle istenirse: hints: [1, 2].)
+    id: "medula", name: "Medula Terminali", emoji: "🖥️", maxLevel: 2, costK: [30],
+    desc: "Reçetede kontrol edilecek alanı işaretler",
+    // hints[lv-1] = kaç alan işaretlenir. Lv1 = 0: satın alınmamış terminal ipucu vermez.
+    // İşaret sahte/gerçek ayrımı YAPMAZ — gerçek reçetede de aynı sayıda alan işaretlenir.
     hints: [0, 1],
-    valueAt: lv => UPGRADE_BY_ID.medula.hints[lv - 1] + " kusur işaretlenir"
+    valueAt: lv => UPGRADE_BY_ID.medula.hints[lv - 1] + " alan işaretlenir"
   }
 ];
 const UPGRADE_BY_ID = {};
 for (const u of UPGRADES) UPGRADE_BY_ID[u.id] = u;
 
 // hedef seviyenin fiyatı (₺). Lv1 zaten elde => 0.
+// Lv2 ilk satın alma olduğu için costK[0]'ı kullanır (kaydırma yok: n'inci alım = costK[n-1]).
 function upgradeCost(id, targetLevel) {
   const u = UPGRADE_BY_ID[id];
-  if (!u || targetLevel <= 1 || targetLevel > u.maxLevel) return 0;
-  return Math.round(avgPrice * u.costK[targetLevel - 1] / 100) * 100;
+  if (!u || targetLevel < 2 || targetLevel > u.maxLevel) return 0;
+  return Math.round(avgPrice * u.costK[targetLevel - 2] / 100) * 100;
 }
 function upgradeLevel(id) {
   const lv = game.upgrades ? game.upgrades[id] : 1;
@@ -955,8 +955,8 @@ function detectableFlawsOf(req) {
   return out;
 }
 
-// Medula terminalinin işaretleyebileceği KUSURLU ALANLAR (sabit sıra — frame'de oynamaz).
-// SADECE görsel ipucu üretir; sahtelik kararına (request.fake) HİÇBİR etkisi yoktur.
+// Reçetede gerçekten kusurlu olan alanlar (self-test ve ipucu sıralaması için).
+// SADECE teşhis amaçlı; sahtelik kararına (request.fake) HİÇBİR etkisi yoktur.
 function flawFieldsOf(req) {
   const out = [];
   if (!req || req.type !== "prescription") return out;
@@ -967,10 +967,31 @@ function flawFieldsOf(req) {
   if (req.sig === "???" || req.sig === "—" || req.sig === "") out.push("sig");
   return out;
 }
-// o an işaretlenecek alanlar (terminal seviyesi kadar)
+
+// --- MEDULA İPUCU ---
+// İpucu "buraya bak" der, "yakaladım" DEMEZ: hem sahte hem GERÇEK reçetede aynı sayıda
+// alan işaretlenir. Sahtede kusurlu alanlar öne alınır, gerçekte alanlar tamamen rastgeledir.
+// Böylece işaretin VARLIĞI sahtelik bilgisi taşımaz; sadece bakılacak yeri daraltır.
+// Sıra ÜRETİM anında (seed'li rng altında) kurulur → aynı gün = aynı işaretler, frame'de oynamaz.
+const HINT_FIELDS = ["doctor", "stamp", "sig", "qty", "date"];
+function shuffledCopy(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) { const j = rand(i + 1); const t = a[i]; a[i] = a[j]; a[j] = t; }
+  return a;
+}
+// üretim anında çağrılır (makePrescription sonu). Tüm alanları kapsayan bir sıra döner:
+// önce (varsa) kusurlu alanlar karışık, sonra kalanlar karışık.
+function buildHintFields(req) {
+  const flawed = flawFieldsOf(req);
+  const rest = HINT_FIELDS.filter(f => flawed.indexOf(f) < 0);
+  return shuffledCopy(flawed).concat(shuffledCopy(rest));
+}
+// o an işaretlenecek alanlar (terminal seviyesi kadar) — rng TÜKETMEZ, sadece dilim alır
 function medulaMarks(req) {
   const n = effMedulaHints();
-  return n > 0 ? flawFieldsOf(req).slice(0, n) : [];
+  if (n <= 0 || !req || req.type !== "prescription") return [];
+  const src = req.hintFields || flawFieldsOf(req);   // eski kayıtlar için güvenli düşüş
+  return src.slice(0, n);
 }
 
 // reçete üret (gerçek/sahte + kusurlar). fakeForce: true/false => zorla; undefined => rastgele
@@ -1024,7 +1045,13 @@ function makePrescription(fakeForce) {
   if (flaws.includes("no_stamp")) { hasStamp = false; }
   if (flaws.includes("bad_signature")) { sig = pick(["???", "—", ""]); }
 
-  return { type: "prescription", items, fake, flaws, doctor, sig, date, hasStamp, expired };
+  const req = { type: "prescription", items, fake, flaws, doctor, sig, date, hasStamp, expired };
+  // Medula ipucu sırası ve "doz" işareti hangi kaleme düşecek — ikisi de seed'li rng ile,
+  // üretim anında sabitlenir (çizimde rastgelelik yok).
+  const odIdx = items.findIndex(it => it.qty >= 8);
+  req.hintQty = odIdx >= 0 ? odIdx : (items.length ? rand(items.length) : 0);
+  req.hintFields = buildHintFields(req);
+  return req;
 }
 
 // tek hasta nesnesi üret (kuyruğa EKLEMEZ). opts: {forcePrescription, forceFake}
@@ -2024,11 +2051,16 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
   const ink = "#3a3326", inkSoft = "#8a7c5e";
   const req = p.request;
 
-  // Medula terminali: kusurlu alanın ARKASINA amber vurgu (yalnız görsel ipucu).
+  // Medula terminali: İNCELENECEK alanın arkasına nötr (mavi) vurgu. Kasıtlı olarak
+  // uyarı rengi DEĞİL — işaret "kusur bulundu" değil "buraya bak" demeli; gerçek
+  // reçetelerde de aynı sayıda işaret çıkar.
   const marks = medulaMarks(req);
   const markBg = (mx, my, mw, mh) => {
-    fillRoundRect(mx, my, mw, mh, mh * 0.30, "rgba(240, 170, 60, 0.30)");
-    strokeRoundRect(mx, my, mw, mh, mh * 0.30, "rgba(200, 120, 20, 0.75)", Math.max(1, h * 0.004));
+    fillRoundRect(mx, my, mw, mh, mh * 0.30, "rgba(70, 130, 200, 0.20)");
+    ctx.save();
+    ctx.setLineDash([Math.max(2, h * 0.012), Math.max(2, h * 0.010)]);
+    strokeRoundRect(mx, my, mw, mh, mh * 0.30, "rgba(45, 95, 160, 0.80)", Math.max(1, h * 0.0035));
+    ctx.restore();
   };
 
   // üst: kaşe (✚) + doktor adı + tarih
@@ -2038,8 +2070,8 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
   fitText(req.date, rx, headY, innerW * 0.34, h * 0.05, inkSoft, "right", "600");
   // kaşe rozeti (gerçeklerde HER ZAMAN çizilir; no_stamp kusurunda HİÇ çizilmez)
   let docX = lx;
-  if (marks.includes("stamp") && req.hasStamp === false) {
-    // kaşe HİÇ çizilmiyor; olması gereken boşluk işaretlenir
+  if (marks.includes("stamp")) {
+    // kaşe varsa rozetin, yoksa olması gereken boşluğun çevresi işaretlenir
     const br = h * 0.052;
     markBg(lx - br * 0.15, headY - br * 1.15, br * 2.3, br * 2.3);
   }
@@ -2077,7 +2109,9 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
     ctx.fillStyle = m.color; ctx.fill();
     ctx.strokeStyle = "rgba(0,0,0,0.18)"; ctx.lineWidth = 1; ctx.stroke();
     // adet renkle ele vermez; ×8/×10 yine yazılır ama normal renkte (oyuncu mantığı yakalar)
-    if (marks.includes("qty") && it.qty >= 8) markBg(rx - qtyW, ly - fs * 0.75, qtyW, fs * 1.5);
+    if (marks.includes("qty") && items.indexOf(it) === (req.hintQty || 0)) {
+      markBg(rx - qtyW, ly - fs * 0.75, qtyW, fs * 1.5);
+    }
     fitText("× " + it.qty, rx, ly, qtyW, fs, ink, "right", "800");
     const nameX = lx + dotR * 2 + fs * 0.5;
     fitText(m.name, nameX, ly, rx - qtyW - fs * 0.5 - nameX, fs, ink, "left", "600");
@@ -2095,6 +2129,11 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
   while (sg > 7 && ctx.measureText(p.request.sig).width > innerW * 0.55) {
     sg -= 0.5;
     ctx.font = "italic 700 " + sg + "px 'Segoe Script','Snell Roundhand','Brush Script MT',cursive";
+  }
+  // Medula açıklaması — işaretin ne anlama geldiğini net söyler (bulgu değil, görev)
+  if (marks.length) {
+    fitText("🖥️ Medula: işaretli alanı kontrol et", lx, sep2 + h * 0.055, innerW * 0.42, h * 0.036,
+      "rgba(45, 95, 160, 0.95)", "left", "700");
   }
   if (marks.includes("sig")) markBg(rx - innerW * 0.58, sep2 + h * 0.055 - h * 0.036, innerW * 0.58, h * 0.072);
   ctx.fillStyle = inkSoft;
@@ -3639,7 +3678,7 @@ function selfTestPatients(days) {
   const prevUp = game.upgrades, prevMoney = game.money;
   for (const u of UPGRADES) {
     if (!(u.maxLevel >= 2)) warn.push("Geliştirme '" + u.id + "' maxLevel geçersiz: " + u.maxLevel);
-    if (u.costK.length !== u.maxLevel) warn.push("Geliştirme '" + u.id + "' costK uzunluğu (" + u.costK.length + ") maxLevel (" + u.maxLevel + ") ile uyuşmuyor");
+    if (u.costK.length !== u.maxLevel - 1) warn.push("Geliştirme '" + u.id + "' costK uzunluğu (" + u.costK.length + ") satın alma sayısı (maxLevel-1 = " + (u.maxLevel - 1) + ") ile uyuşmuyor");
     let prevCost = -1;
     for (let lv = 1; lv <= u.maxLevel; lv++) {
       game.upgrades = allLevels(x => x.id === u.id ? lv : 1);
@@ -3670,6 +3709,38 @@ function selfTestPatients(days) {
   }
   game.upgrades = prevUp; game.money = prevMoney;
   invalidateDaySchedules();
+
+  // 0d) MEDULA İPUCU SIZDIRMAMALI — işaretin varlığı sahtelik bilgisi taşımamalı.
+  // Terminal maks seviyeye alınıp gün 1..10'daki TÜM reçeteler taranır: hem sahte hem
+  // gerçek reçetelerde aynı sayıda işaret çıkmalı, aksi halde ipucu oyunu çözer.
+  {
+    const prevUp2 = game.upgrades;
+    game.upgrades = allLevels(x => x.id === "medula" ? x.maxLevel : 1);
+    const n = effMedulaHints();
+    let fakeTot = 0, fakeMarked = 0, realTot = 0, realMarked = 0, wrongCount = 0, noHint = 0;
+    for (let d = 1; d <= days; d++) {
+      for (const pt of getDaySchedule(d).patients) {
+        const r = pt.request;
+        if (r.type !== "prescription") continue;
+        if (!r.hintFields || !r.hintFields.length) noHint++;
+        const m = medulaMarks(r);
+        const want = Math.min(n, (r.hintFields || []).length);
+        if (m.length !== want) wrongCount++;
+        if (r.fake) { fakeTot++; if (m.length > 0) fakeMarked++; }
+        else { realTot++; if (m.length > 0) realMarked++; }
+      }
+    }
+    game.upgrades = prevUp2;
+    if (noHint) warn.push("Medula: " + noHint + " reçetede hintFields üretilmemiş");
+    if (wrongCount) warn.push("Medula: " + wrongCount + " reçetede işaret sayısı terminal seviyesiyle uyuşmuyor");
+    const fakeRate = fakeTot ? fakeMarked / fakeTot : 0;
+    const realRate = realTot ? realMarked / realTot : 0;
+    if (n > 0 && Math.abs(fakeRate - realRate) > 1e-9) {
+      warn.push("Medula ipucu SAHTELİK SIZDIRIYOR: sahtelerin %" + Math.round(fakeRate * 100) +
+        "'inde, gerçeklerin %" + Math.round(realRate * 100) + "'inde işaret var (eşit olmalı) — " +
+        "işaretin varlığı reçetenin sahte olduğunu ele veriyor");
+    }
+  }
 
   // 1..4) üretilmiş günlerdeki her hasta
   for (let d = 1; d <= days; d++) {
