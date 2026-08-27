@@ -4380,6 +4380,27 @@ window.cheats = {
       .concat(PATIENT_AVATARS.map(a => a.assetKey));
     const out = {};
     for (const k of keys) out[k] = Assets.images[k] ? "yüklü" : "boş";
+
+    // --- ilaç görsel kapsamı: kaç ilaç gerçek PNG, kaçı emoji fallback ---
+    // (fallback yolu korunur; görselsiz ilaçlar color+emoji ile çizilmeye devam eder)
+    const pngCount = MEDICINES.filter(m => Assets.images[m.assetKey]).length;
+    const byCat = {};
+    for (const m of MEDICINES) {
+      const row = byCat[m.category] || (byCat[m.category] = { toplam: 0, png: 0, _eksik: [] });
+      row.toplam++;
+      if (Assets.images[m.assetKey]) row.png++; else row._eksik.push(m.name);
+    }
+    for (const k of Object.keys(byCat)) {
+      const row = byCat[k];
+      row.fallback = row.toplam - row.png;
+      row.kapsam = Math.round((row.png / row.toplam) * 100) + "%";
+      row.eksik = row._eksik.length ? row._eksik.join(", ") : "—";
+      delete row._eksik;
+    }
+    console.table(byCat);
+
+    out._medGorsel = pngCount + " / " + MEDICINES.length + " ilaçta gerçek PNG ("
+      + (MEDICINES.length - pngCount) + " ilaç emoji fallback)";
     out._summary = Assets.loaded + " / " + Assets.total + " yüklendi";
     return out;
   },
@@ -4417,6 +4438,12 @@ function loadAssets() {
   Assets.load("med_kasgevset", "assets/med_kasgevset.png");
   Assets.load("med_disdindir", "assets/med_disdindir.png");
   Assets.load("med_agrijel", "assets/med_agrijel.png");
+  Assets.load("med_gripsavar", "assets/med_gripsavar.png");
+  Assets.load("med_bogazcan", "assets/med_bogazcan.png");
+  Assets.load("med_burunac", "assets/med_burunac.png");
+  Assets.load("med_ciltbakim", "assets/med_ciltbakim.png");
+  Assets.load("med_sivilcesil", "assets/med_sivilcesil.png");
+  Assets.load("med_mantarkov", "assets/med_mantarkov.png");
   Assets.load("patient_granny", "assets/patient_granny.png");
   Assets.load("patient_man", "assets/patient_man.png");
   Assets.load("patient_youth", "assets/patient_youth.png");
