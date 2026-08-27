@@ -71,6 +71,19 @@ const CONFIG = {
   goalRatioClamp: [0.40, 0.90],  // hedef/R oranı güvenlik bandı
   daySeedBase: 20260617,    // gün üretimi seed TABANI (koşu tohumuyla harmanlanır)
 
+  // --- Sipariş konsantrasyon tavanı ---
+  // Tek bir hastanın o günün cirosunda tutabileceği en yüksek pay. Sabit yüzde İŞE YARAMAZ:
+  // 6 geçerli hastalı bir günde kimsenin %15'in altında kalması matematiksel olarak
+  // imkânsızdır. Bu yüzden tavan ADİL PAYA (1/hasta) oranlıdır:
+  //   tavan = clamp(concentrationCapFactor / geçerliHasta, min, max)
+  //   9 hasta → %24 | 6 hasta → %37 | 20 hasta → %15
+  // Amaç: "hangi müşteride hata yaptığın" faktörü günü tek başına belirlemesin.
+  // Sahte reçeteliler kapsam DIŞI — R'ye 0 katkı yapıyorlar, cezaları zaten sabit.
+  concentrationCapFactor: 2.2,
+  concentrationCapMin: 0.15,
+  concentrationCapMax: 0.40,
+  concentrationMaxPasses: 25,   // yeniden üretme turu üst sınırı (sonsuz döngü olmasın)
+
   // --- Nöbetçi eczane (aynı günün İKİNCİ bölümü; ayrı gün tipi değil) ---
   nightDutyEvery: 4,           // her 4. gün nöbetçi (gün 4, 8, 12…)
   nightPatientRatio: 0.4,      // gündüz müşteri sayısının oranı; taban 3
@@ -1019,6 +1032,107 @@ function refValuesFor(request, priceMul) {
   return { rev: rev * mul, cost, valid: true };
 }
 
+// =====================================================================
+//  SİPARİŞ KONSANTRASYON TAVANI
+//  Tek hastanın günün R'sinde tuttuğu payı sınırlar. Tavan adil paya oranlıdır
+//  (bkz. CONFIG.concentrationCap*). Ölçüm NİHAİ değer üzerinden yapılır: nöbet
+//  farkı (×1.25) uygulanmış hâli, ham fiyat değil.
+// =====================================================================
+function concentrationCapFor(validN) {
+  if (validN <= 0) return CONFIG.concentrationCapMax;
+  return clamp(CONFIG.concentrationCapFactor / validN, CONFIG.concentrationCapMin, CONFIG.concentrationCapMax);
+}
+
+// Listenin R'si, geçerli hasta sayısı ve EN YÜKSEK paylı geçerli hastası.
+// Sahteler (refValuesFor → valid:false) hem R'ye hem sayıma hem adaylığa girmez.
+function concScan(list) {
+  let R = 0, validN = 0, wi = -1, wv = -1;
+  for (let i = 0; i < list.length; i++) {
+    const p = list[i];
+    const v = refValuesFor(p.request, p.night ? CONFIG.nightPriceMultiplier : 1);
+    if (!v.valid) continue;
+    R += v.rev; validN++;
+    if (v.rev > wv) { wv = v.rev; wi = i; }
+  }
+  return { R, validN, wi, wv };
+}
+
+// Siparişin İÇERİĞİNİ yeniden üretir; TİPİ KORUNUR (reçeteli/semptomlu, sahte/gerçek,
+// gündüz/gece). Tip değişirse yukarıdaki garantiler — her günde ≥1 gerçek reçete,
+// 2. günden itibaren ≥1 sahte, nöbet gecesinde ≥1 gerçek — bozulur.
+function concRegenRequest(p) {
+  const t = p.request.type;
+  if (t === "symptom") {
+    p.request = makeSymptomRequest();
+    p.line = p.request.line;                          // balon repliği semptomları anlatır
+  } else if (t === "medula") {
+    p.request = makeMedulaRequest();                  // Medula asla sahte olmaz
+  } else {
+    p.request = makePrescription(p.request.fake, 0);  // sahte/gerçek bayrağı aynen korunur
+  }
+}
+
+// ZORLA SIĞDIRMA: en pahalı kalemi bir kademe küçültür (adet −1; adet 1'de kalemi çıkarır).
+// Her çağrı siparişi kesin küçültür, küçültülemiyorsa false döner => döngü mutlaka durur.
+function concShrinkOnce(p) {
+  const request = p.request;
+  const items = request.items;
+  if (!items || !items.length) return false;
+  const unitPrice = it => {
+    if (request.type === "symptom") {
+      const cands = MEDICINES.filter(m => m.category === it.symptom.category);
+      if (!cands.length) return 0;
+      let r = 0; for (const m of cands) r += m.price;
+      return r / cands.length;                        // semptomda kategori ORTALAMASI
+    }
+    const m = getMedicine(it.id);
+    return m ? m.price : 0;
+  };
+  let bi = -1, bv = -1;
+  for (let i = 0; i < items.length; i++) {
+    const v = unitPrice(items[i]) * items[i].qty;
+    if (v > bv) { bv = v; bi = i; }
+  }
+  if (bi < 0) return false;
+  if (items[bi].qty > 1) items[bi].qty--;
+  else if (items.length > 1) items.splice(bi, 1);
+  else return false;                                  // tek kalem ×1 — daha fazla küçülemez
+  if (request.type === "symptom") {
+    request.symptom = items[0].symptom;               // geriye uyum alanı (tek kalemli yollar/emoji)
+    request.line = buildSymptomLine(items);
+    p.line = request.line;
+  }
+  return true;
+}
+
+// Tavanı uygular. Önce yeniden üretme (en fazla concentrationMaxPasses tur), sonra
+// hâlâ aşan varsa zorla sığdırma. withSeed İÇİNDE çağrılır => determinizm korunur.
+function applyConcentrationCap(list) {
+  let regen = 0, forced = 0;
+  // Matematiksel olarak sağlanamayan günlerde kural hiç uygulanmaz: geçerli hasta
+  // sayısı validN ise en iyi ihtimalle (herkes eşit) en yüksek pay 1/validN olur.
+  // tavan × validN ≤ 1 ise hiçbir dağılım tavanı sağlayamaz (validN ≤ 2) — sonsuz döngü
+  // yerine dokunmadan çıkılır.
+  const satisfiable = s => concentrationCapFor(s.validN) * s.validN > 1;
+
+  for (let pass = 0; pass < CONFIG.concentrationMaxPasses; pass++) {
+    const s = concScan(list);
+    if (s.wi < 0 || s.R <= 0 || !satisfiable(s)) break;
+    if (s.wv <= s.R * concentrationCapFor(s.validN)) break;   // tavan sağlandı
+    concRegenRequest(list[s.wi]);
+    regen++;
+  }
+  // 25 tur yetmediyse: kalemleri düşürerek zorla sığdır (her adım R'yi kesin küçültür)
+  for (let guard = 0; guard < 200; guard++) {
+    const s = concScan(list);
+    if (s.wi < 0 || s.R <= 0 || !satisfiable(s)) break;
+    if (s.wv <= s.R * concentrationCapFor(s.validN)) break;
+    if (!concShrinkOnce(list[s.wi])) break;                   // daha fazla küçülemiyor
+    forced++;
+  }
+  return { regen, forced };
+}
+
 // --- Günün tam listesini seed'li üret ve ekonomisini çıkar ---
 // Aynı seed + aynı gün => aynı liste (test edilebilirlik).
 function buildDaySchedule(day) {
@@ -1027,9 +1141,9 @@ function buildDaySchedule(day) {
   const N = dayN + nightN;
   const prevDateDay = _dateDayOverride;
   _dateDayOverride = day;                 // reçete tarihleri o güne göre damgalansın
-  let patients;
+  let patients, concRegen = 0, concForced = 0;
   try {
-    patients = withSeed(daySeedFor(day), function () {
+    const built = withSeed(daySeedFor(day), function () {
       const out = [];
       for (let i = 0; i < dayN; i++) out.push(makePatient());
       // NÖBET bölümü — listenin sonuna eklenir, spawn sırayla çektiği için gece sonra gelir
@@ -1055,8 +1169,15 @@ function buildDaySchedule(day) {
       if (nightN > 0 && !out.slice(dayN).some(isReal)) {
         out[out.length - 1] = makePatient({ night: true, forcePrescription: true, forceFake: false });
       }
-      return out;
+
+      // (d) Sipariş konsantrasyon tavanı — GARANTİLERDEN SONRA çalışır ve yalnız sipariş
+      // içeriğini değiştirir, tipleri korur; (a)(b)(c) bozulmaz.
+      const conc = applyConcentrationCap(out);
+      return { out, conc };
     });
+    patients = built.out;
+    concRegen = built.conc.regen;
+    concForced = built.conc.forced;
   } finally { _dateDayOverride = prevDateDay; }
 
   let R = 0, C = 0, validCount = 0;
@@ -1081,7 +1202,9 @@ function buildDaySchedule(day) {
   // Güvenlik bandı devreye girdi mi? (girdiyse hedef artık tolerans türevli DEĞİLDİR)
   const clampedAt = raw < R * lo ? "lo" : (raw > R * hi ? "hi" : null);
   return { day, patients, N, dayN, nightN, isNight: nightN > 0,
-           R, C, validCount, fakeCount: N - validCount, misses, missCost, raw, goal, clampedAt };
+           R, C, validCount, fakeCount: N - validCount, misses, missCost, raw, goal, clampedAt,
+           // konsantrasyon tavanı teşhisi (cheats.concentration / verifyConcentrationCap)
+           concCap: concentrationCapFor(validCount), concRegen, concForced };
 }
 
 // gün listesi cache'i — hedef sorulunca üretilir, oynanınca AYNI liste kullanılır (iki kez üretilmez)
@@ -4314,6 +4437,30 @@ window.cheats = {
   },
   setGroup(gid) { if (medsInGroup(gid).length) { game.activeGroup = gid; buildShelf(); } },
   checkCounter() { const r = verifyCounterLayout(); console.table(r.satırlar); return r; },
+  // Sipariş konsantrasyon tavanı — AKTİF koşunun tohumu ve geliştirme seviyeleriyle
+  concentration(days) {
+    days = days || 10;
+    const rows = [];
+    for (let d = 1; d <= days; d++) {
+      const sch = getDaySchedule(d);
+      let top = null;
+      for (const p of sch.patients) if (p.refValid && (!top || p.refRevenue > top.refRevenue)) top = p;
+      rows.push({
+        gün: d,
+        "geçerli hasta": sch.validCount,
+        "tavan %": +(sch.concCap * 100).toFixed(1),
+        "en yüksek ₺": top ? Math.round(top.refRevenue) : 0,
+        "payı %": (top && sch.R > 0) ? +((top.refRevenue / sch.R) * 100).toFixed(1) : 0,
+        "yeniden üretilen": sch.concRegen,
+        "zorla sığdırma": sch.concForced,
+        "sipariş": top ? concItemsLabel(top.request) : "—"
+      });
+    }
+    console.table(rows);
+    console.log("runSeed = " + game.runSeed + " | tavan = clamp(" + CONFIG.concentrationCapFactor +
+      "/geçerliHasta, " + CONFIG.concentrationCapMin + ", " + CONFIG.concentrationCapMax + ")");
+    return rows;
+  },
   stock() {
     const out = {};
     for (const m of MEDICINES) out[m.id] = game.stock[m.id] || 0;
@@ -4731,6 +4878,62 @@ function verifyGoalBalanceAllTiers(verbose) {
   });
 }
 verifyGoalBalanceAllTiers(false);   // boot'ta sessiz; yalnız denge bozuksa uyarır
+
+// --- Konsantrasyon tavanı doğrulaması ---
+// Hiçbir GEÇERLİ hastanın payı o günün tavanını aşmamalı. Sahteler kapsam dışı.
+function concItemsLabel(request) {
+  const items = request.items || [];
+  if (request.type === "symptom") return items.map(it => it.symptom.label + "×" + it.qty).join(" + ");
+  return items.map(it => { const m = getMedicine(it.id); return (m ? m.name : it.id) + "×" + it.qty; }).join(", ");
+}
+function verifyConcentrationCap(verbose, days) {
+  days = days || 10;
+  let ok = true;
+  for (let d = 1; d <= days; d++) {
+    const sch = getDaySchedule(d);
+    const cap = sch.concCap;
+    // sağlanamaz gün (tavan × geçerli hasta ≤ 1, yani ≤2 geçerli hasta): kural uygulanmadı,
+    // ölçüt de geçerli değil
+    if (cap * sch.validCount <= 1 || sch.R <= 0) {
+      if (verbose) console.log("Gün " + d + " | geçerli hasta " + sch.validCount + " — tavan sağlanamaz, kural uygulanmadı");
+      continue;
+    }
+    let top = null;
+    for (const p of sch.patients) {
+      if (!p.refValid) continue;
+      const share = p.refRevenue / sch.R;
+      if (!top || p.refRevenue > top.refRevenue) top = p;
+      if (share > cap + 1e-9) {
+        ok = false;
+        console.warn("[konsantrasyon] Gün " + d + ": bir hasta R'nin %" + (share * 100).toFixed(1) +
+          "'ini tutuyor — tavan %" + (cap * 100).toFixed(1) + " (geçerli hasta " + sch.validCount +
+          ", R " + Math.round(sch.R) + "₺, sipariş " + Math.round(p.refRevenue) + "₺)" +
+          " | ilaçlar: " + concItemsLabel(p.request));
+      }
+    }
+    if (verbose) {
+      console.log("Gün " + d + " | geçerli hasta " + sch.validCount + " | tavan %" + (cap * 100).toFixed(1) +
+        " | en yüksek pay %" + (top ? ((top.refRevenue / sch.R) * 100).toFixed(1) : "0") +
+        " (" + (top ? Math.round(top.refRevenue) : 0) + "₺) " +
+        (top && top.refRevenue / sch.R <= cap + 1e-9 ? "✓" : "✗") +
+        " | yeniden üretilen " + sch.concRegen + ", zorla sığdırma " + sch.concForced);
+    }
+  }
+  if (verbose) console.log(ok ? "Konsantrasyon tavanı: TÜM GÜNLER GEÇTİ ✓" : "Konsantrasyon tavanı: BAŞARISIZ ✗");
+  return ok;
+}
+// Denge gibi: hem tüm geliştirmeler Lv1'de hem MAKSİMUMDA tutmalı.
+function verifyConcentrationCapAllTiers(verbose) {
+  return withRunSeed(TEST_RUN_SEED, function () {
+    let ok = true;
+    if (verbose) console.log("— Konsantrasyon: tüm geliştirmeler Lv1 —");
+    ok = withUpgradeLevels(allLevels(() => 1), () => verifyConcentrationCap(verbose)) && ok;
+    if (verbose) console.log("— Konsantrasyon: tüm geliştirmeler MAKS —");
+    ok = withUpgradeLevels(allLevels(u => u.maxLevel), () => verifyConcentrationCap(verbose)) && ok;
+    return ok;
+  });
+}
+verifyConcentrationCapAllTiers(false);   // boot'ta sessiz; yalnız tavan aşılırsa uyarır
 
 // Semptom isteği için birkaç geçerli cevap üret: her kalemin kategorisindeki İLK ve SON
 // ilaç ayrı ayrı denenir (kategori içi her ilaç doğru sayılmalı).
