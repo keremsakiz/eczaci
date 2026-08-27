@@ -1041,6 +1041,30 @@ function detectableFlawsOf(req) {
   return out;
 }
 
+// Medula panellerinin ÖLÇÜLEN çakışma denetimi — göz kararı değil, rect kesişimi.
+// Hasta başına bir kez uyarır (her frame konsolu doldurmasın).
+const _medulaLayoutChecked = {};
+function rectsHit(a, b) {
+  return !!(a && b && a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h);
+}
+function checkMedulaLayout(code) {
+  if (_medulaLayoutChecked[code]) return true;
+  _medulaLayoutChecked[code] = true;
+  const hud = layout._hud, bub = layout.medulaBubbleRect, card = layout.medulaCardRect;
+  const pairs = [["HUD", hud, "kod balonu", bub], ["HUD", hud, "kayıt kartı", card],
+                 ["kod balonu", bub, "kayıt kartı", card]];
+  let ok = true;
+  for (const [n1, r1, n2, r2] of pairs) {
+    if (r1 && r2 && rectsHit(r1, r2)) {
+      ok = false;
+      console.warn("[medula] Panel çakışması: " + n1 + " ↔ " + n2 +
+        "  " + n1 + "=" + JSON.stringify(rectRound(r1)) + "  " + n2 + "=" + JSON.stringify(rectRound(r2)));
+    }
+  }
+  return ok;
+}
+function rectRound(r) { return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.w), h: Math.round(r.h) }; }
+
 // Sorgulanmış kod kaydı — gün+kod ile anahtarlanır (istek nesnesi cache'le PAYLAŞILDIĞI
 // için oraya YAZILMAZ; yoksa yeni oyunda eski sorgular açık gelirdi).
 function medulaKey(code) { return game.dayNumber + ":" + code; }
@@ -1048,8 +1072,9 @@ function medulaIsRevealed(code) { return !!game.medulaRevealed[medulaKey(code)];
 function medulaReveal(code) { game.medulaRevealed[medulaKey(code)] = true; }
 
 // --- MEDULA KODU ---
-// 6 karakter, DAİMA "2" ile başlar. Karıştırılabilir karakterler yok: I, O, Q, 0, 1 dışarıda.
-const MEDULA_ALPHABET = "23456789ABCDEFGHJKLMNPRSTUVWXYZ";
+// 6 karakter, DAİMA "2" ile başlar. Alfabe TAM: 0-9 + A-Z (36 karakter) — klavyede eksik
+// tuş kalmasın diye karıştırılabilir karakterler de dahil edildi.
+const MEDULA_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 function makeMedulaCode() {
   let out = "2";
   for (let i = 1; i < CONFIG.medulaCodeLen; i++) out += MEDULA_ALPHABET.charAt(rand(MEDULA_ALPHABET.length));
@@ -1365,12 +1390,13 @@ function openUpgrades() {
   game.depotOpen = true;
   game.pcScreen = "upgrades";
 }
+// NOT: girilen kod BURADA TEMİZLENMEZ — oyuncu koda tekrar bakmak için PC'yi kapatıp
+// açtığında yazdıkları durmalı. Temizlenme yalnız şurada olur: başarılı sorgu,
+// "Kayıt bulunamadı", SİL tuşu, gün değişimi ve yeni oyun.
 function openMedulaScreen() {
   game.depotPending = {};
   game.depotOpen = true;
   game.pcScreen = "medula";
-  game.medulaInput = "";
-  game.medulaResult = null;
 }
 function pcHome() { game.depotPending = {}; game.pcScreen = "home"; }
 function closeDepot() { game.depotOpen = false; game.depotPending = {}; game.pcScreen = "home"; }
@@ -1702,6 +1728,8 @@ function startNextDay() {
   game.phase = "day";
   game.nightIntro = null;
   collectReceivables();          // vadesi gelen SGK alacakları kasaya girer
+  game.medulaInput = "";         // gün değişti: yarım kalan kod girişi anlamını yitirir
+  game.medulaResult = null;
   beginDaySchedule(game.dayNumber);
   game.spawnTimer = CONFIG.spawnInterval;
   game.daySpawned = 0;
@@ -2167,8 +2195,10 @@ function drawQueue() {
     drawPrescriptionPanel(p0);
     drawPrescriptionBubble(p0);
   } else if (p0.request.type === "medula") {
+    layout.medulaCardRect = null;
     if (medulaIsRevealed(p0.request.code)) drawMedulaRecordPanel(p0);   // sorgulanmışsa liste solda kalır
     drawMedulaBubble(p0);
+    checkMedulaLayout(p0.request.code + (layout.medulaCardRect ? ":k" : ""));
   } else {
     drawSymptomBubble(p0);
   }
@@ -2524,34 +2554,41 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
 }
 
 // --- MEDULA: kod balonu ---
-// Hasta kağıt uzatmaz; kodu söyler. Kod her zaman balonda durur (tekrar bakılabilir).
+// Hasta kağıt uzatmaz; kodu söyler. Kod, hasta tezgahtayken HER AN okunabilir kalmalı —
+// bu yüzden balon sahnenin SAĞ boşluğuna oturur (kayıt kartı solda, HUD üstte).
+// Yerleşim sabit piksel değil: HUD'ın ALT SINIRI ve sahne genişliği üzerinden hesaplanır.
+function medulaBubbleRect() {
+  const S = layout.stage, area = layout._patientArea, hud = layout._hud;
+  const hudBottom = hud ? hud.y + hud.h : area.y;
+  const bubbleW = S.w * 0.42;                       // reçete balonuyla aynı genişlik
+  // sağ boşluk: kayıt kartının sağ kenarının (S.w*0.46) sağında kal, sahne kenarına yaslan
+  const bubbleX = Math.max(S.x + S.w * 0.55, S.x + S.w * 0.97 - bubbleW);
+  const bubbleH = S.h * 0.115;
+  const bubbleY = Math.max(area.y, hudBottom + S.h * 0.014);   // HUD'ın altında, nefes payıyla
+  return { x: bubbleX, y: bubbleY, w: bubbleW, h: bubbleH };
+}
+
 function drawMedulaBubble(p) {
-  const area = layout._patientArea;
-  const counterLine = layout._counterLine;
-  const areaH = counterLine - area.y;
   const L = getPatientLayout(p.posCurrent);
   if (L.active < 0.12) return;
   const enter = clamp(p.enterT / CONFIG.patientEnterTime, 0, 1);
   const a = L.active * (1 - Math.pow(1 - enter, 3));
-  const headTop = L.baseY - L.charH;
-  const cx = L.cx;
 
-  const bubbleW = Math.min(area.w * 0.76, areaH * 1.6);
-  const bubbleH = areaH * 0.28;
-  let bubbleY = headTop - areaH * 0.03 - bubbleH;
-  if (bubbleY < area.y) bubbleY = area.y;
-  const bubbleX = cx - bubbleW / 2;
+  const r = medulaBubbleRect();
+  layout.medulaBubbleRect = r;
+  const tailX = clamp(L.cx, r.x + r.w * 0.12, r.x + r.w * 0.5);
 
   ctx.globalAlpha = a;
-  drawSpeechBubble(bubbleX, bubbleY, bubbleW, bubbleH, cx, bubbleY + bubbleH);
-  fitText(p.line || "E-reçetem var.", bubbleX + bubbleW / 2, bubbleY + bubbleH * 0.28,
-    bubbleW * 0.88, bubbleH * 0.155, "#3a3326", "center", "700");
-  // kodu okunur ve seçilebilir hissettiren tek satır
-  const codeW = bubbleW * 0.62, codeH = bubbleH * 0.40;
-  const codeX = bubbleX + (bubbleW - codeW) / 2, codeY = bubbleY + bubbleH * 0.48;
-  fillRoundRect(codeX, codeY, codeW, codeH, codeH * 0.28, "rgba(38, 74, 54, 0.92)");
-  strokeRoundRect(codeX, codeY, codeW, codeH, codeH * 0.28, "rgba(140, 220, 170, 0.55)", 1.5);
-  fitText(p.request.code, codeX + codeW / 2, codeY + codeH / 2, codeW * 0.86, codeH * 0.62,
+  drawSpeechBubble(r.x, r.y, r.w, r.h, tailX, r.y + r.h);
+  // replik ikinci planda: küçük ve soluk
+  fitText(p.line || "E-reçetem var.", r.x + r.w / 2, r.y + r.h * 0.21,
+    r.w * 0.90, r.h * 0.155, "#6b5f4a", "center", "600");
+  // KOD balonun en belirgin öğesi: geniş şerit + büyük punto
+  const codeW = r.w * 0.84, codeH = r.h * 0.50;
+  const codeX = r.x + (r.w - codeW) / 2, codeY = r.y + r.h * 0.40;
+  fillRoundRect(codeX, codeY, codeW, codeH, codeH * 0.26, "rgba(38, 74, 54, 0.95)");
+  strokeRoundRect(codeX, codeY, codeW, codeH, codeH * 0.26, "rgba(140, 220, 170, 0.75)", 2);
+  fitText(p.request.code, codeX + codeW / 2, codeY + codeH / 2, codeW * 0.90, codeH * 0.66,
     "#d8f0e0", "center", "800");
   ctx.globalAlpha = 1;
 }
@@ -2565,10 +2602,14 @@ function drawMedulaRecordPanel(p) {
   const enter = clamp(p.enterT / CONFIG.patientEnterTime, 0, 1);
   const a = L.active * (1 - Math.pow(1 - enter, 3));
 
+  // Kart TAMAMEN HUD'ın altında kalır ve tezgah çizgisini aşmaz (sabit piksel yok).
+  const hud = layout._hud;
+  const hudBottom = hud ? hud.y + hud.h : area.y;
   const w = S.w * 0.42;
-  const h = Math.min(S.h * 0.40, area.h * 0.94);
   const x = S.x + S.w * 0.04;
-  const y = area.y + S.h * 0.006;
+  const y = Math.max(area.y, hudBottom + S.h * 0.014);
+  const h = Math.min(S.h * 0.40, (layout._counterLine - y) * 0.94);
+  layout.medulaCardRect = { x: x, y: y, w: w, h: h };
   const items = p.request.items;
 
   ctx.save();
@@ -3339,7 +3380,8 @@ function drawMedula() {
   // --- tuş takımı: alfabe + SİL + TAMAM ---
   const padTop = resY + resH + r.h * 0.02;
   const padBot = r.y + r.h * 0.97;
-  const cols = 7;
+  // 36 karakter = 6×6 tam ızgara (eksik/boş tuş kalmaz), +1 satır SİL/SORGULA için
+  const cols = 6;
   const chars = MEDULA_ALPHABET.split("");
   const rowsN = Math.ceil(chars.length / cols) + 1;          // +1: aksiyon satırı
   const gapK = r.w * 0.012;

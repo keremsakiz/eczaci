@@ -1,5 +1,5 @@
 # ECZACI — PROJE DURUM BELGESİ
-Son güncelleme: 2026-08-26 (koddan doğrulandı, index.html 4099 satır)
+Son güncelleme: 2026-08-26 (koddan doğrulandı, index.html 4675 satır)
 
 Bu belge, projeyi hiç bilmeyen bir asistanın okuyup kaldığı yerden devam edebilmesi için yazılmış bir devir notudur.
 
@@ -28,15 +28,30 @@ Eczacı: Büfeci'den esinlenen, iOS hedefli Türk eczane simülasyonu.
 
 **İlaç sistemi** — 39 ilaç, 9 kategori sekmesi: agri_ates (Ağrı), soguk (Soğuk), alerji (Alerji), sindirim (Mide), vitamin (Vitamin), goz_kulak ("Göz&Kulak"), ilk_yardim (İlk Yrd.), uyku_sinir (Uyku), cilt (Cilt). Sekmeler emoji + metin olarak çizilir (drawTabLabel ikisini birlikte ortalar). Sipariş eşleştirme adet/multiset mantığıyla (sameMultiset, checkOrder) — reçetede aynı ilaçtan birden fazla istenebilir, sıra önemsiz adet önemli.
 
+**Semptomlu (reçetesiz) hastalar** — tek ürün istemiyorlar: **1-3 kalem**, ölçülen dağılım **%59 / %32 / %9** (hedef 60/30/10). Kalemler **daima farklı kategorilerden** seçilir (aynı kategoriden iki kalem istenmez), böylece oyuncu birden çok sekmeye gitmek zorunda kalır — 596 hastalık ölçümde kategori tekrarı 0. Adet **1 veya 2** ile sınırlı; hastaların %27'sinde bir ×2 var.
+
+Konuşma balonu doğal Türkçe: kombinasyon başına şablon yazmak yerine kalem sayısına göre 2-3 kalıptan cümle kurulur (`buildSymptomLine`), örn. *"Hem gözüm bulanık görüyor hem dişim ağrıyor, ikisine de bakar mısınız?"* / *"Burnum akıyor, iki kutu alayım."* Balonda kalemlerin emojileri yan yana, adet 2 ise ×2 rozetiyle (reçete kağıdındaki "× N" diliyle aynı) çizilir; cümle altta, gerekirse iki satıra bölünerek.
+
+**Eşleşme** yeni bir yol icat etmez: verilen ilaçların **kategori** çoklu-kümesi, istenen semptomların kategori çoklu-kümesiyle aynı `sameMultiset` ile karşılaştırılır (id yerine kategori). Kategori içindeki HER ilaç doğru kabul edilir.
+
 **Kategori taksonomisi (DÜZELTİLEN HATA)** — eskiden 39 ilaç **19 farklı kategoriye** dağılmıştı ama sekme sayısı 9'du: aynı rahatsızlığın iki ayrı kategorisi vardı ("ağrı" + "Ağrı/Ateş", "mide" + "Sindirim", "yara" + "İlk Yardım" …). En kötüsü `"alerji"` ile `"Alerji"` çifti: yalnızca baş harf büyüklüğüyle ayrılıyorlardı ve eşleşme tam string karşılaştırması (`m.category === symptom.category`) olduğu için ayrı kategori sayılıyorlardı. Sonuç: **35 semptomun 32'sinde** aynı sekmede duran, doğru görünen ilaç yanlış sayılıyordu — "Ateşim var" diyen hastaya Başsakin vermek hataydı, "Başım çok ağrıyor" diyene Ağrıban vermek hataydı. Kategoriler kanonik adlara birleştirildi; artık **kategori ↔ sekme 1:1** (9 kategori, 9 sekme) ve bir sekmedeki her ilaç o sekmenin semptomları için doğru cevap. Boot self-test'i bu 1:1 kuralını koruyor.
 
-**Reçete sistemi + sahte reçete inceleme** — 6 sahtelik türü iki sınıfa ayrılmıştır:
-- `DETECTABLE_FLAWS` = fake_doctor, expired, overdose, no_stamp, bad_signature — hepsi yalnız reçete kağıdına ve doktor defterine bakarak doğrulanabilir.
+**Reçete sistemi + sahte reçete inceleme** — 5 sahtelik türü iki sınıfa ayrılmıştır:
+- `DETECTABLE_FLAWS` = **fake_doctor, expired, no_stamp, bad_signature** (4 kusur) — hepsi yalnız reçete kağıdına ve doktor defterine bakarak doğrulanabilir.
 - `SUBTLE_FLAWS` = conflict (uyku ilacı + enerji takviyesi bir arada) — alan bilgisi ister, oyunun hiçbir yerinde öğretilmez.
 
-Her sahte reçete **garanti olarak en az bir DETECTABLE kusur** taşır; conflict yalnızca ikinci kusur olarak eklenebilir (%50 ihtimalle ikinci kusur çekilir). Sebep: eskiden kusur 6'lık havuzdan rastgele seçiliyordu ve tek kusuru conflict olan reçete üretilebiliyordu — doktor defterdeki gerçek doktor, kaşe yerinde, imza düzgün, tarih bugün, adetler ×1. Oyuncunun yakalayabileceği hiçbir ipucu yoktu ama onaylayınca "sahte reçete" cezası yiyordu.
+Her sahte reçete **garanti olarak en az bir DETECTABLE kusur** taşır; conflict yalnızca ikinci kusur olarak eklenebilir (%50 ihtimalle ikinci kusur çekilir). Sebep: eskiden kusur havuzdan rastgele seçiliyordu ve tek kusuru conflict olan reçete üretilebiliyordu — doktor defterdeki gerçek doktor, kaşe yerinde, imza düzgün, tarih bugün. Oyuncunun yakalayabileceği hiçbir ipucu yoktu ama onaylayınca "sahte reçete" cezası yiyordu.
 
-İpuçları renkle ele vermez (oyuncu tarihi/imzayı/kaşeyi okuyup anlamalı). Asimetrik ceza/ödül: sahteyi yakalayınca ödül (fakeCatchBonus 20₺ + fakeCatchRepGain 8 itibar), sahteyi onaylayıp ilaç verince ağır ceza (fakeApproveMoneyPenalty **182₺, türetilmiş** + fakeApproveRepLoss 15 itibar), gerçeği reddedince para cezası YOK, sadece satış kaybı + wrongRejectRepLoss 5 itibar. Reçetenin sahte olma ihtimali fakeChance 0.28.
+**YÜKSEK ADET KUSUR DEĞİLDİR (düzeltilen hata).** Eskiden "overdose" (×8/×10) bir sahtelik kusuruydu; kaldırıldı. Adet dağılımı artık her reçetede aynı: **%70 ×1, %20 ×2, %7 ×3, %3 ×4-6**. Yani doktor 5 kutu yazabilir ve bu reçeteyi sahte YAPMAZ — oyuncu yüksek adet gördüğünde reddetmemeli. Ölçüm (gün 1-20): adet ≥4 olan 4 gerçek + 4 sahte reçete var, `overdose` bayrağı hiç üretilmiyor. Boot self-test'i bunu denetliyor.
+
+İpuçları renkle ele vermez (oyuncu tarihi/imzayı/kaşeyi okuyup anlamalı). Asimetrik ceza/ödül: sahteyi yakalayınca ödül (fakeCatchBonus 20₺ + fakeCatchRepGain 8 itibar), sahteyi onaylayıp ilaç verince ağır ceza (fakeApproveMoneyPenalty **182₺, türetilmiş** + fakeApproveRepLoss 15 itibar), gerçeği reddedince para cezası YOK, sadece satış kaybı + wrongRejectRepLoss 5 itibar.
+
+**Sahte oranı ve üç garanti** — `fakeChance` **0.42** (inceleme mekaniği her gün devreye girsin diye 0.28'den yükseltildi). Gece çarpanı 1.8 ve tavan 0.60 → nöbet gecesinde fiili oran **0.600** (tavana oturuyor; gecede bile en az %40 gerçek reçete). Üretimde (hepsi `withSeed` içinde, determinizm bozulmadan) üç garanti var:
+1. Her günde **en az 1 gerçek reçete** — yoksa ilk gündüz hastası gerçek reçeteliye çevrilir.
+2. **2. günden itibaren** her günde **en az 1 sahte reçete** — yoksa son gündüz hastası sahteye çevrilir. **Gün 1 öğretici kalır**, bu garanti uygulanmaz.
+3. Nöbet gecesinde **en az 1 gerçek reçete** — yoksa son gece hastası gerçek reçeteliye çevrilir.
+
+Hedefler farklı indeksleri seçtiği için (0. gündüz / son gündüz / son gece) garantiler birbirini ezmez. Ölçüm (gün 1-20): 273 reçetenin 119'u sahte (%44); sahtesiz gün yok, gerçek reçetesiz gün yok.
 
 **Doktor defteri** — 20 KNOWN_DOCTORS, tezgahtaki kapalı defter objesine dokununca açılma animasyonu. "Tanınan Doktorlar" başlığı kitabın DIŞINDA, üst kenarın üstünde ayrı krem plakada (kitap görseline binmiyor). İsimler kitaptaki çizgilere hizalı; hiza CONFIG.bookTextStartY (0.225) ve bookLineStep (0.0723) ile ince ayarlanabilir (kitap yüksekliğine oran).
 
@@ -46,7 +61,7 @@ Her sahte reçete **garanti olarak en az bir DETECTABLE kusur** taşır; conflic
 
 **STOK + ECZA DEPOSU** — ilaç bazında kalıcı stok (game.stock, startStock 10, maxStock 30; startNextDay resetlemez, sadece startNewGame kurar). Stok 0 → tapMedicine servise izin vermez, raf kartında "TÜKENDİ" etiketi + kısa toast uyarısı; stoğu olan kartlarda sağ üst köşede stok rozeti. Depo paneli PC ekranı kapsayıcısında (drawPcScreen — yeşilimsi sistem başlık şeridi; ileride SGK Medula/E-reçete ekranları aynı kapsayıcıya eklenecek). Sipariş adet bazlı: satırda −/+ adımlayıcı (pending sepet, maxStock clamp), tek "SİPARİŞ VER" butonu ile toplu uygulama. Sipariş tutarı kasadan düşer ve **kasa negatife inemez**: para yetmiyorsa buton pasifleşir ve butonun altında "⛔ Yetersiz bakiye — kasa: N₺" uyarısı görünür. Satır düzeni üç sabit oranlı sütun + ellipsisText yardımcı fonksiyonu (fontu küçültmeden "…" ile keser, sütunlar birbirine binmez).
 
-**ARAYÜZ** — büyük ilaç kartları (3 sütunlu grid, görsel contain ile çizilir, asla ezilmez), grid dikeyde taşarsa drag-scroll + sağ kenarda ince retro scrollbar (sadece taşan içerikte görünür, salt görsel — tıklama hedefi değil). Büfeci düzeni HUD: sol kutuda GÜN + tarih (emojisiz) ile hava durumu satırı (kozmetik, oyun mantığına etkisi yok, gün numarasından deterministik seçilir — WEATHERS + WEATHER_SEQ, frame'de rastgele YOK), ortada kare EV butonu (menüye döner, veri silinmez), sağ kutuda itibar (emoji eşikleri: <35 😡, 35-69 😑, ≥70 😊, yanında %N) ve binlik ayraçlı para (formatMoney — toLocaleString kullanmaz, kendi ayraç mantığı, değer değişmediği sürece cache'li string döner). Gün sonu kartı yüksekliği sabit değil, içerikten hesaplanır (başlık + satır sayısı × satır adımı + butonlar + boşluklar) ve ferah satır aralığına sahip. Konuşma balonları krem/açık zeminli; reçeteli hastada balon spawn anında seçilen sabit bir repliğe sahiptir (frame'de yeniden seçilmez).
+**ARAYÜZ** — büyük ilaç kartları (3 sütunlu grid, görsel contain ile çizilir, asla ezilmez), grid dikeyde taşarsa drag-scroll + sağ kenarda ince retro scrollbar (sadece taşan içerikte görünür, salt görsel — tıklama hedefi değil). Büfeci düzeni HUD: sol kutuda satır1 GÜN, satır2 tarih (emojisiz; **hava durumu kaldırıldı** — tamamen kozmetikti, hiçbir mekaniğe bağlı değildi, kalkınca iki öğe kendi satırına yayıldı), nöbet günlerinde sol kutu ile EV butonu arasındaki boşlukta 🌙 rozeti, ortada kare EV butonu (menüye döner, veri silinmez), sağ kutuda itibar (emoji eşikleri: <35 😡, 35-69 😑, ≥70 😊, yanında %N) ve binlik ayraçlı para (formatMoney — toLocaleString kullanmaz, kendi ayraç mantığı, değer değişmediği sürece cache'li string döner). Gün sonu kartı yüksekliği sabit değil, içerikten hesaplanır (başlık + satır sayısı × satır adımı + butonlar + boşluklar) ve ferah satır aralığına sahip. Konuşma balonları krem/açık zeminli; reçeteli hastada balon spawn anında seçilen sabit bir repliğe sahiptir (frame'de yeniden seçilmez).
 
 **Son görsel düzeltmeler** — PC tezgahın sağ tarafına, kapalı defterle aynı yüzey çizgisine oturacak şekilde hizalandı (CONFIG.pcScale/pcOffsetX ile ince ayarlanabilir); kategori sekmeleri yukarı taşındı ve ilaç grid'inin görünür alanı büyüdü; tezgah bandının altındaki alan artık bg_pharmacy'nin gömülü tezgahını tamamen örten, bandın ahşap tonlarından türetilmiş kodla çizilmiş bir gradyan zeminle kaplı (asset eklenmedi).
 
@@ -98,17 +113,24 @@ Bir hatanın maliyeti çift taraflıdır: kaçan ciro + yazılan cost zararı �
 
 | Gün | N | geçerli | R | C | missCost | missRate | izinli hata | hedef | efektif oran | gereken doğru |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 | 8 | 8 | 1.166₺ | 830₺ | 249₺ | 0,250 | 2,00 | 660₺ | 0,566 | **6/8** |
-| 4 🌙 | 20 | 14 | 2.033₺ | 1.369₺ | 243₺ | 0,205 | 4,10 | 1.030₺ | 0,507 | **16/20** |
-| 5 | 16 | 13 | 2.073₺ | 1.452₺ | 271₺ | 0,190 | 3,04 | 1.240₺ | 0,598 | **13/16** |
-| 8 🌙 | 31 | 24 | 3.667₺ | 2.414₺ | 253₺ | 0,145 | 4,50 | 2.520₺ | 0,687 | **27/31** |
-| 10 | 26 | 25 | 3.339₺ | 2.294₺ | 225₺ | 0,115 | 2,99 | 2.660₺ | 0,797 | **23/26** |
+| 1 | 8 | 7 | 1.372₺ | 933₺ | 329₺ | 0,250 | 2,00 | 710₺ | 0,518 | **6/8** |
+| 4 🌙 | 20 | 12 | 3.146₺ | 2.020₺ | 431₺ | 0,205 | 4,10 | 1.380₺ | 0,439 | **16/20** |
+| 5 | 16 | 13 | 3.511₺ | 2.363₺ | 452₺ | 0,190 | 3,04 | 2.130₺ | 0,607 | **13/16** |
+| 8 🌙 | 31 | 24 | 4.776₺ | 3.127₺ | 329₺ | 0,145 | 4,50 | 3.290₺ | 0,689 | **27/31** |
+| 10 | 26 | 23 | 3.862₺ | 2.689₺ | 285₺ | 0,115 | 2,99 | 3.010₺ | 0,779 | **24/26** |
 
-🌙 = nöbet günü; N gündüz + gece toplamıdır (gün 4 = 14+6, gün 8 = 22+9).
+🌙 = nöbet günü; N gündüz + gece toplamıdır (gün 4 = 14+6, gün 8 = 22+9). Tablo terminal KİLİTLİ (tüm geliştirmeler Lv1) durumu içindir.
 
 "Gereken doğru" sahte reçetelerin doğru reddedilmesini de doğru işlem sayar. Rakamlar üretilmiş gerçek günlerden geldiği için kesindir, tahmin değildir.
 
-**Not — bu tablo bir önceki sürüme göre kaydı:** Medula ipucu alanlarının seçimi gün üretimi sırasında seed'li rng tükettiği için tüm gün listeleri yeniden dizildi (gün 1 hedefi 640₺ → 660₺, gün 7 2.030₺ → 2.110₺). Determinizm bozulmadı; aynı seed hâlâ aynı günü veriyor. Eski dizilime dönmek gerekirse `CONFIG.daySeedBase` ile oynanır.
+**Not — hedefler bir önceki sürüme göre indi:** `fakeChance` 0.28 → 0.42 olunca sahteler arttı; sahteler R'ye 0 katkı yaptığı için R düştü ve hedefler kendiliğinden indi. Hedef formülüne dokunulmadı. Gün listeleri de yeniden dizildi (üretim sırasındaki rng tüketimi her değiştiğinde bu olur); determinizm bozulmadı, aynı seed hâlâ aynı günü veriyor. Eski dizilime dönmek gerekirse `CONFIG.daySeedBase` ile oynanır.
+
+### 4.3b Güvenlik bandı (goalRatioClamp) — bilinen ve kabul edilmiş durum
+`goalRatioClamp` [0.40, 0.90] normalde boşta durur ama **sahte-ağırlıklı günlerde alt bant devreye girebiliyor.** Mekanizma: izinli hata `N × missRate` ile hesaplanır ve N sahteleri de sayar; ama hata yalnız GEÇERLİ hastalarda yapılabilir. Günün yarısı sahte olduğunda geçerli hasta sayısı düşer, missCost fırlar ve tolerans absürtleşir (ör. 5 geçerli hastada 2,35 hata hakkı). Ham hedef R'nin %40'ının altına inince alt bant hedefi yukarı çeker.
+
+Sonuç: **o günler tolerans vaadinden daha zor geçer.** `verifyGoalBalance` bu günlerde tolerans ölçütünü uygulamaz (schedule'daki `clampedAt` bayrağına bakar) ve verbose modda "GÜVENLİK BANDI devrede" diye bildirir — sessizce yutmaz. Ölçüm: **30 günde 1 gün** bu duruma giriyor.
+
+Kökten çözüm, miss maliyetini hasta tipine göre harmanlamak olurdu (sahte hastanın "kaçırma maliyeti" gerçek hastanınkiyle aynı sayılmamalı). **Yapılmadı**: hedefin şu an hiçbir yaptırımı yok (bkz. 4.4), dolayısıyla bu günlerin zor geçmesinin oyuncuya somut bir bedeli yok. Hedefe yaptırım eklenirse bu iş önce yapılmalı.
 
 ### 4.4 Hedefin yaptırımı YOKTUR — bu bilinçli bir tasarım kararıdır
 Bunu net yazmak gerekiyor, çünkü koda bakan biri eksiklik sanabilir: **günlük para hedefinin hiçbir yaptırımı yoktur.** endDay() yalnız iki şey yapar — state'i DAYEND'e çeker ve `dayResult = { goal, met }` kurar. `met` bayrağı kodun tamamında sadece DAYEND kartındaki rozetin rengini ve metnini ("🎯 Hedef tuttu!" / "⚠️ Hedef tutmadı") belirler. İtibar kaybı yok, para cezası yok, oyun bitmez, kaçırılan hedef ertesi güne eklenmez; para ve stok olduğu gibi devreder. Üst üste hedef kaçırmak da hiçbir şey tetiklemez.
@@ -147,7 +169,7 @@ Fiyatlar sabit değil: `round100(avgPrice × costK[n])`. `costK.length === maxLe
 | Depo Rafı | depo | stok tavanı 30 kutu | 60 kutu | 1.400₺ | 2.700₺ |
 | Vitrin | vitrin | normal | +4 müşteri/gün | 1.400₺ | 2.700₺ |
 | Bekleme Alanı | bekleme | normal sabır | +%40 | 1.400₺ | 2.700₺ |
-| Medula Terminali | medula | 0 alan işaretlenir | 1 alan | 2.700₺ | — (maxLevel 2) |
+| Medula Terminali | medula | kilitli | e-reçete sistemi açık (bkz. 7) | 2.700₺ | — (maxLevel 2) |
 
 Listede her kalemin mevcut seviyesi, etkisi ve bir sonraki seviyenin fiyatı görünür; maks seviyede buton yerine **TAM** yazar ve tıklanamaz. Para yetmiyorsa buton pasifleşir ve depo ekranıyla **aynı biçimde** "⛔ Yetersiz bakiye — kasa: N₺" uyarısı çıkar. Satın alma kasadan düşer, kasa negatife inemez.
 
@@ -170,17 +192,8 @@ Stokla **aynı yol**: `initUpgrades()` yalnız `startNewGame()` tarafından ça�
 ### 5.5 Vitrin ↔ gün cache'i (dikkat)
 Vitrin seviyesi `patientLimitFor(day)`'i değiştirir, o da önden üretilmiş günleri ve hedefleri geçersiz kılar. Satın alma `invalidateDaySchedules()` çağırır. **Oynanmakta olan gün etkilenmez**: `patientsForDay()` ve `goalForDay()` o günün `game.daySchedule` snapshot'ından okur, cache'ten değil. Etki ertesi günden başlar — gün ortasında Vitrin Lv2 alınınca o günün N'i ve hedefi aynı kalır, sonraki gün büyür.
 
-### 5.6 Medula terminali — ne YAPAR, ne YAPMAZ
-**Yapar:** reçete kağıdında bir alanı (doktor / kaşe / imza / doz / tarih) nötr mavi kesikli çerçeveyle işaretler ve altına "🖥️ Medula: işaretli alanı kontrol et" yazar. İşaret sayısı terminal seviyesi kadardır.
-
-**YAPMAZ:**
-- Sahtelik kararını değiştirmez. `request.fake` ve `checkOrder` mantığına dokunmaz; katman tamamen görseldir.
-- Sahte/gerçek ayrımı yapmaz. **Gerçek reçetelerde de aynı sayıda işaret çıkar** — sahtede işaret gerçekten kusurlu alana düşer, gerçekte beş alandan rastgele birine.
-- Çizim sırasında rastgelelik tüketmez; işaret alanları üretim anında seed'li rng ile sabitlenir (aynı gün = aynı işaretler).
-
-**Bu bilinçli bir tasarım kararıdır.** İlk uygulamada işaret yalnız gerçekten kusurlu alana düşüyordu; o zaman "işaret var → sahte, işaret yok → gerçek" oluyordu ve terminal alındığı anda reçete incelemesi tamamen çözülüyordu — yani bir **oracle**'a dönüşüyordu. Şimdiki hâlde işaret "buraya bak" der, "yakaladım" demez: bakılacak yeri daraltır ama kararı oyuncuya bırakır. Boot self-test'i bu özelliği koruyor (bkz. 11.2).
-
-Ölçüm (gün 1–10, terminal maks): 21 sahte reçetenin 21'inde, 62 gerçek reçetenin 62'sinde işaret var — korelasyon sıfır. Sahtelerde işaret 21/21 gerçekten kusurlu alana düşüyor.
+### 5.6 Medula Terminali — kilidi açtığı sistem
+Medula, artık reçete incelemesine yardım eden bir ipucu aracı **değildir** (o tasarım tamamen söküldü: `hintFields`, `medulaMarks`, işaret çizimi ve ipucu self-test'i kaldırıldı). Terminal Lv2'ye alınınca **yeni bir hasta tipi ve yeni bir ekran** açılır. Ayrıntı için bölüm 7.
 
 ## 6. Nöbetçi Eczane
 
@@ -204,7 +217,7 @@ Bu, belgeye yazmaya değecek kadar önemli: **hedef formülü hiç değişmeden 
 | nightIntroDuration | 2.2 | geçiş kartının otomatik kapanma süresi (sn) |
 | nightFadeTime | 0.9 | gece tonlamasının oturma süresi (sn) |
 
-Gece sahte ihtimali: `min(0.60, 0.28 × 1.8) = 0.504`. `isNightDutyDay(day)` tek yerdedir; nöbet tespiti hep buradan yapılır.
+Gece sahte ihtimali: `min(0.60, 0.42 × 1.8) = 0.600` — çarpan tavanı aşıyor, dolayısıyla gece **tavana oturuyor**. `isNightDutyDay(day)` tek yerdedir; nöbet tespiti hep buradan yapılır.
 
 ### 6.3 Nöbet farkı yalnız SATIŞ fiyatına
 `nightPriceMultiplier` gece hastalarının **satış fiyatına** uygulanır; ilacın **mal maliyeti (cost) değişmez** — eczane aynı ilacı aynı fiyata almıştır, sadece nöbet farkıyla satar. Bu çarpım hem gerçek kazanca (`checkOrder`) hem de R hesabına (`refValuesFor(request, priceMul)`) girer, yani hedef de nöbet farkını görür. Doğrulandı: gün 4'te gece ham cirosu 281₺ → R'ye 351₺ (×1,250), gündüz ×1,000, gece cost'u çarpılmamış.
@@ -227,7 +240,60 @@ Gece sahte oranı yüksek olduğu için, küçük gece bloklarında (3–6 hasta
 
 Gece hastaları geliştirme etkilerinden de yararlanır: Bekleme Lv3 + gece = 38 × 1,4 × 1,2 = 63,8 sn sabır; kuyruk tavanı Tezgah seviyesinden gelir.
 
-## 7. Mevcut Assetler
+## 7. Medula Sistemi (e-reçete)
+
+### 7.1 Ne açılır
+Terminal Lv2 (2.700₺) alınınca:
+- PC ana ekranında **üçüncü sekme: MEDULA SİSTEMİ** kilidi açılır. (Satın alınmadan sekme görünür ama pasiftir ve "🔒 Geliştirme'den satın al" yazar; dokunuş yutulur.)
+- Reçeteli hastaların bir kısmı kağıt yerine **e-reçete kodu** getirmeye başlar.
+
+Terminal kilitliyken hiç Medula hastası üretilmez (ölçüldü: 15 günde 0). Satın alma `invalidateDaySchedules()` çağırır — Vitrin ile aynı gerekçe: hasta tipleri değiştiği için önden üretilmiş günler geçersizleşir, oynanan gün snapshot'tan okunduğu için etkilenmez.
+
+### 7.2 Kod formatı
+`MEDULA_ALPHABET = "23456789ABCDEFGHJKLMNPRSTUVWXYZ"` — **31 karakter**. **I, O, Q, 0, 1 kasıtlı olarak yok**: küçük ekranda I↔1 ve O↔0 karışır, oyuncu doğru kodu yanlış girip "Kayıt bulunamadı" alır ve hatayı kendinde arar.
+
+Kod **6 karakter** ve **daima "2" ile başlar** (gerçek Medula kodlarının biçimini andırsın diye). Örnekler: `2REZAH`, `24MAUM`, `2BW9JB`. Kodlar hasta üretiminde seed'li rng ile belirlenir → aynı gün her zaman aynı kodları verir; gün içinde benzersizdirler.
+
+### 7.3 Akış
+1. Medula hastası kağıt uzatmaz; balonunda repliğini ve **kodu** koyu yeşil şeritte gösterir (kod hep orada durur, tekrar bakılabilir).
+2. Oyuncu PC → MEDULA SİSTEMİ ekranını açar, kodu **tuş takımıyla** girer (31 harflik ızgara + ⌫ SİL + ✓ SORGULA; panel görsel diliyle aynı, tuşlar 57×57 px).
+3. Yanlış/eksik kod → **"Kayıt bulunamadı"** uyarısı, giriş temizlenir. Kod yalnızca **kuyruktaki** hastalar arasında aranır (gelmemiş hastanın kodunu oyuncu zaten bilemez).
+4. Doğru kod → ilaç listesi (kalem + adet) ekranda görünür **ve o hasta için kalıcı kalır**: geri dönünce reçete panelinin yerinde "MEDULA KAYDI" kartı durur, oyuncu listeye bakarak servis eder. Aynı kod tekrar girilirse listeyi yine gösterir.
+
+Sorgu durumu `game.medulaRevealed["gün:kod"]` içinde tutulur — **istek nesnesine yazılmaz**, çünkü o nesne gün cache'iyle paylaşılıyor; oraya yazılsa yeni oyunda eski sorgular açık gelirdi.
+
+### 7.4 Medula reçetesi ASLA sahte değildir
+`makeMedulaRequest` her zaman `fake: false` üretir. Medula hastasında `activeNeedsDecision()` false döner: **ONAYLA/REDDET fazı hiç çalışmaz**, doktor defteri ve kusur mantığı devreye girmez. Yanlış ilaç vermek **normal yanlış servis** gibi cezalandırılır (stok düşer, para gelmez, cost kadar zarar + itibar).
+
+### 7.5 ÖDEME AYRIMI (kritik)
+Medula satışının parası kasaya **anında girmez**. İki sayaç bilinçli olarak ayrılmıştır:
+
+| Sayaç | Ne zaman yazılır | Neden |
+|---|---|---|
+| `dayStats.money` (günlük kazanç — **hedefin ölçüldüğü** sayaç) | Hizmet edilen **GÜN** | Hedef formülü, R ve missCost hiç etkilenmesin |
+| `game.money` (harcanabilir **nakit**) | Hizmetten **2 gün sonra** (`medulaPayDelayDays`) | Nakit akışı baskısı |
+
+Vadeli alacak defteri: `game.receivables = [{ dueDay, amount }]`. `startNextDay()` içinde `collectReceivables()` vadesi gelenleri kasaya aktarır. Bildirim iki yerde: gün başında yeşil bilgi şeridi ("🏦 SGK ödemesi yattı: +X₺" — stok uyarısından **ayrı kanal**, birbirini ezmezler) ve o günün DAYEND kartında "🏦 SGK ödemesi yattı" satırı. Hizmet edilen günün DAYEND kartında ayrıca "🧾 SGK alacağı: X₺ (gün N+2)" satırı görünür. PC ana ekranında bekleyen alacak ve vade dökümü durur.
+
+**Kalıcılık:** stok/geliştirme ile aynı yol — `startNewGame()` sıfırlar, `startNextDay()` dokunmaz; DEVAM ET'te korunur. **Oyun biterse yatmamış alacak kaybolur**, ek işlem yapılmaz.
+
+**Defter bütünlüğü:** `verifyMedulaLedger()` her tahsilatta ve self-test'te "deftere yazılan toplam = kasaya giren + hâlâ bekleyen" eşitliğini kontrol eder; tutmazsa console.warn atar.
+
+8 günlük oynanışla doğrulandı — gecikme birebir:
+```
+gün 1 medula  772₺ → gün 3 yatan  772₺
+gün 4 medula  876₺ → gün 6 yatan  876₺
+gün 5 medula 1559₺ → gün 7 yatan 1559₺
+Defter: yazılan 6246₺ = yatan 4335₺ + bekleyen 1911₺  ✓
+```
+
+### 7.6 Denge
+- `medulaPatientRatio` 0.30 → ölçülen: reçeteli hastaların **%33'ü** Medula (15 günde 58 Medula / 118 kağıt reçete).
+- **Bu, sahte reçeteyle karşılaşma oranını bir miktar düşürür** — kağıt reçetelerin bir kısmı Medula'ya kaydığı için inceleme fırsatı azalır. Bilinen ve kabul edilmiş bir takas.
+- Medula satış fiyatı normal fiyatla **aynıdır**; tek fark ödemenin gecikmesi. Fiyat çarpanı yoktur.
+- Nöbet gecesinde de Medula hastası gelir ve **nöbet farkı (×1,25) Medula satışına da uygulanır** (8 günlük testte 3 gece Medula hastası, 999₺).
+
+## 8. Mevcut Assetler
 39 ilaçtan **14'ü gerçek PNG**, **25'i emoji fallback** (loadAssets() içindeki açık listeden doğrulandı):
 - Gerçek PNG'si olanlar: med_agriban, med_oksurmez, med_nezleson, med_cvitamin, med_miderahat, med_bandajix, med_atesdus, med_alerjin, med_goznur, med_uykutas (ilk 10) + med_bassakin, med_kasgevset, med_disdindir, med_agrijel (Ağrı grubu tamamlandı)
 - Kalan 25 ilaç emoji + renkli kutu fallback ile gösteriliyor
@@ -242,13 +308,13 @@ Diskte olup KULLANILMAYAN dosyalar:
 
 `cheats.assetStatus()` kapsamı: bg_pharmacy, counter, doctor_book, doctor_book_closed, pc + 39 ilacın assetKey'i + 8 hasta avatarı. Hiç yüklenmeyen btn_serve listeden çıkarıldı (her zaman "boş" gösterip yanıltıyordu).
 
-## 8. Sıradaki Yapılacaklar
-1. PC'ye SGK Medula / E-reçete ekranları (drawPcScreen kapsayıcısı buna hazır; `game.pcScreen` üçüncü/dördüncü bir değer alarak genişler).
-2. Kalan 25 emoji ilacın PNG üretimi (grup grup ilerliyor; Ağrı grubu tamamlandı, **sırada Soğuk grubu**).
-3. **Karar bekleyen:** sipariş konsantrasyon tavanı — tek hastanın günün cirosundaki payına sınır (bkz. 4.5). Uygulanmadı, tartışılmadı.
+## 9. Sıradaki Yapılacaklar
+1. Kalan 25 emoji ilacın PNG üretimi (grup grup ilerliyor; Ağrı grubu tamamlandı, **sırada Soğuk grubu**).
+2. **Karar bekleyen:** sipariş konsantrasyon tavanı — tek hastanın günün cirosundaki payına sınır (bkz. 4.5). Uygulanmadı, tartışılmadı.
+3. **Karar bekleyen:** günlük hedefe yaptırım eklenecek mi? Şu an **bilinçli olarak yok** (bkz. 4.4) — hedef yalnız DAYEND rozetidir. Eklenirse önce 4.3b'deki miss-maliyeti harmanlaması yapılmalı.
 4. **Gözlem — ölçülmeli:** gün 8'de 31 müşteri var (22 gündüz + 9 gece) ve sayı her gün artıyor. Mobilde tek oturumda oynanabilir bir uzunluk mu, gerçek cihazda süre tutulup bakılmalı. Uzun geliyorsa `patientsPerDayStep` ya da `nightPatientRatio` ayarlanır; ikisi de hedefi otomatik yeniden hesaplattığı için denge elle düzeltilmez.
 
-## 9. Çalışma Şekli (Kerem'in akışı)
+## 10. Çalışma Şekli (Kerem'in akışı)
 - Promptlar Claude Code'a (VS Code, Opus, High effort) kopyala-yapıştır için kod bloğu içinde, açıklamasız verilir; sonu hep "Komple güncel index.html ver."
 - İterasyon döngüsü: prompt → test → ekran görüntüsü → geri bildirim
 - Görsel üretimi: ChatGPT (Büfeci stili prompt, düz/beyaz arka plan) → asistana gönderilir → asistan Python flood-fill ile şeffaflaştırır, gerekirse grid'i böler → present_files ile PNG döner. Higgsfield KULLANILMIYOR.
@@ -257,7 +323,7 @@ Diskte olup KULLANILMAYAN dosyalar:
 ### Görsel Stil Çapası
 Büfeci tarzı: sıcak, hafif koyu, doygun, yarı-gerçekçi boyalı illüstrasyon, retro dokulu gölgeleme. Ahşap kahveleri, paslı metal, amber vurgular. KAWAII/PASTEL DEĞİL, düz vektör DEĞİL, çizgi film DEĞİL. İlaçlar 1:1, karakterler 3:4, arka plan 9:16.
 
-## 10. Bilinen Teknik Riskler
+## 11. Bilinen Teknik Riskler
 - String vs number id uyumsuzluğu sameMultiset'i sessizce bozabilir — ilaç id'leri her zaman string olarak tutulmalı
 - Eşleşme her yerde **id/kategori string'i** üzerinden yapılır, asla nesne referansı üzerinden değil. beginDaySchedule sığ kopya verir (request paylaşılır); derin klona (JSON/structuredClone) geçilirse bu kural bozulmaz ama request'in oynanış sırasında değişmediği varsayımı yeniden gözden geçirilmeli
 - Çizim içinde Math.random()/new Date() çağrısı titremeye yol açar; dateShort() ve formatMoney() gün/değer değişmediği sürece cache'li string döner — yeni cache'lenmemiş hesaplamalar eklerken dikkat
@@ -268,19 +334,21 @@ Büfeci tarzı: sıcak, hafif koyu, doygun, yarı-gerçekçi boyalı illüstrasy
 - **Gündüz/gece ayrımı iki yere bağımlı:** (a) spawn sırası — gece hastaları listenin SONUNDA olmalı, çünkü faz geçişi `dayCompleted >= sch.dayN` ile tetikleniyor; listeyi karıştıran bir değişiklik nöbeti bozar. (b) hedef hesabı — `night` bayrağı `refValuesFor`'a fiyat çarpanı olarak giriyor, bayrak kaybolursa gece cirosu R'ye eksik girer ve hedef sessizce düşer. Boot self-test'i ikisini de denetler (gündüz bölümünde night:true hasta olmamalı, nöbet olmayan günde hiç gece hastası olmamalı)
 - `game.phase` ("day"/"night") para sayacını da ikiye ayırır (`addDayMoney`); yeni bir para hareketi eklenirse `game.dayStats.money`'ye elle yazmak yerine `addDayMoney()` kullanılmalı, yoksa DAYEND'deki gündüz/gece toplamı tutmaz
 
-## 11. Geliştirici Araçları
+## 12. Geliştirici Araçları
 
-### 11.1 Karar teşhis bloğu
+### 12.1 Karar teşhis bloğu
 `CONFIG.debugDecisions` (varsayılan **true**) açıkken her servis/red kararında konsola tek okunabilir blok basılır: hasta tipi, istenen liste (ad + id + adet), verilen liste, doktorun defterde olup olmadığı, her kusur kontrolünün sonucu ve karşılaştırılan iki değer (reçete tarihi ↔ oyun tarihi), iç bayraklar (fake, flaws), tespit edilebilir kusurların listesi ve sonuç + gerekçe. Kapatmak için `CONFIG.debugDecisions = false`.
 
-### 11.2 Boot'ta sessiz çalışan self-test'ler
+### 12.2 Boot'ta sessiz çalışan self-test'ler
 Üçü de yalnız sorun bulursa console.warn atar; oyuncuya hiçbir şey görünmez. Şu an boot'ta **0 uyarı** çıkıyor.
 - **verifyGoalBalanceAllTiers(false)** — dengeyi **iki uçtan** koşturur: tüm geliştirmeler Lv1'de ve tümü maksimumdayken (`withUpgradeLevels` seviyeleri geçici olarak değiştirir ve iki yönde de gün cache'ini geçersiz kılar). Her turda `verifyGoalBalance` gün 1..10'a bakar — nöbet günleri 4 ve 8 dahil: izinli hata kadar hata hedefi tutturmalı, bir fazlası tutturmamalı (ortalama değerli hata varsayımıyla; 10'a yuvarlama adımının açıklayabildiği ihlaller elenir). Ayrıca patolojik uçları arar: izinli hata kadar hata EN İYİ hâlde bile tutmuyorsa "hedef imkânsız", bir fazlası EN KÖTÜ hâlde bile tutuyorsa "hedef anlamsız".
 - **selfTestPatients()** — gün 1..10'daki her hastayı ve tüm sistem verisini gezer:
   - (a) kategori ↔ sekme 1:1 mi
   - (b) sahte doktor isimleri gerçeklerden ayırt edilebilir mi (ad aynı + soyad öneki yasak)
   - (c) **geliştirme denetimi**: her kalemin her seviyesi geçerli efektif değer üretiyor mu, fiyatlar artan mı, `costK.length === maxLevel − 1` mi, maks seviyede satın alma reddediliyor mu, maks üstü seviye için fiyat üretiliyor mu
-  - (d) **Medula ipucu sızdırma denetimi**: terminal maks seviyeye alınıp tüm reçeteler taranır; sahte ve gerçek reçetelerin işaretlenme oranı **eşit** olmalı, her reçetede işaret sayısı terminal seviyesi kadar olmalı, hiçbir reçetede `hintFields` eksik olmamalı. Eşit değilse "Medula ipucu SAHTELİK SIZDIRIYOR" uyarısı düşer (negatif testle doğrulandı: eski davranış geri konunca uyarı tetikleniyor)
+  - (d) **reçete garantileri**: her günde ≥1 gerçek reçete, 2. günden itibaren ≥1 sahte reçete, gerçek reçetelerde kusur bayrağı yok, `overdose` kusuru hiç üretilmiyor
+  - (d2) **Medula kuralları** (terminal geçici olarak maks seviyeye alınıp bakılır): kod 6 karakter ve "2" ile başlıyor, yasak karakter (I/O/Q/0/1) yok, kodlar gün içinde benzersiz, hiçbir Medula hastası sahte değil ve kusur bayrağı taşımıyor, kalem listesi boş değil, R'ye giriyor, terminal açıkken en az bir Medula hastası üretiliyor, ve **alacak defteri bütünlüğü** (`verifyMedulaLedger`: yazılan = yatan + bekleyen)
+  - (d3) **semptom kuralları**: çok kalemli isteklerde kalemler farklı kategorilerden, her kalem için o kategoride ilaç var, adet 1 veya 2, konuşma cümlesi üretilmiş, ve tam doğru servis daima doğru sayılıyor (kategorideki ilk ve son ilaçla ayrı ayrı sınanır)
   - (e) **nöbet kuralları**: gece hasta sayısı ≥ nightPatientMin, `nightFakeChance()` tavanı aşmıyor, gece bölümünde ≥1 gerçek reçete var, gündüz bölümünde `night:true` hasta yok, nöbet olmayan günde hiç gece hastası yok
   - (f) hastanın tam ihtiyacı verilince sonuç daima "doğru" mu
   - (g) her sahte reçetenin tespit edilebilir en az 1 kusuru var mı
@@ -288,7 +356,7 @@ Büfeci tarzı: sıcak, hafif koyu, doygun, yarı-gerçekçi boyalı illüstrasy
   - (i) gerçek reçetenin tarihi o günün tarihi mi
 - **checkDataHealth()** — her ilaç kategorisinin en az bir semptomu, her semptom kategorisinin en az bir ilacı var mı.
 
-### 11.3 Debug cheatleri (window.cheats — 25 adet, koddan birebir doğrulandı)
+### 12.3 Debug cheatleri (window.cheats — 26 adet, koddan birebir doğrulandı)
 - addMoney(n) — parayı artırır
 - setReputation(n) — itibarı clamp'li ayarlar
 - skipDay() — PLAYING'deyse günü bitirir
@@ -307,6 +375,7 @@ Büfeci tarzı: sıcak, hafif koyu, doygun, yarı-gerçekçi boyalı illüstrasy
 - openDepot() — PC panelini doğrudan DEPO ekranında açar (PC'ye dokunmak ana ekrana götürür; bu cheat onu atlar)
 - prices() — tüm ilaçların alış/satış/kâr% tablosunu console.table ile yazar
 - explainPatient() — kuyruktaki mevcut hasta için karar teşhis bloğunu istek üzerine basar (debugDecisions kapalı olsa bile)
+- medula() — terminal durumu, vadeli SGK alacak defteri (gün / tutar / kalan gün), defter denetimi (yazılan = yatan + bekleyen) ve kuyruktaki Medula hastalarının kodları + ilaç listeleri
 - nightDuty() — önümüzdeki 6 nöbet gününü tabloyla yazar: gündüz/gece/toplam hasta, gece reçete ve sahte sayısı, gece cirosu, hedef. Üstünde nöbet ayarlarının özeti (sıklık, oran, gece sahte ihtimali, nöbet farkı)
 - forceNight() — mevcut günü nöbet gününe çevirip gece bölümünü hemen başlatır (test için). Günü yeniden üretir, gündüz kısmını tamamlanmış sayar. `_forcedNightDays` yalnız bu cheat tarafından doldurulur; normal üretimi etkilemez
 - upgrades() — tüm geliştirme kalemlerinin seviyesi, mevcut etkisi, bir sonraki seviyenin etkisi ve fiyatı (maks ise "TAM"); altında efektif değerlerin özeti (kuyruk, stok tavanı, gün müşterisi, sabır, medula ipucu)
