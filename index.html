@@ -58,6 +58,12 @@ const CONFIG = {
 
   // --- Sahte reçete inceleme ---
   fakeChance: 0.42,             // reçetenin sahte olma ihtimali (inceleme mekaniği yeterince devreye girsin)
+  // NOT (ölçüm geçmişi): repGainCorrect / fakeCatchRepGain / angryRepLoss bir ara
+  // %85 doğrulukla oynayan oyuncunun ölmesini telafi etmek için yükseltilmişti; sonra
+  // TABAN değerlere geri alındı. Sebep: o ölümün kaynağı itibar ekonomisi değil, geç
+  // oyundaki stok/nakit sarmalıydı — oyuncu rafı boşken kasayı geliştirmeye yatırınca
+  // stok tükeniyor, satış düşüyor, sarmal kapanıyor. Bu değerleri denge sorunu sanıp
+  // tekrar oynatma; önce stok kapsamını ölç.
   fakeApproveRepLoss: 15,       // sahteyi onaylayıp ilaç verince itibar cezası
   fakeApproveMoneyPenalty: 0,   // sahteyi onaylayınca para cezası (₺) — deriveEconomy: round(avgPrice × 2)
   fakeCatchRepGain: 8,          // sahteyi reddedince (yakalayınca) itibar
