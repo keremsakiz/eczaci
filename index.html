@@ -69,7 +69,7 @@ const CONFIG = {
   missRateDecay: 0.015,     // her gün orandan düşen miktar
   missRateFloor: 0.10,      // oran bunun altına inmez
   goalRatioClamp: [0.40, 0.90],  // hedef/R oranı güvenlik bandı
-  daySeedBase: 20260617,    // gün üretimi seed tabanı (değiştirmek tüm günleri yeniden kurar)
+  daySeedBase: 20260617,    // gün üretimi seed TABANI (koşu tohumuyla harmanlanır)
 
   // --- Nöbetçi eczane (aynı günün İKİNCİ bölümü; ayrı gün tipi değil) ---
   nightDutyEvery: 4,           // her 4. gün nöbetçi (gün 4, 8, 12…)
@@ -517,6 +517,7 @@ const game = {
   nightT: 0,              // gece katmanı geçiş ilerlemesi (0..1)
   nightIntro: null,       // "NÖBET BAŞLIYOR" kartı açıkken geçen süre (sn); null = kapalı
   upgrades: {},           // geliştirme id -> seviye (stok gibi kalıcı; startNewGame kurar)
+  runSeed: 0,             // KOŞU tohumu — her yeni oyunda yenilenir, DEVAM ET'te korunur
   receivables: [],        // SGK alacak defteri: [{ dueDay, amount }] — kalıcı, startNewGame sıfırlar
   medulaRevealed: {},     // "gün:kod" -> true (sorgulanmış kodlar; kuyruktaki hasta için kalıcı)
   medulaInput: "",        // Medula ekranındaki tuş takımı girişi
@@ -796,6 +797,37 @@ function mulberry32(seed) {
 }
 // fn'i seed'li RNG altında çalıştırır. pickKnownDoctor game.lastDoctor'a bakıp yazdığı için
 // o da izole edilir — aynı seed + aynı gün her zaman aynı listeyi verir.
+// --- KOŞU TOHUMU ---
+// Gün tohumu artık yalnız gün numarasından değil, KOŞU tohumundan da türer:
+//   aynı koşu + aynı gün  → bit-bit aynı liste (cache, hedef ve testler bozulmaz)
+//   farklı koşu           → tamamen farklı hastalar/reçeteler/kodlar
+const TEST_RUN_SEED = 20260617;      // self-test'ler ve denge doğrulaması bu tohumla koşar
+function newRunSeed() {
+  return ((Math.floor(Math.random() * 0x7FFFFFFF) ^ Date.now()) >>> 0) || 1;
+}
+// runSeed + gün → iyi dağılmış 32-bit tohum (ardışık gün/koşu korelasyon vermesin)
+function daySeedFor(day) {
+  let h = ((game.runSeed >>> 0) ^ (CONFIG.daySeedBase >>> 0)) >>> 0;
+  h = (h ^ Math.imul(day, 0x9E3779B1)) >>> 0;
+  h = Math.imul(h ^ (h >>> 16), 0x85EBCA6B);
+  h = Math.imul(h ^ (h >>> 13), 0xC2B2AE35);
+  return (h ^ (h >>> 16)) >>> 0;
+}
+// fn'i belirli bir koşu tohumuyla çalıştır (testler için); gün cache'i iki yönde de temizlenir
+function withRunSeed(seed, fn) {
+  const prev = game.runSeed;
+  const prevSch = game.daySchedule;
+  game.runSeed = seed >>> 0;
+  game.daySchedule = null;
+  invalidateDaySchedules();
+  try { return fn(); }
+  finally {
+    game.runSeed = prev;
+    game.daySchedule = prevSch;
+    invalidateDaySchedules();
+  }
+}
+
 function withSeed(seed, fn) {
   const prevSrc = _rngSource, prevDoc = game.lastDoctor;
   _rngSource = mulberry32(seed);
@@ -896,7 +928,7 @@ function buildDaySchedule(day) {
   _dateDayOverride = day;                 // reçete tarihleri o güne göre damgalansın
   let patients;
   try {
-    patients = withSeed(CONFIG.daySeedBase + day * 7919, function () {
+    patients = withSeed(daySeedFor(day), function () {
       const out = [];
       for (let i = 0; i < dayN; i++) out.push(makePatient());
       // NÖBET bölümü — listenin sonuna eklenir, spawn sırayla çektiği için gece sonra gelir
@@ -1186,6 +1218,15 @@ function makeSymptomRequest() {
   };
 }
 
+// Çok kalemli semptom hastası daha uzun bekler: tek ilaç isteyenle aynı sürede
+// beklemek haksızlık — oyuncunun birden çok sekmeye gitmesi gerekiyor.
+// 1 kalem ×1, 2 kalem ×1.25, 3 kalem ×1.5. Reçete ve Medula hastalarına uygulanmaz.
+function symptomPatienceMul(request) {
+  if (!request || request.type !== "symptom") return 1;
+  const n = (request.items || []).length;
+  return n >= 3 ? 1.5 : n === 2 ? 1.25 : 1;
+}
+
 // semptomlu hastanın istediği KATEGORİ çoklu-kümesi (adet dahil, id tekrarlı liste kalıbı)
 function expectedCategoryList(request) {
   const out = [];
@@ -1251,9 +1292,12 @@ function makePatient(opts) {
 
 // hastayı kuyruğa al (giriş animasyonu + sayaç). Program dışı (bonus) hastalar sayılmaz.
 function enqueuePatient(patient) {
-  // sabır sahneye çıkış anındaki Bekleme Alanı seviyesine göre kurulur (gün ortasında
-  // yükseltme yapılırsa sonraki hastalar hemen faydalanır)
-  patient.maxPatience = effPatience() * (patient.night ? CONFIG.nightPatienceMultiplier : 1);
+  // Sabır sahneye çıkış anındaki Bekleme Alanı seviyesine göre kurulur (gün ortasında
+  // yükseltme yapılırsa sonraki hastalar hemen faydalanır). Çarpanlar BİRBİRİYLE ÇARPILIR,
+  // biri diğerinin yerine geçmez: geliştirme × nöbet × kalem sayısı.
+  patient.maxPatience = effPatience()
+    * (patient.night ? CONFIG.nightPatienceMultiplier : 1)
+    * symptomPatienceMul(patient.request);
   patient.patience = patient.maxPatience;
   patient.posCurrent = game.queue.length + 0.85;   // sağdan kayarak girsin
   game.queue.push(patient);
@@ -1765,6 +1809,11 @@ function startNewGame() {
   game.phase = "day";
   game.nightIntro = null;
   game.nightT = 0;
+  // SIRA ÖNEMLİ: koşu tohumu ve geliştirmeler, gün 1 listesi kurulmadan ÖNCE ayarlanır —
+  // yoksa gün 1 eski tohumla/eski seviyelerle üretilir.
+  game.runSeed = newRunSeed();   // HER YENİ OYUN farklı: stok/geliştirme ile aynı kalıcılık yolu
+  initUpgrades();         // geliştirmeler yalnızca yeni oyunda sıfırlanır (günler arası kalıcı)
+  invalidateDaySchedules();
   beginDaySchedule(1);
   game.spawnTimer = 0;
   game.daySpawned = 0;
@@ -1784,7 +1833,6 @@ function startNewGame() {
   game.medulaResult = null;
   game.collectedToday = 0;
   game.infoToast = null;
-  initUpgrades();         // geliştirmeler yalnızca yeni oyunda sıfırlanır (günler arası kalıcı)
   initStock();            // stok yalnızca yeni oyunda sıfırlanır (günler arası kalıcı)
   game.dayStats = { served: 0, correct: 0, wrong: 0, angry: 0, money: 0, moneyDay: 0, moneyNight: 0, medulaAccrued: 0 };
   game.state = STATE.PLAYING;
@@ -1973,9 +2021,9 @@ function drawHUD() {
   retroBox(rx, rw);
   const pct = clamp(Math.round(game.reputation), 0, 100);
   const repEmoji = pct < 35 ? "😡" : pct < 70 ? "😑" : "😊";
-  text(repEmoji, rx + rpad, y1, fs1, "#000", "left", "400");
+  drawEmoji(repEmoji, rx + rpad + fs1 * 0.5, y1, fs1, "#000");
   text("%" + pct, rx + rw - rpad, y1, fs1, c.neon, "right", "800");
-  text("💵", rx + rpad, y2, fs2, "#000", "left", "400");
+  drawEmoji("💵", rx + rpad + fs2 * 0.5, y2, fs2, "#000");
   fitText(formatMoney(game.money), rx + rw - rpad, y2, rw * 0.64, fs2, "#8fe3a8", "right", "800");
 
   // NÖBET rozeti — sol kutu ile EV butonu arasındaki boşlukta (HUD düzeni değişmez).
@@ -1994,7 +2042,7 @@ function drawHUD() {
     ctx.globalAlpha = on ? 1 : 0.75;
     fillRoundRect(bx, by, bs, bs, bs * 0.30, on ? "rgba(96, 78, 168, 0.95)" : "rgba(40, 34, 68, 0.85)");
     strokeRoundRect(bx, by, bs, bs, bs * 0.30, on ? "#c9b6ff" : "rgba(160, 140, 235, 0.7)", Math.max(1.5, bs * 0.07));
-    text("🌙", bx + bs / 2, by + bs / 2 + bs * 0.03, bs * 0.56, "#000", "center", "400");
+    drawEmoji("🌙", bx + bs / 2, by + bs / 2, bs * 0.56, "#000");
     ctx.restore();
     }
   }
@@ -2010,7 +2058,7 @@ function drawHUD() {
   ctx.restore();
   strokeRoundRect(hx, hy, hs, hs, hs * 0.18, c.panelBorder, Math.max(2, hs * 0.06));
   // emoji tam merkez + minik optik offset (emoji baseline'ı hafif yukarı render olur)
-  text("🏠", hx + hs / 2, hy + hs / 2 + hs * 0.03, hs * 0.48, "#000", "center", "400");
+  drawEmoji("🏠", hx + hs / 2, hy + hs / 2, hs * 0.48, "#000");
 }
 
 // ---- kuyruk yerleşimi: pozisyon değerini sahne koordinatına çevir ----
@@ -2099,7 +2147,7 @@ function drawOnePatient(p) {
   const boxX = cx - charH / 2;
   const boxY = L.baseY - charH;
   Sprite.draw(ctx, p.avatarKey, boxX, boxY, charH, charH, () => {
-    text(p.avatar, cx, L.baseY - charH * 0.5, charH * 0.82, "#000", "center", "400");
+    drawEmoji(p.avatar, cx, L.baseY - charH * 0.5, charH * 0.82, "#000");
   }, "contain");
 
   ctx.globalAlpha = 1;
@@ -2424,6 +2472,56 @@ function drawSpeechBubble(x, y, w, h, tailX, tailBaseY) {
   strokeRoundRect(x, y, w, h, h * 0.20, "rgba(120,90,50,0.45)", Math.max(1.5, w * 0.006));
 }
 
+// =====================================================================
+//  EMOJİ ÇİZİMİ — gerçek glif kutusuna göre ortalama
+// =====================================================================
+// Sorun: ctx.textBaseline="middle" glifi FONTUN em kutusuna göre ortalar, glifin
+// kendi kutusuna göre değil. Emoji glifleri arasında yükseklik/genişlik farkı olduğu
+// için tek bir dikey ofset hepsine uymaz — kimi yukarı kimi aşağı kayar, kimi taşar.
+// Çözüm: her emojiyi measureText'in actualBoundingBox* değerleriyle ölçüp GERÇEK
+// çizim kutusunu bul, hedef kutuya sığdır ve o kutunun merkezine hizala.
+// Emoji başına elle ofset tablosu YOK — ölçüm her glif için kendi kendine çalışır.
+function emojiMetrics(ch, size, weight) {
+  ctx.save();
+  ctx.font = (weight || "400") + " " + size + "px " + RX_FONT;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  const m = ctx.measureText(ch);
+  ctx.restore();
+  const L = m.actualBoundingBoxLeft, R = m.actualBoundingBoxRight;
+  const A = m.actualBoundingBoxAscent, D = m.actualBoundingBoxDescent;
+  const has = [L, R, A, D].every(v => typeof v === "number" && isFinite(v));
+  if (!has) return null;                      // tarayıcı desteklemiyorsa: eski yola düş
+  return { left: L, right: R, asc: A, desc: D, w: L + R, h: A + D };
+}
+
+// Emojiyi (cx, cy) merkezli, kenarı `box` olan kareye sığdırarak çiz.
+// Dönüş: gerçek çizim kutusu { x, y, w, h } (denetim için) ya da null.
+function drawEmoji(ch, cx, cy, box, color, weight) {
+  let size = box;
+  let m = emojiMetrics(ch, size, weight);
+  if (!m || !(m.w > 0) || !(m.h > 0)) {
+    // ölçüm yoksa eski davranış (em kutusuna göre ortalama)
+    text(ch, cx, cy, box * 0.92, color || "#000", "center", weight || "400");
+    return null;
+  }
+  // taşıyorsa puntoyu kutuya sığacak orana çek (ölçüm punto ile doğrusal ölçeklenir)
+  const over = Math.max(m.w / box, m.h / box);
+  if (over > 1) { size = size / over; m = emojiMetrics(ch, size, weight) || m; }
+
+  // glif kutusunun merkezi (cx, cy) olacak şekilde çizim noktası
+  const drawX = cx - (m.right - m.left) / 2;
+  const drawY = cy + (m.asc - m.desc) / 2;
+  ctx.save();
+  ctx.font = (weight || "400") + " " + size + "px " + RX_FONT;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = color || "#000";
+  ctx.fillText(ch, drawX, drawY);
+  ctx.restore();
+  return { x: drawX - m.left, y: drawY - m.asc, w: m.w, h: m.h };
+}
+
 // Bir metni verilen maxW'ye sığacak şekilde küçülterek çiz (taşmayı önler).
 const RX_FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
 function fitText(str, x, y, maxW, px, color, align, weight) {
@@ -2501,7 +2599,7 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
     ctx.strokeStyle = "#2e7d32"; ctx.lineWidth = Math.max(1.2, h * 0.006);
     ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.stroke();
     ctx.restore();
-    text("✚", bx, by + h * 0.002, br * 1.5, "#2e7d32", "center", "800");
+    drawEmoji("✚", bx, by, br * 1.5, "#2e7d32", "800");
     docX = lx + br * 2 + w * 0.025;
   }
   fitText(req.doctor, docX, headY, (rx - innerW * 0.36) - docX, h * 0.052, ink, "left", "700");
@@ -2676,7 +2774,7 @@ function drawSymptom(request, x, y, w, h) {
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
     const es = eSize * scale;
-    text(it.symptom.emoji, ex + es * 0.525, eY, es, "#000", "center", "400");
+    drawEmoji(it.symptom.emoji, ex + es * 0.525, eY, es, "#000");
     if (it.qty > 1) {
       fitText("×" + it.qty, ex + es * 1.05 + es * 0.30, eY + es * 0.08, es * 0.62, es * 0.46,
         "#7a3a2a", "center", "800");
@@ -2712,8 +2810,9 @@ function drawTabLabel(emoji, label, cx, cy, maxW, fs, color, weight) {
   let s = fs, emojiW, gapE, textW, total;
   const measure = () => {
     ctx.font = weight + " " + s + "px " + RX_FONT;
-    textW = ctx.measureText(label).width;   // düz metin doğru ölçülür
-    emojiW = s * 1.05;                       // emoji ~1em (sabit tahmin)
+    textW = ctx.measureText(label).width;    // düz metin doğru ölçülür
+    const em = emojiMetrics(emoji, s, "400");
+    emojiW = em && em.w > 0 ? em.w : s * 1.05;   // ÖLÇÜLEN genişlik (tahmin değil)
     gapE = s * 0.28;
     total = emojiW + gapE + textW;
   };
@@ -2721,10 +2820,12 @@ function drawTabLabel(emoji, label, cx, cy, maxW, fs, color, weight) {
   while (s > 7 && total > maxW) { s -= 0.5; measure(); }  // sığmazsa küçült
 
   const startX = cx - total / 2;             // grubu yatayda ortala
+  // emoji kendi ölçülen kutusunun merkezine hizalanır; etiket normal metin akışında
+  drawEmoji(emoji, startX + emojiW / 2, cy, emojiW, color, "400");
   ctx.fillStyle = color;
-  ctx.textBaseline = "middle";               // dikeyde ortala
+  ctx.textBaseline = "middle";
   ctx.textAlign = "left";
-  ctx.fillText(emoji, startX, cy);
+  ctx.font = weight + " " + s + "px " + RX_FONT;
   ctx.fillText(label, startX + emojiW + gapE, cy);
 }
 
@@ -2811,7 +2912,7 @@ function drawShelf() {
     Sprite.draw(ctx, m.assetKey, ix, iy, iw, ih, () => {
       // fallback (görselsiz ilaçlar): renkli yumuşak kutu + emoji
       fillRoundRect(ix, iy, iw, ih, iw * 0.16, m.color);
-      text(m.emoji, ix + iw / 2, iy + ih / 2, ih * 0.55, "#000", "center", "400");
+      drawEmoji(m.emoji, ix + iw / 2, iy + ih / 2, ih * 0.55, "#000");
     }, "contain");
 
     // ad — kartın altında, koyu mürekkep
@@ -2919,7 +3020,7 @@ function drawCounter() {
       ctx.shadowOffsetY = 2;
       fillRoundRect(slot.x, slot.y, slot.w, slot.h, slot.w * 0.24, m.color);
       ctx.restore();
-      text(m.emoji, slot.x + slot.w / 2, slot.y + slot.h * 0.5, slot.w * 0.55, "#000", "center", "400");
+      drawEmoji(m.emoji, slot.x + slot.w / 2, slot.y + slot.h * 0.5, slot.w * 0.55, "#000");
     }, "contain");
     // kaldır işareti (sol üst; sağ üst adet rozetine ayrıldı)
     text("✕", slot.x + slot.w * 0.16, slot.y + slot.h * 0.14, slot.w * 0.24, "rgba(255,235,210,0.85)", "center", "800");
@@ -3085,7 +3186,10 @@ function drawDayEnd() {
   const rx = cardX + cardW * 0.88;
   let ly = cardY + headerH + padTop + rowStep * 0.5;
   const row = (icon, label, val) => {
-    text(icon + " " + label, lx, ly, fs, c.cream, "left", "600");
+    // emoji metin akışında değil, kendi kare kutusunda ortalanır (glif yüksekliği
+    // farkları satırı kaydırmasın); etiket emojinin sağından başlar
+    drawEmoji(icon, lx + fs * 0.5, ly, fs, c.cream);
+    text(label, lx + fs * 1.35, ly, fs, c.cream, "left", "600");
     text(val, rx, ly, fs, c.neon, "right", "800");
     ly += rowStep;
   };
@@ -3305,7 +3409,7 @@ function drawPcHome() {
     strokeRoundRect(bx, by, bw, bh, bh * 0.22, it.on ? c.neon : c.neonDim, Math.max(1.5, bw * 0.004));
     ctx.restore();
     ctx.globalAlpha = it.on ? 1 : 0.55;
-    text(it.emoji, bx + bw * 0.12, by + bh * 0.5, bh * 0.42, c.cream, "center", "400");
+    drawEmoji(it.emoji, bx + bw * 0.12, by + bh * 0.5, bh * 0.42, c.cream);
     fitText(it.label, bx + bw * 0.22, by + bh * 0.38, bw * 0.72, bh * 0.26, it.on ? c.neon : c.neonDim, "left", "800");
     fitText(it.sub, bx + bw * 0.22, by + bh * 0.68, bw * 0.72, bh * 0.19, c.creamSoft, "left", "600");
     ctx.globalAlpha = 1;
@@ -3451,7 +3555,7 @@ function drawUpgrades() {
     strokeRoundRect(rx0, ry, rw, rowH, rowH * 0.20, "rgba(245,170,70,0.28)", 1);
 
     // sol: emoji + ad + etki
-    text(u.emoji, rx0 + rw * 0.07, ry + rowH * 0.42, rowH * 0.34, c.cream, "center", "400");
+    drawEmoji(u.emoji, rx0 + rw * 0.07, ry + rowH * 0.42, rowH * 0.34, c.cream);
     const nameX = rx0 + rw * 0.14;
     fitText(u.name, nameX, ry + rowH * 0.26, rw * 0.42, rowH * 0.24, c.cream, "left", "800");
     fitText(u.desc, nameX, ry + rowH * 0.52, rw * 0.46, rowH * 0.17, c.creamSoft, "left", "600");
@@ -3571,7 +3675,7 @@ function drawDepot() {
     fillRoundRect(rx0, ry, rw, rowH, rowH * 0.20, "rgba(26,21,36,0.5)");
 
     // SOL: emoji + ad (üst; uzunsa "…" ile kısalır, taşmaz) + stok (alt, soluk)
-    text(m.emoji, rx0 + rowH * 0.42, ry + rowH * 0.5, rowH * 0.40, "#f2e6d4", "center", "400");
+    drawEmoji(m.emoji, rx0 + rowH * 0.42, ry + rowH * 0.5, rowH * 0.40, "#f2e6d4");
     const nameX = rx0 + rowH * 0.80;
     ellipsisText(m.name, nameX, ry + rowH * 0.30, colNameR - nameX, rowH * 0.28, c.cream, "left", "700");
     fitText("Stok " + stock + "/" + effMaxStock(), nameX, ry + rowH * 0.70, colNameR - nameX,
@@ -4137,6 +4241,14 @@ window.cheats = {
     CONFIG.debugDecisions = prev;
     return p.request;
   },
+  setSeed(v) {
+    game.runSeed = (v >>> 0) || 1;
+    invalidateDaySchedules();
+    if (game.daySchedule) beginDaySchedule(game.dayNumber);   // oynanan günü de yeni tohumla kur
+    console.log("runSeed = " + game.runSeed + " (gün cache'i temizlendi)");
+    return game.runSeed;
+  },
+  seed() { console.log("runSeed = " + game.runSeed); return game.runSeed; },
   medula() {
     console.log("Medula terminali: " + (medulaUnlocked() ? "AÇIK" : "KİLİTLİ") +
       " | hasta oranı %" + Math.round(CONFIG.medulaPatientRatio * 100) +
@@ -4240,7 +4352,7 @@ window.cheats = {
       " | avgCost: " + avgCost.toFixed(2) + "₺" +
       " | ort. kâr marjı: %" + (marj * 100).toFixed(1) +
       " | startMoney: " + CONFIG.startMoney + "₺" +
-      " | daySeedBase: " + CONFIG.daySeedBase
+      " | runSeed: " + game.runSeed + " (daySeedBase " + CONFIG.daySeedBase + ")"
     );
     const rows = {};
     for (let d = 1; d <= 10; d++) {
@@ -4447,12 +4559,16 @@ function allLevels(pick) {
 
 // Denge hem TÜM SEVİYELER 1'de hem TÜM SEVİYELER MAKSİMUMDA tutmalı.
 function verifyGoalBalanceAllTiers(verbose) {
-  let ok = true;
-  if (verbose) console.log("— Denge: tüm geliştirmeler Lv1 —");
-  ok = withUpgradeLevels(allLevels(() => 1), () => verifyGoalBalance(verbose)) && ok;
-  if (verbose) console.log("— Denge: tüm geliştirmeler MAKS —");
-  ok = withUpgradeLevels(allLevels(u => u.maxLevel), () => verifyGoalBalance(verbose)) && ok;
-  return ok;
+  // SABİT test tohumu: koşu tohumu rastgele olduğu için, doğrulama sonucu her açılışta
+  // değişmesin ve tekrarlanabilir kalsın.
+  return withRunSeed(TEST_RUN_SEED, function () {
+    let ok = true;
+    if (verbose) console.log("— Denge: tüm geliştirmeler Lv1 —");
+    ok = withUpgradeLevels(allLevels(() => 1), () => verifyGoalBalance(verbose)) && ok;
+    if (verbose) console.log("— Denge: tüm geliştirmeler MAKS —");
+    ok = withUpgradeLevels(allLevels(u => u.maxLevel), () => verifyGoalBalance(verbose)) && ok;
+    return ok;
+  });
 }
 verifyGoalBalanceAllTiers(false);   // boot'ta sessiz; yalnız denge bozuksa uyarır
 
@@ -4472,11 +4588,65 @@ function symptomAnswerCombos(items) {
   return [mk("first"), mk("last")].filter(Boolean);
 }
 
+// Oyunda çizilen TÜM emojiler — denetim buradan gezer. (Veriden gelenler + sabit UI'lar.)
+function allGameEmoji() {
+  const out = [];
+  const add = (ch, where) => { if (ch) out.push({ ch: ch, where: where }); };
+  for (const m of MEDICINES) add(m.emoji, "ilaç kartı/tezgah/depo (" + m.name + ")");
+  for (const g of GROUPS) add(g.emoji, "kategori sekmesi (" + g.label + ")");
+  for (const x of SYMPTOMS) add(x.emoji, "semptom balonu (" + x.label + ")");
+  for (const a of PATIENT_AVATARS) add(a.emoji, "hasta avatarı");
+  for (const u of UPGRADES) add(u.emoji, "geliştirme satırı (" + u.name + ")");
+  const ui = [
+    ["🏠", "HUD ev butonu"], ["🌙", "HUD nöbet rozeti / DAYEND gece satırı"],
+    ["💵", "HUD para"], ["😡", "HUD itibar (düşük)"], ["😑", "HUD itibar (orta)"],
+    ["😊", "HUD itibar (yüksek)"], ["✚", "reçete kaşesi"],
+    ["👥", "DAYEND servis satırı"], ["😠", "DAYEND küsen satırı"],
+    ["💰", "DAYEND kazanç satırı"], ["☀️", "DAYEND gündüz satırı"],
+    ["🏦", "DAYEND SGK ödemesi"], ["🧾", "DAYEND SGK alacağı"],
+    ["📦", "PC ana ekran / DAYEND depo butonu"], ["🔧", "PC ana ekran geliştirme"],
+    ["🖥️", "PC ana ekran Medula"]
+  ];
+  for (const [ch, w] of ui) add(ch, w);
+  return out;
+}
+
+// Her emojiyi referans kutuya çizip GERÇEK glif kutusunu ölç: kutunun içinde mi,
+// merkezde mi? Sapan varsa hangi emoji ve nerede kullanıldığı bildirilir.
+function selfTestEmoji() {
+  const warn = [];
+  const box = 64;                    // referans kutu (ölçüm punto ile doğrusal ölçeklenir)
+  const tol = box * 0.06;            // merkez sapma toleransı (~4 px)
+  const seen = {};
+  for (const e of allGameEmoji()) {
+    if (seen[e.ch]) continue;
+    seen[e.ch] = true;
+    const m = emojiMetrics(e.ch, box, "400");
+    if (!m) continue;                // tarayıcı actualBoundingBox vermiyorsa denetim atlanır
+    const r = drawEmoji(e.ch, 0, 0, box, "#000");   // merkez (0,0) hedefli ölçüm çizimi
+    if (!r) continue;
+    const ccx = r.x + r.w / 2, ccy = r.y + r.h / 2;
+    if (Math.abs(ccx) > tol || Math.abs(ccy) > tol) {
+      warn.push("Emoji '" + e.ch + "' kutusunda ortalanmıyor (sapma x=" + ccx.toFixed(1) +
+        " y=" + ccy.toFixed(1) + " px, tolerans " + tol.toFixed(1) + ") — kullanıldığı yer: " + e.where);
+    }
+    if (r.w > box + 0.5 || r.h > box + 0.5) {
+      warn.push("Emoji '" + e.ch + "' kutuya sığmıyor (" + r.w.toFixed(1) + "×" + r.h.toFixed(1) +
+        " > " + box + ") — kullanıldığı yer: " + e.where);
+    }
+  }
+  for (const w of warn) console.warn("[emoji] " + w);
+  return warn.length === 0;
+}
+
 // =====================================================================
 //  KALICI SELF-TEST — boot'ta sessiz çalışır, yalnız sorun varsa console.warn
 // =====================================================================
 // Üretilmiş gün 1..10'daki HER hastayı gerçek eşleşme koduyla sınar.
 function selfTestPatients(days) {
+  return withRunSeed(TEST_RUN_SEED, function () { return selfTestPatientsInner(days); });
+}
+function selfTestPatientsInner(days) {
   days = days || 10;
   const warn = [];
   const bookNames = KNOWN_DOCTORS.map(d => d.name);
@@ -4590,9 +4760,37 @@ function selfTestPatients(days) {
       }
     }
     if (medulaUnlocked() && mtot === 0) warn.push("Terminal açıkken gün 1.." + days + " içinde hiç Medula hastası üretilmedi");
+    // Terminal KİLİTLİYKEN tek bir Medula hastası bile olmamalı
+    game.upgrades = allLevels(() => 1);
+    invalidateDaySchedules();
+    let lockedM = 0;
+    for (let d = 1; d <= days; d++) lockedM += getDaySchedule(d).patients.filter(p => p.request.type === "medula").length;
+    if (lockedM > 0) warn.push("Terminal KİLİTLİ olmasına rağmen " + lockedM + " Medula hastası üretildi");
     // alacak defteri bütünlüğü: yazılan toplam = yatan + bekleyen
     if (!verifyMedulaLedger()) warn.push("Medula alacak defteri tutarları tutmuyor (yukarıdaki [medula] uyarısına bakın)");
     game.upgrades = prevUp3;
+    invalidateDaySchedules();
+  }
+
+  // 0d4) ÇOK KALEMLİ SEMPTOM SABRI — 3 kalemli hasta 1 kalemliden KESİN olarak uzun
+  // beklemeli ve bu, Bekleme Alanı seviyesinden bağımsız olmalı.
+  {
+    const prevUp4 = game.upgrades;
+    for (const lv of [1, 2, 3]) {
+      game.upgrades = allLevels(x => x.id === "bekleme" ? lv : 1);
+      const mk = n => ({ type: "symptom", items: new Array(n).fill(0).map(() => ({ symptom: SYMPTOMS[0], qty: 1 })) });
+      const p1 = effPatience() * symptomPatienceMul(mk(1));
+      const p2 = effPatience() * symptomPatienceMul(mk(2));
+      const p3 = effPatience() * symptomPatienceMul(mk(3));
+      if (!(p3 > p1)) warn.push("Bekleme Lv" + lv + ": 3 kalemli semptom sabrı (" + p3.toFixed(1) + ") 1 kalemliden (" + p1.toFixed(1) + ") uzun değil");
+      if (!(p2 > p1)) warn.push("Bekleme Lv" + lv + ": 2 kalemli semptom sabrı 1 kalemliden uzun değil");
+      if (!(p3 > p2)) warn.push("Bekleme Lv" + lv + ": 3 kalemli semptom sabrı 2 kalemliden uzun değil");
+      if (Math.abs(p3 / p1 - 1.5) > 1e-6) warn.push("Bekleme Lv" + lv + ": 3 kalem çarpanı 1.5 değil (" + (p3 / p1).toFixed(3) + ") — geliştirme çarpanı yerine geçmiş olabilir");
+      // reçete/Medula sabrına dokunulmamalı
+      if (symptomPatienceMul({ type: "prescription", items: [] }) !== 1) warn.push("Reçete hastasının sabrına kalem çarpanı uygulanıyor");
+      if (symptomPatienceMul({ type: "medula", items: [] }) !== 1) warn.push("Medula hastasının sabrına kalem çarpanı uygulanıyor");
+    }
+    game.upgrades = prevUp4;
     invalidateDaySchedules();
   }
 
@@ -4693,6 +4891,7 @@ function selfTestPatients(days) {
   return warn.length === 0;
 }
 selfTestPatients();
+selfTestEmoji();
 
 // --- Veri sağlık kontrolü: kategori eşleşmeleri (SADECE konsol; oyuncuya görünmez) ---
 function checkDataHealth() {
