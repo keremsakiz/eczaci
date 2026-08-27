@@ -33,12 +33,28 @@ const CONFIG = {
   // Amac: oyuncu ilk depo siparisini rahat versin, ikincisinde zorlansin.
   startMoney: 0,
   startReputation: 50,
-  maxReputation: 100,
+  maxReputation: 100,       // KULLANILMIYOR — yumuşak tavandan sonra üst sınır repMax'tir
+                            // (aşağıya bak). Clamp'lerde bunu KULLANMA: 100 üstü yastığı siler.
   minReputation: 0,
 
   // kazanç ilaç bazında: her MEDICINES öğesinin price alanından hesaplanır (sabit yok)
   repGainCorrect: 2,        // doğru serviste itibar artışı
   repLossWrong: 5,          // yanlış serviste itibar kaybı
+  // Günlük hedefi TUTTURAN gün itibar kazandırır. İtibar 100'de tavanlı olduğu için
+  // servis başına kazanç iyi günlerde tavana çarpıp kayboluyor, kayıplar ise her zaman
+  // işliyordu: oyuncu iyi oynasa bile yastık biriktiremiyordu. Bu, gün ÖLÇEĞİNDE bir
+  // tampon verir. Hedefi KAÇIRMAK hâlâ hiçbir ceza getirmez (bilinçli tasarım kararı).
+  goalMetReputation: 3,     // hedef tutturulan günün sonunda itibar artışı
+
+  // --- Yumuşak itibar tavanı ---
+  // Sert 100 tavanı, tavana çarpan kazancı tamamen yok ediyordu; kayıplar ise her zaman
+  // tam işliyordu. Sonuç: iyi oynamak yastık biriktirmiyordu (%85 doğrulukla oynayan bot
+  // ham bütçesi POZİTİF olmasına rağmen 24/24 ölüyordu). Artık kazancın repSoftCap'e kadar
+  // olan kısmı TAM, üstü repOverflowFactor ile kısılarak eklenir; toplam repMax'i aşmaz.
+  // KAYIPLARDA yumuşatma YOKTUR — tam değerle işler. Oyun sonu koşulu değişmedi (itibar 0).
+  repSoftCap: 100,          // buraya kadar kazanç tam değerle
+  repMax: 150,              // itibarın çıkabileceği mutlak tavan
+  repOverflowFactor: 0.5,   // repSoftCap üstündeki kazanç bu katsayıyla eklenir
 
   // --- Sahte reçete inceleme ---
   fakeChance: 0.42,             // reçetenin sahte olma ihtimali (inceleme mekaniği yeterince devreye girsin)
@@ -1609,7 +1625,7 @@ function rejectPrescription() {
     game.money += CONFIG.fakeCatchBonus;
     addDayMoney(CONFIG.fakeCatchBonus);
     game.dayStats.correct++;
-    game.reputation = clamp(game.reputation + CONFIG.fakeCatchRepGain, CONFIG.minReputation, CONFIG.maxReputation);
+    gainReputation(CONFIG.fakeCatchRepGain);
     game.feedback = { ok: true, angry: false, text: "✓ Sahte reçete yakaladın!  +" + CONFIG.fakeCatchBonus + "₺", t: 0 };
     explainDecision(p, [], "DOĞRU", "sahte reçete reddedildi (+" + CONFIG.fakeCatchBonus + "₺)");
   } else {
@@ -1917,7 +1933,7 @@ function checkOrder() {
     }
     addDayMoney(earn);
     game.dayStats.correct++;
-    game.reputation = clamp(game.reputation + CONFIG.repGainCorrect, CONFIG.minReputation, CONFIG.maxReputation);
+    gainReputation(CONFIG.repGainCorrect);
     game.feedback = p.request.type === "medula"
       ? { ok: true, angry: false, text: "✓ Medula kaydı işlendi!  +" + earn + "₺ (SGK, gün " + (game.dayNumber + CONFIG.medulaPayDelayDays) + ")", t: 0 }
       : { ok: true, angry: false, text: "✓ Teşekkürler!  +" + earn + "₺", t: 0 };
@@ -1973,10 +1989,14 @@ function beginNightShift() {
 function endDay() {
   game.state = STATE.DAYEND;
   game.feedback = null;
-  game.dayResult = {
-    goal: goalForDay(),
-    met: game.dayStats.money >= goalForDay()
-  };
+  const goal = goalForDay();
+  const met = game.dayStats.money >= goal;
+  // Hedef tutan gün itibar kazandırır (tavan korunur => zaten 100'deyse kazanç 0 olur).
+  // Kaçıran gün CEZA ALMAZ. Buraya konması cheat ile atlanan günlerde de tutarlı çalışmasını
+  // sağlar: skipDay da endDay üzerinden geçer.
+  // yumuşak tavan yüzünden fiilen eklenen değer repGain'e yazılır (kart bunu gösterir)
+  const repGain = met ? gainReputation(CONFIG.goalMetReputation) : 0;
+  game.dayResult = { goal: goal, met: met, repGain: repGain };
 }
 
 // günün listesini hazırla ve sayaçları sıfırla (hedef artık bu listeden geliyor).
@@ -2065,9 +2085,28 @@ function startNewGame() {
   spawnPatient();
 }
 
-// İtibar kaybını tek noktadan uygula: clamp + sıfıra inince oyun biter.
+// İtibar KAZANCINI tek noktadan uygula (yumuşak tavan).
+// repSoftCap'e kadar tam değer, üstü repOverflowFactor ile kısılmış; toplam repMax'i aşmaz.
+// Örnek: itibar 98, kazanç +6 -> 2 puan tam (100'e kadar) + 4 puanın yarısı = 102.
+// Uygulanan GERÇEK artışı döndürür (DAYEND kartı bunu gösterir).
+function gainReputation(amount) {
+  if (!(amount > 0)) return 0;
+  const before = game.reputation;
+  let rep = before, left = amount;
+  if (rep < CONFIG.repSoftCap) {                 // yumuşak tavanın altı: tam değer
+    const take = Math.min(left, CONFIG.repSoftCap - rep);
+    rep += take;
+    left -= take;
+  }
+  if (left > 0) rep += left * CONFIG.repOverflowFactor;   // tavan üstü: kısılarak
+  game.reputation = clamp(rep, CONFIG.minReputation, CONFIG.repMax);
+  return game.reputation - before;
+}
+
+// İtibar kaybını tek noktadan uygula: TAM değer (yumuşatma yok), sıfıra inince oyun biter.
+// Üst sınır repMax'tir; maxReputation olsaydı 100 üstü yastık ilk kayıpta silinirdi.
 function loseReputation(amount) {
-  game.reputation = clamp(game.reputation - amount, CONFIG.minReputation, CONFIG.maxReputation);
+  game.reputation = clamp(game.reputation - amount, CONFIG.minReputation, CONFIG.repMax);
   if (game.reputation <= CONFIG.minReputation) triggerGameOver();
 }
 
@@ -2243,8 +2282,9 @@ function drawHUD() {
   const rx = hud.x + hud.w - rw;
   const rpad = rw * 0.09;
   retroBox(rx, rw);
-  const pct = clamp(Math.round(game.reputation), 0, 100);
-  const repEmoji = pct < 35 ? "😡" : pct < 70 ? "😑" : "😊";
+  // itibar %100'ü aşabilir (yumuşak tavan) — kırpma YOK, yastık görünsün
+  const pct = clamp(Math.round(game.reputation), 0, Math.round(CONFIG.repMax));
+  const repEmoji = pct < 35 ? "😡" : pct < 70 ? "😑" : pct < 100 ? "😊" : "😄";
   drawEmoji(repEmoji, rx + rpad + fs1 * 0.5, y1, fs1, "#000");
   text("%" + pct, rx + rw - rpad, y1, fs1, c.neon, "right", "800");
   drawEmoji("💵", rx + rpad + fs2 * 0.5, y2, fs2, "#000");
@@ -3359,7 +3399,7 @@ function drawDayEnd() {
   const w = layout.w, h = layout.h, c = CONFIG.colors;
   const S = layout.stage;
   const s = game.dayStats;
-  const res = game.dayResult || { goal: goalForDay(), met: s.money >= goalForDay() };
+  const res = game.dayResult || { goal: goalForDay(), met: s.money >= goalForDay(), repGain: 0 };
 
   // tüm ekranı karart
   ctx.fillStyle = "rgba(10, 8, 16, 0.55)";
@@ -3382,7 +3422,11 @@ function drawDayEnd() {
   const nRows = 5 + (wasNight ? 2 : 0) + (collected > 0 ? 1 : 0) + (accrued > 0 ? 1 : 0);
   const warnH = nextIsNight ? fs * 1.5 : 0;        // "yarın nöbetçisin" uyarı şeridi
   const warnGap = nextIsNight ? gap * 0.7 : 0;
-  const stackH = () => headerH + padTop + nRows * rowStep + gap + goalH + warnGap + warnH + gap + btnH + gap + pillH + padBottom;
+  // hedef tutan günde itibar ödülü şeridi (kaçıran günde HİÇ gösterilmez — ceza mesajı yok)
+  const showRep = !!res.met;
+  const repH = showRep ? fs * 1.5 : 0;
+  const repGap = showRep ? gap * 0.7 : 0;
+  const stackH = () => headerH + padTop + nRows * rowStep + gap + goalH + repGap + repH + warnGap + warnH + gap + btnH + gap + pillH + padBottom;
   let cardH = stackH();
   const maxH = S.h * 0.88;
   if (cardH > maxH) {                 // taşma: satır aralığından değil, alt boşluktan kırp
@@ -3412,12 +3456,25 @@ function drawDayEnd() {
   const lx = cardX + cardW * 0.12;
   const rx = cardX + cardW * 0.88;
   let ly = cardY + headerH + padTop + rowStep * 0.5;
+  const SYSFONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
   const row = (icon, label, val) => {
     // emoji metin akışında değil, kendi kare kutusunda ortalanır (glif yüksekliği
     // farkları satırı kaydırmasın); etiket emojinin sağından başlar
     drawEmoji(icon, lx + fs * 0.5, ly, fs, c.cream);
-    text(label, lx + fs * 1.35, ly, fs, c.cream, "left", "600");
-    text(val, rx, ly, fs, c.neon, "right", "800");
+    const labelX = lx + fs * 1.35;
+    text(label, labelX, ly, fs, c.cream, "left", "600");
+    // Uzun değer ("220₺ (gün 5)" gibi) sağa dayalı olduğu için etiketin ÜSTÜNE biniyordu.
+    // Etiketin bittiği yerden sağa kalan boşluğa sığana kadar yalnız DEĞERİN puntosu kısılır;
+    // kısa değerlerde hiç devreye girmez, diğer satırların yerleşimi değişmez.
+    ctx.font = "600 " + fs + "px " + SYSFONT;
+    const avail = Math.max(fs * 2, rx - (labelX + ctx.measureText(label).width + fs * 0.5));
+    let vs = fs;
+    ctx.font = "800 " + vs + "px " + SYSFONT;
+    while (vs > fs * 0.55 && ctx.measureText(val).width > avail) {
+      vs -= 0.5;
+      ctx.font = "800 " + vs + "px " + SYSFONT;
+    }
+    text(val, rx, ly, vs, c.neon, "right", "800");
     ly += rowStep;
   };
   row("👥", "Servis edilen", String(s.served));
@@ -3444,9 +3501,19 @@ function drawDayEnd() {
   strokeRoundRect(cardX + cardW * 0.08, goalY, cardW * 0.84, goalH, goalH * 0.5, goalCol, 1.5);
   text(goalTxt, cardX + cardW / 2, goalY + goalH / 2, fs * 0.95, goalCol, "center", "800");
 
+  // Hedef ödülü şeridi — oyuncu kuralı buradan öğrenir, gizli kalmasın
+  if (showRep) {
+    const rY = goalY + goalH + repGap;
+    fillRoundRect(cardX + cardW * 0.08, rY, cardW * 0.84, repH, repH * 0.5, "rgba(94,196,138,0.18)");
+    strokeRoundRect(cardX + cardW * 0.08, rY, cardW * 0.84, repH, repH * 0.5, c.good, 1.5);
+    fitText(res.repGain > 0 ? "⭐ Hedef tutturuldu · +" + (Math.round(res.repGain * 10) / 10) + " itibar"
+                            : "⭐ Hedef tutturuldu · itibar tavanda",
+      cardX + cardW / 2, rY + repH / 2, cardW * 0.78, fs * 0.88, c.good, "center", "800");
+  }
+
   // "Yarın nöbetçisin" uyarısı — oyuncu depoya gidip hazırlanabilsin
   if (nextIsNight) {
-    const wY = goalY + goalH + warnGap;
+    const wY = goalY + goalH + repGap + repH + warnGap;
     fillRoundRect(cardX + cardW * 0.08, wY, cardW * 0.84, warnH, warnH * 0.5, "rgba(90, 74, 150, 0.30)");
     strokeRoundRect(cardX + cardW * 0.08, wY, cardW * 0.84, warnH, warnH * 0.5, "rgba(160, 140, 235, 0.85)", 1.5);
     fitText("🌙 Yarın nöbetçisin — stoklarını kontrol et", cardX + cardW / 2, wY + warnH / 2,
@@ -3456,7 +3523,7 @@ function drawDayEnd() {
   // Sonraki Gün butonu (neon)
   const bW = cardW * 0.7;
   const bX = cardX + (cardW - bW) / 2;
-  const bY = goalY + goalH + warnGap + warnH + gap;
+  const bY = goalY + goalH + repGap + repH + warnGap + warnH + gap;
   layout.nextDayBtn = { x: bX, y: bY, w: bW, h: btnH };
   fillRoundRect(bX, bY, bW, btnH, btnH * 0.34, c.btnDark);
   ctx.save();
@@ -4399,7 +4466,7 @@ function loop(now) {
 // =====================================================================
 window.cheats = {
   addMoney(n) { game.money += (n || 0); },
-  setReputation(n) { game.reputation = clamp(n, CONFIG.minReputation, CONFIG.maxReputation); },
+  setReputation(n) { game.reputation = clamp(n, CONFIG.minReputation, CONFIG.repMax); },
   skipDay() { if (game.state === STATE.PLAYING) endDay(); },
   setPatience(n) { const p = activePatient(); if (p) p.patience = n; },
   clearQueue() { game.queue = []; game.counter = []; game.feedback = null; rebuildCounterSlots(); },
