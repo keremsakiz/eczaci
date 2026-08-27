@@ -448,32 +448,44 @@ const Assets = {
 const Sprite = {
   // Asset yüklüyse onu çizer; değilse fallback(ctx,x,y,w,h) ile mevcut çizimi yapar.
   // fit: "stretch" (varsayılan), "contain" (kutuya sığdır, kırpma yok),
+  //      "contain-bottom" (contain + kutunun ALT çizgisine otur, yatayda ortalı),
   //      "cover" (kutuyu doldur, taşan kenarlar kırpılır). Oran korunur.
-  draw(ctx, key, x, y, w, h, fallback, fit) {
+
+  // Görselin kutu içinde GERÇEKTEN kaplayacağı dikdörtgen (asset yoksa null).
+  // Oran korunduğu için görsel kutuyu genelde doldurmaz: en dar şişe kutunun
+  // ~%34'ünü, en geniş kutu %100'ünü kaplar; aradaki fark boşluktur. Rozet ve
+  // dokunma alanı gibi şeyler kutuya değil BU dikdörtgene bağlanmalı.
+  rect(key, x, y, w, h, fit) {
     const img = Assets.images[key];
-    if (img && img.complete && img.naturalWidth > 0) {
-      if (!fit || fit === "stretch") {
-        ctx.drawImage(img, x, y, w, h);
-        return;
-      }
-      const iw = img.naturalWidth, ih = img.naturalHeight;
-      const scale = fit === "cover"
-        ? Math.max(w / iw, h / ih)
-        : Math.min(w / iw, h / ih);
-      const dw = iw * scale, dh = ih * scale;
-      const dx = x + (w - dw) / 2, dy = y + (h - dh) / 2;
-      if (fit === "cover") {
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(x, y, w, h);
-        ctx.clip();
-        ctx.drawImage(img, dx, dy, dw, dh);
-        ctx.restore();
-      } else {
-        ctx.drawImage(img, dx, dy, dw, dh);
-      }
-    } else if (fallback) {
-      fallback(ctx, x, y, w, h);
+    if (!(img && img.complete && img.naturalWidth > 0)) return null;
+    if (!fit || fit === "stretch") return { x, y, w, h };
+    const iw = img.naturalWidth, ih = img.naturalHeight;
+    const scale = fit === "cover"
+      ? Math.max(w / iw, h / ih)
+      : Math.min(w / iw, h / ih);
+    const dw = iw * scale, dh = ih * scale;
+    // contain-bottom: dikeyde ortalama yerine taban hizası — dar/uzun ve geniş/kısa
+    // ürünler aynı yüzeye otursun diye.
+    const dy = fit === "contain-bottom" ? y + h - dh : y + (h - dh) / 2;
+    return { x: x + (w - dw) / 2, y: dy, w: dw, h: dh };
+  },
+
+  draw(ctx, key, x, y, w, h, fallback, fit) {
+    const r = this.rect(key, x, y, w, h, fit);
+    if (!r) {
+      if (fallback) fallback(ctx, x, y, w, h);
+      return;
+    }
+    const img = Assets.images[key];
+    if (fit === "cover") {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x, y, w, h);
+      ctx.clip();
+      ctx.drawImage(img, r.x, r.y, r.w, r.h);
+      ctx.restore();
+    } else {
+      ctx.drawImage(img, r.x, r.y, r.w, r.h);
     }
   }
 };
@@ -691,6 +703,95 @@ function rebuildCounterSlots() {
     layout.counterSlots.push({ id: order[i], count: countById[order[i]], x: sx, y: sy, w: slot, h: slot });
     sx += slot + gap;
   }
+}
+
+// Tezgahtaki bir ürünün GERÇEK çizim dikdörtgeni + ✕ / ×N rozet merkezleri + dokunma kutusu.
+// Slot kare, görsel değil: dar şişe slotun ~%34'ünü, geniş kutu %100'ünü kaplar. Rozetler
+// eskiden slot köşesine sabitlendiği için şişelerde boşluğa düşüyordu; artık hepsi bu
+// dikdörtgenden türetiliyor. Çizim ve tıklama AYNI fonksiyondan beslenir ki ayrışmasın;
+// asset geç yüklenirse de anlık hesaplandığı için bayatlamaz.
+function counterItemRects(slot) {
+  const m = getMedicine(slot.id);
+  const img = Sprite.rect(m.assetKey, slot.x, slot.y, slot.w, slot.h, "contain-bottom")
+    || { x: slot.x, y: slot.y, w: slot.w, h: slot.h };   // PNG yoksa fallback slotu doldurur
+
+  // rozet çapı görselle ölçeklenir, ama dar şişede okunmaz / geniş kutuda devasa
+  // olmasın diye slot'a göre sınırlanır
+  const br = clamp(img.w * 0.26, slot.w * 0.10, slot.w * 0.18);
+  const inset = br * 0.85;                                // köşeye otursun, görselin üstünde kalsın
+  const cy = img.y + inset;
+  const del = { x: img.x + inset, y: cy, r: br };                 // ✕ (sol üst)
+  const cnt = { x: img.x + img.w - inset, y: cy, r: br };         // ×N (sağ üst)
+
+  // dokunma alanı çizimle EŞMERKEZLİ; parmak payı kadar büyür ama slotu aşmaz
+  // (slotlar arası boşluğa taşıp komşu ürünü çalmasın)
+  const pad = slot.w * 0.06;
+  const hx = Math.max(slot.x, img.x - pad), hy = Math.max(slot.y, img.y - pad);
+  const hit = {
+    x: hx,
+    y: hy,
+    w: Math.min(slot.x + slot.w, img.x + img.w + pad) - hx,
+    h: Math.min(slot.y + slot.h, img.y + img.h + pad) - hy
+  };
+  return { img, del, cnt, hit };
+}
+
+// Tezgah yerleşimini 39 ilacın HEPSİ için ölçer: rozetler gerçek görselin üstünde mi,
+// dokunma alanı çizimle örtüşüyor mu, taban hizası tutuyor mu, slot dışına taşan var mı.
+// Sapma varsa ilaç adıyla console.warn. Assetler yüklenince bir kez otomatik çalışır;
+// elle: cheats.checkCounter()
+function verifyCounterLayout() {
+  const b = layout._band;
+  const slotW = b ? Math.min(b.h * 0.78, layout.stage.w * 0.17) : 100;
+  const baseline = b ? b.y + b.h * 0.60 : slotW;
+  const T = 0.5;                       // px tolerans (ondalık yuvarlama payı)
+  const rows = [];
+  let bad = 0;
+
+  for (const m of MEDICINES) {
+    const slot = { id: m.id, count: 2, x: 0, y: baseline - slotW, w: slotW, h: slotW };
+    const { img, del, cnt, hit } = counterItemRects(slot);
+    const inRect = (p, r) => p.x >= r.x - T && p.x <= r.x + r.w + T &&
+                             p.y >= r.y - T && p.y <= r.y + r.h + T;
+    const errs = [];
+
+    // 1) slot dışına taşma
+    if (img.x < slot.x - T || img.y < slot.y - T ||
+        img.x + img.w > slot.x + slot.w + T || img.y + img.h > slot.y + slot.h + T) {
+      errs.push("görsel slot dışına taşıyor");
+    }
+    // 2) rozetler gerçek görselin üstünde mi
+    if (!inRect(del, img)) errs.push("✕ rozeti görselin dışında");
+    if (!inRect(cnt, img)) errs.push("×N rozeti görselin dışında");
+    if (del.x >= cnt.x)    errs.push("✕ ile ×N rozeti yer değiştirmiş/üst üste");
+    // 3) dokunma alanı çizimi kapsıyor mu (çizim bir yerde, tıklama başka yerde olmasın)
+    if (hit.x > img.x + T || hit.y > img.y + T ||
+        hit.x + hit.w < img.x + img.w - T || hit.y + hit.h < img.y + img.h - T) {
+      errs.push("✕ dokunma alanı çizimi kapsamıyor");
+    }
+    // 4) dokunma alanı slotu aşmasın (komşu ürünü çalmasın)
+    if (hit.x < slot.x - T || hit.x + hit.w > slot.x + slot.w + T) {
+      errs.push("dokunma alanı slot dışına taşıyor");
+    }
+    // 5) taban hizası: her ürün slotun alt çizgisine otursun
+    if (Math.abs((img.y + img.h) - (slot.y + slot.h)) > T) errs.push("taban hizası kaymış");
+    // 6) yatayda ortalı kalsın
+    if (Math.abs((img.x + img.w / 2) - (slot.x + slot.w / 2)) > T) errs.push("yatay ortalama kaymış");
+
+    if (errs.length) { bad++; console.warn("Tezgah yerleşimi — " + m.name + ": " + errs.join("; ")); }
+    rows.push({
+      ilaç: m.name,
+      oran: +(img.w / img.h).toFixed(2),
+      "slot dolum %": Math.round((img.w / slot.w) * 100),
+      "taban boşluk px": +((slot.y + slot.h) - (img.y + img.h)).toFixed(2),
+      durum: errs.length ? "SAPMA" : "ok"
+    });
+  }
+
+  rows.sort((p, q) => p.oran - q.oran);
+  console.log("Tezgah yerleşim kontrolü: " + (MEDICINES.length - bad) + "/" + MEDICINES.length +
+    " ilaç sorunsuz" + (bad ? " — " + bad + " SAPMA (yukarıda)" : ""));
+  return { toplam: MEDICINES.length, sapma: bad, satırlar: rows };
 }
 
 // kategori sekmelerinin yatay yerleşimi (içerik koordinatında x; tabScroll ile kaydırılır)
@@ -3012,7 +3113,10 @@ function drawCounter() {
   if (game.counter.length === 0) return;  // tezgah temiz kalsın
   for (const slot of layout.counterSlots) {
     const m = getMedicine(slot.id);
-    // ilaç görseli — raftaki gibi şeffaf PNG (contain); PNG yoksa renkli kutu + emoji
+    // rozetler slot köşesine değil GERÇEK çizim dikdörtgenine bağlanır
+    const R = counterItemRects(slot);
+    // ilaç görseli — raftaki gibi şeffaf PNG, ama tezgahta taban hizalı (contain-bottom);
+    // PNG yoksa renkli kutu + emoji (o zaman slotu doldurur, R.img de slot olur)
     Sprite.draw(ctx, m.assetKey, slot.x, slot.y, slot.w, slot.h, () => {
       ctx.save();
       ctx.shadowColor = c.panelShadow;
@@ -3021,13 +3125,13 @@ function drawCounter() {
       fillRoundRect(slot.x, slot.y, slot.w, slot.h, slot.w * 0.24, m.color);
       ctx.restore();
       drawEmoji(m.emoji, slot.x + slot.w / 2, slot.y + slot.h * 0.5, slot.w * 0.55, "#000");
-    }, "contain");
-    // kaldır işareti (sol üst; sağ üst adet rozetine ayrıldı)
-    text("✕", slot.x + slot.w * 0.16, slot.y + slot.h * 0.14, slot.w * 0.24, "rgba(255,235,210,0.85)", "center", "800");
-    // aynı ilaçtan 2+ varsa sağ üstte adet rozeti
+    }, "contain-bottom");
+    // kaldır işareti (görselin sol üst köşesi; sağ üst adet rozetine ayrıldı)
+    text("✕", R.del.x, R.del.y, R.del.r * 1.2, "rgba(255,235,210,0.85)", "center", "800");
+    // aynı ilaçtan 2+ varsa görselin sağ üst köşesinde adet rozeti
     if (slot.count >= 2) {
-      const br = slot.w * 0.20;
-      const bx = slot.x + slot.w - br * 0.85, by = slot.y + br * 0.85;
+      const br = R.cnt.r;
+      const bx = R.cnt.x, by = R.cnt.y;
       ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2);
       ctx.fillStyle = "rgba(20,16,28,0.88)"; ctx.fill();
       ctx.strokeStyle = c.panelBorder; ctx.lineWidth = Math.max(1, br * 0.10);
@@ -4067,8 +4171,10 @@ function handleTap(px, py) {
 
   if (pointInRect(px, py, layout.serveBtn)) { checkOrder(); return; }
 
+  // dokunma alanı slot karesi değil, çizilen görselin kutusu (counterItemRects.hit) —
+  // çizim ile tıklama tek kaynaktan gelsin, dar şişede boşluğa basınca ilaç düşmesin
   for (const slot of layout.counterSlots) {
-    if (pointInRect(px, py, slot)) { removeOneFromCounter(slot.id); return; }
+    if (pointInRect(px, py, counterItemRects(slot).hit)) { removeOneFromCounter(slot.id); return; }
   }
   // raf kartları: içerik koordinatında saklanır, scroll düşülür; gridArea dışı (kırpılan kısım) tıklanamaz
   const shelfScroll = layout.shelfScroll || 0;
@@ -4207,6 +4313,7 @@ window.cheats = {
     return r;
   },
   setGroup(gid) { if (medsInGroup(gid).length) { game.activeGroup = gid; buildShelf(); } },
+  checkCounter() { const r = verifyCounterLayout(); console.table(r.satırlar); return r; },
   stock() {
     const out = {};
     for (const m of MEDICINES) out[m.id] = game.stock[m.id] || 0;
@@ -4474,6 +4581,13 @@ function loadAssets() {
   Assets.load("doctor_book_closed", "assets/doctor_book_closed.png");
   Assets.load("doctor_book", "assets/doctor_book.png");
   Assets.load("pc", "assets/pc.png");
+
+  // assetler yüklenince tezgah yerleşimini bir kez ölç-doğrula (sapma varsa console.warn)
+  const vt = setInterval(() => {
+    if (Assets.loaded < Assets.total) return;
+    clearInterval(vt);
+    verifyCounterLayout();
+  }, 200);
 }
 
 // hedefi tutturmak için gereken en az DOĞRU işlem sayısı (N üzerinden).
