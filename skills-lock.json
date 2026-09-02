@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "skills": {
+    "mobile-apps-create": {
+      "source": "forcedotcom/sf-skills",
+      "sourceType": "github",
+      "skillPath": "skills/mobile-apps-create/SKILL.md",
+      "computedHash": "b9aa25312b53963cefc92161ceb8056644ddc67aecd8cb1b2e25f80d9df3f36a"
+    },
+    "mobile-ios-design": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "skillPath": "plugins/ui-design/skills/mobile-ios-design/SKILL.md",
+      "computedHash": "3902f919488d8ddc983e157bbcd5f16b739b84eeaab57002bf52b7f9601ed6ad"
+    },
+    "mobile-platform-native-capabilities-integrate": {
+      "source": "forcedotcom/sf-skills",
+      "sourceType": "github",
+      "skillPath": "skills/mobile-platform-native-capabilities-integrate/SKILL.md",
+      "computedHash": "23f7b61fa21d047276eb287fb4f5124716cdf5ca6f21d72ec526cbe334ec8a20"
+    }
+  }
+}

@@ -81,6 +81,20 @@ const CONFIG = {
   // --- Gün = müşteri limiti (süre değil) ---
   patientsPerDayBase: 8,    // gün 1 müşteri hedefi
   patientsPerDayStep: 2,    // her gün +2 müşteri (gün2=10, gün3=12...)
+  // --- GÜN BÜYÜKLÜĞÜ ÜST SINIRI ---
+  // Sınırsız artış İKİ ayrı sorunu birden üretiyordu:
+  //  (1) İtibar ölçeği sabit (0–repMax) ama kazanç/kayıp müşteri sayısıyla ölçeklendiği için
+  //      geç oyunda tek kötü gün 30–40 puan sallıyor, yumuşak tavanın verdiği yastık
+  //      (en fazla 50 puan) bir günde siliniyordu. Ödül/ceza değerlerini oynatmak bunu
+  //      ÇÖZMEDİ (ölçüldü) — sorun değerlerde değil, gün ölçeğinin itibar ölçeğine göre
+  //      sınırsız büyümesindeydi.
+  //  (2) 90 müşterilik gün mobilde 15–20 dakika kesintisiz dokunma demek; oturum uzunluğu
+  //      sürdürülebilir değildi.
+  // Bu sınırdan sonra zorluk müşteri SAYISINDAN değil KOMPOZİSYONDAN gelir: sahte oranı,
+  // daralan hata toleransı (missRate → 0.10 tabanına doğru), nöbet geceleri.
+  // NOT: sınır GÜNDÜZ müşteri sayısına uygulanır ve VİTRİN bonusunu da kapsar (bonus
+  // sınırı aşamaz). Nöbet bölümü bunun üstüne oranla eklenir (nightPatientRatio).
+  maxPatientsPerDay: 26,
   // --- Günlük para hedefi: ORANSAL TOLERANS + GERÇEK GÜN LİSTESİ ---
   // Tolerans müşteri sayısıyla ölçeklenir (sabit hata payı büyüyen günde kusursuzluk
   // dayatıyordu). Hedef, o günün ÖNCEDEN ÜRETİLMİŞ gerçek hasta listesinden hesaplanır:
@@ -984,8 +998,12 @@ function lerp(a, b, t) { return a + (b - a) * t; }
 function activePatient() { return game.queue.length ? game.queue[0] : null; }
 
 // o günün müşteri limiti (gün bağımsız hesap; hedef fonksiyonu da bunu kullanır)
+// Vitrin bonusu ham değere eklenir, SONRA tavan uygulanır => bonus tavanı aşamaz.
+// Hedef formülü, konsantrasyon tavanı ve nöbet oranları hep bu fonksiyonun ürettiği
+// GERÇEK listeden hesaplandığı için tavana kendiliğinden uyum sağlar.
 function patientLimitFor(day) {
-  return CONFIG.patientsPerDayBase + (day - 1) * CONFIG.patientsPerDayStep + effExtraPatients();
+  const raw = CONFIG.patientsPerDayBase + (day - 1) * CONFIG.patientsPerDayStep + effExtraPatients();
+  return Math.min(CONFIG.maxPatientsPerDay, raw);
 }
 // OYNANAN gün, üretildiği andaki listeye SABİTLENİR — gün ortasında vitrin yükseltilirse
 // o günün müşteri sayısı ve hedefi değişmez, etki bir sonraki günden başlar.
@@ -5144,6 +5162,35 @@ function selfTestPatientsInner(days) {
   }
   game.upgrades = prevUp; game.money = prevMoney;
   invalidateDaySchedules();
+
+  // 0c2) GÜN BÜYÜKLÜĞÜ TAVANI — sınırın gerçekten bağlayıcı olduğunu ve VİTRİN dahil
+  // hiçbir yolun sınırı aşamadığını doğrula. (Vitrin sınıra takıldığında etkisiz kalır;
+  // bu BİLİNEN ve kabul edilmiş bir sonuçtur — Vitrin'in yeni işlevi ayrıca ele alınacak.)
+  {
+    const cap = CONFIG.maxPatientsPerDay;
+    if (!(cap >= CONFIG.patientsPerDayBase))
+      warn.push("maxPatientsPerDay (" + cap + ") gün 1 müşteri sayısının (" + CONFIG.patientsPerDayBase + ") altında");
+    const prevUp2 = game.upgrades;
+    let capHitDay = null;
+    for (const lv of [1, UPGRADE_BY_ID.vitrin.maxLevel]) {
+      game.upgrades = allLevels(x => x.id === "vitrin" ? lv : 1);
+      invalidateDaySchedules();
+      let prev = 0;
+      for (let d = 1; d <= 40; d++) {
+        const n = patientLimitFor(d);
+        if (n > cap) warn.push("gün " + d + " (vitrin Lv" + lv + "): müşteri sayısı tavanı aştı (" + n + " > " + cap + ")");
+        if (n < prev) warn.push("gün " + d + " (vitrin Lv" + lv + "): müşteri sayısı bir önceki günden AZALDI (" + prev + " → " + n + ")");
+        if (lv === 1 && n >= cap && capHitDay === null) capHitDay = d;
+        prev = n;
+      }
+    }
+    game.upgrades = prevUp2; invalidateDaySchedules();
+    // Tavan 30 günlük kampanya içinde hiç devreye girmiyorsa ayar anlamsızdır.
+    if (capHitDay === null) warn.push("maxPatientsPerDay (" + cap + ") 40 gün içinde hiç devreye girmiyor — tavan işlevsiz");
+    // Tavan sonrası zorluk KOMPOZİSYONDAN gelmeli: missRate hâlâ daralıyor olmalı.
+    if (capHitDay !== null && !(missRateFor(capHitDay) > CONFIG.missRateFloor))
+      warn.push("tavan gün " + capHitDay + "'de devreye giriyor ama missRate zaten tabanda — o günden sonra zorluk hiç artmıyor");
+  }
 
   // 0d2) REÇETE GARANTİLERİ — her günde ≥1 gerçek reçete; 2. günden itibaren ≥1 sahte
   for (let d = 1; d <= days; d++) {
