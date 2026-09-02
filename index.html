@@ -92,6 +92,8 @@ const CONFIG = {
   maxPrescriptionItems: 3,
 
   feedbackDuration: 0.8,    // feedback gösterim süresi (sn)
+  bagFlyTime: 0.6,          // SERVİS ET → poşetin hastaya varış süresi (sn); bitince karar uygulanır
+  flyTime: 0.35,            // sepete eklenen ilacın karttan PC'ye uçuş süresi (sn)
   patientEnterTime: 0.35,   // hasta giriş animasyon süresi (sn)
   bookAnimTime: 0.35,       // defter açılma/kapanma animasyon süresi (sn)
 
@@ -617,8 +619,13 @@ const game = {
 
   // stok + ecza deposu
   stock: {},              // ilaç id -> adet (ilaç bazında; günler arası kalıcı)
-  depotOpen: false,       // PC ekranı açık mı (modal; oyun donar) — hangi ekran: pcScreen
-  pcScreen: "depot",      // "home" | "depot" | "upgrades"
+  // PC ekranı açık mı ve hangisi. DİKKAT: "sale" ekranı oyunu DONDURMAZ (hizmet anının
+  // parçasıdır, sabır işlemeye devam eder); diğer üçü dondurur. Tek karar noktası:
+  // pcFreezesGame(). Bkz. update() ve isSaleOpen().
+  depotOpen: false,
+  pcScreen: "depot",      // "home" | "sale" | "depot" | "upgrades" | "medula"
+  bagAnim: null,          // { t } — SERVİS ET sonrası poşetin hastaya uçuşu; bitince checkOrder()
+  flyAnims: [],           // sepete eklenen ilacın karttan PC'ye uçuşu (salt görsel geri bildirim)
   phase: "day",           // "day" | "night" — nöbet, günün İKİNCİ bölümü
   nightT: 0,              // gece katmanı geçiş ilerlemesi (0..1)
   nightIntro: null,       // "NÖBET BAŞLIYOR" kartı açıkken geçen süre (sn); null = kapalı
@@ -644,8 +651,7 @@ let layout = {
   scale: 1, w: 0, h: 0,
   shelfButtons: [],
   shelfScroll: 0, shelfMaxScroll: 0,   // ilaç grid'i dikey kaydırma (buildShelf hesaplar)
-  counterSlots: [],
-  serveBtn: { x: 0, y: 0, w: 0, h: 0 },
+  saleRows: null, saleServeBtn: null,   // SATIŞ ekranı (PC) — her frame yeniden kurulur
   nextDayBtn: { x: 0, y: 0, w: 0, h: 0 },
   // depo (PC ekranı) rect'leri (ilgili draw fonksiyonlarında hesaplanır — nextDayBtn kalıbı)
   pcBtn: null, depotFromDayEndBtn: null,
@@ -701,8 +707,10 @@ function computeLayout() {
   // --- Dikey düzen (Büfeci mantığı) ---
   //   üst (ince)           : HUD
   //   üst-orta (büyük)     : konuşma balonu + DEV müşteri
-  //   tezgah çizgisi       : ahşap bant (müşteriyi göğüsten keser, üstüne seçilen ilaçlar dizilir)
-  //   alt                  : ilaç seçim grid'i (2x3) + SERVİS ET (en altta)
+  //   tezgah çizgisi       : ahşap bant (müşteriyi göğüsten keser) — ÜSTÜ BOŞ KALIR
+  //   alt                  : ilaç seçim grid'i (2x3)
+  // NOT: tezgahta artık ürün tepsisi YOK. Seçilen ilaçlar PC'deki SATIŞ ekranında
+  // listelenir; tezgah yüzeyi defter ve PC dışında boş kalır (defterle çakışma bitti).
   const hudY = sy + (window.__safeTop || 0) + sh * 0.018;
   const hudH = sh * 0.082;
 
@@ -712,19 +720,10 @@ function computeLayout() {
   layout._counterLine = counterLine;
   layout._band = { x: sx, y: counterLine, w: sw, h: bandH };
 
-  // seçilen ilaçların dizildiği tezgah alanı (ahşap bandın üstünde, müşterinin önünde)
-  layout._counterArea = {
-    x: left,
-    y: counterLine + sh * 0.024,
-    w: colW,
-    h: bandH - sh * 0.042
-  };
-
-  // --- Servis butonu (en alt) ---
+  // --- Alt buton şeridi: yalnız ONAYLA / REDDET (reçete karar fazı) ---
+  // SERVİS ET butonu kaldırıldı; servis artık PC → SATIŞ ekranından yapılıyor.
   const btnH = sh * 0.082;
   const btnY = sy + sh - btnH - sh * 0.02 - (window.__safeBottom || 0);
-  layout.serveBtn = { x: left, y: btnY, w: colW, h: btnH };
-  // ONAYLA / REDDET (reçete karar fazında SERVİS yerine gösterilir)
   const halfGap = colW * 0.04;
   const halfW = (colW - halfGap) / 2;
   layout.rejectBtn = { x: left, y: btnY, w: halfW, h: btnH };
@@ -765,130 +764,14 @@ function computeLayout() {
     h: counterLine - patientTop
   };
 
-  rebuildCounterSlots();
 }
 
-function rebuildCounterSlots() {
-  const b = layout._band;
-  if (!b) return;
-  layout.counterSlots = [];
-  // counter verisi düz id listesi kalır (multiset/checkOrder aynı); sadece ÇİZİM
-  // ilaç bazında gruplanır: benzersiz ilaç = tek kutu + adet (×N rozeti için)
-  const order = [], countById = {};
-  for (const id of game.counter) {
-    if (!(id in countById)) { countById[id] = 0; order.push(id); }
-    countById[id]++;
-  }
-  const n = order.length;
-  if (n === 0) return;
-  const sw = layout.stage.w;
-  // tezgah bandının ~%78'i kadar büyük tile'lar
-  let slot = Math.min(b.h * 0.78, sw * 0.17);
-  let gap = sw * 0.025;
-  // çok ilaç varsa sığacak şekilde küçült
-  const maxW = b.w * 0.92;
-  let totalW = n * slot + (n - 1) * gap;
-  if (totalW > maxW) { const k = maxW / totalW; slot *= k; gap *= k; totalW = maxW; }
-  // alt kenar tezgah yüzeyine otursun (yüzey ~bandın üst %58'i)
-  const baseline = b.y + b.h * 0.60;
-  const sy = baseline - slot;
-  let sx = b.x + (b.w - totalW) / 2;
-  for (let i = 0; i < n; i++) {
-    layout.counterSlots.push({ id: order[i], count: countById[order[i]], x: sx, y: sy, w: slot, h: slot });
-    sx += slot + gap;
-  }
-}
+// (KALDIRILDI) rebuildCounterSlots / counterItemRects / verifyCounterLayout
+// Tezgah ürün tepsisi tamamen sökülünce üçü de işlevsiz kaldı: slot yerleşimi, rozet ve
+// dokunma dikdörtgeni hesabı, ve o hesabı denetleyen self-test. Seçilen ilaçlar artık
+// PC → SATIŞ ekranında satır olarak listeleniyor (drawSale). Sprite.rect KORUNDU —
+// Sprite.draw hâlâ onu kullanıyor.
 
-// Tezgahtaki bir ürünün GERÇEK çizim dikdörtgeni + ✕ / ×N rozet merkezleri + dokunma kutusu.
-// Slot kare, görsel değil: dar şişe slotun ~%34'ünü, geniş kutu %100'ünü kaplar. Rozetler
-// eskiden slot köşesine sabitlendiği için şişelerde boşluğa düşüyordu; artık hepsi bu
-// dikdörtgenden türetiliyor. Çizim ve tıklama AYNI fonksiyondan beslenir ki ayrışmasın;
-// asset geç yüklenirse de anlık hesaplandığı için bayatlamaz.
-function counterItemRects(slot) {
-  const m = getMedicine(slot.id);
-  const img = Sprite.rect(m.assetKey, slot.x, slot.y, slot.w, slot.h, "contain-bottom")
-    || { x: slot.x, y: slot.y, w: slot.w, h: slot.h };   // PNG yoksa fallback slotu doldurur
-
-  // rozet çapı görselle ölçeklenir, ama dar şişede okunmaz / geniş kutuda devasa
-  // olmasın diye slot'a göre sınırlanır
-  const br = clamp(img.w * 0.26, slot.w * 0.10, slot.w * 0.18);
-  const inset = br * 0.85;                                // köşeye otursun, görselin üstünde kalsın
-  const cy = img.y + inset;
-  const del = { x: img.x + inset, y: cy, r: br };                 // ✕ (sol üst)
-  const cnt = { x: img.x + img.w - inset, y: cy, r: br };         // ×N (sağ üst)
-
-  // dokunma alanı çizimle EŞMERKEZLİ; parmak payı kadar büyür ama slotu aşmaz
-  // (slotlar arası boşluğa taşıp komşu ürünü çalmasın)
-  const pad = slot.w * 0.06;
-  const hx = Math.max(slot.x, img.x - pad), hy = Math.max(slot.y, img.y - pad);
-  const hit = {
-    x: hx,
-    y: hy,
-    w: Math.min(slot.x + slot.w, img.x + img.w + pad) - hx,
-    h: Math.min(slot.y + slot.h, img.y + img.h + pad) - hy
-  };
-  return { img, del, cnt, hit };
-}
-
-// Tezgah yerleşimini 39 ilacın HEPSİ için ölçer: rozetler gerçek görselin üstünde mi,
-// dokunma alanı çizimle örtüşüyor mu, taban hizası tutuyor mu, slot dışına taşan var mı.
-// Sapma varsa ilaç adıyla console.warn. Assetler yüklenince bir kez otomatik çalışır;
-// elle: cheats.checkCounter()
-function verifyCounterLayout() {
-  const b = layout._band;
-  const slotW = b ? Math.min(b.h * 0.78, layout.stage.w * 0.17) : 100;
-  const baseline = b ? b.y + b.h * 0.60 : slotW;
-  const T = 0.5;                       // px tolerans (ondalık yuvarlama payı)
-  const rows = [];
-  let bad = 0;
-
-  for (const m of MEDICINES) {
-    const slot = { id: m.id, count: 2, x: 0, y: baseline - slotW, w: slotW, h: slotW };
-    const { img, del, cnt, hit } = counterItemRects(slot);
-    const inRect = (p, r) => p.x >= r.x - T && p.x <= r.x + r.w + T &&
-                             p.y >= r.y - T && p.y <= r.y + r.h + T;
-    const errs = [];
-
-    // 1) slot dışına taşma
-    if (img.x < slot.x - T || img.y < slot.y - T ||
-        img.x + img.w > slot.x + slot.w + T || img.y + img.h > slot.y + slot.h + T) {
-      errs.push("görsel slot dışına taşıyor");
-    }
-    // 2) rozetler gerçek görselin üstünde mi
-    if (!inRect(del, img)) errs.push("✕ rozeti görselin dışında");
-    if (!inRect(cnt, img)) errs.push("×N rozeti görselin dışında");
-    if (del.x >= cnt.x)    errs.push("✕ ile ×N rozeti yer değiştirmiş/üst üste");
-    // 3) dokunma alanı çizimi kapsıyor mu (çizim bir yerde, tıklama başka yerde olmasın)
-    if (hit.x > img.x + T || hit.y > img.y + T ||
-        hit.x + hit.w < img.x + img.w - T || hit.y + hit.h < img.y + img.h - T) {
-      errs.push("✕ dokunma alanı çizimi kapsamıyor");
-    }
-    // 4) dokunma alanı slotu aşmasın (komşu ürünü çalmasın)
-    if (hit.x < slot.x - T || hit.x + hit.w > slot.x + slot.w + T) {
-      errs.push("dokunma alanı slot dışına taşıyor");
-    }
-    // 5) taban hizası: her ürün slotun alt çizgisine otursun
-    if (Math.abs((img.y + img.h) - (slot.y + slot.h)) > T) errs.push("taban hizası kaymış");
-    // 6) yatayda ortalı kalsın
-    if (Math.abs((img.x + img.w / 2) - (slot.x + slot.w / 2)) > T) errs.push("yatay ortalama kaymış");
-
-    if (errs.length) { bad++; console.warn("Tezgah yerleşimi — " + m.name + ": " + errs.join("; ")); }
-    rows.push({
-      ilaç: m.name,
-      oran: +(img.w / img.h).toFixed(2),
-      "slot dolum %": Math.round((img.w / slot.w) * 100),
-      "taban boşluk px": +((slot.y + slot.h) - (img.y + img.h)).toFixed(2),
-      durum: errs.length ? "SAPMA" : "ok"
-    });
-  }
-
-  rows.sort((p, q) => p.oran - q.oran);
-  console.log("Tezgah yerleşim kontrolü: " + (MEDICINES.length - bad) + "/" + MEDICINES.length +
-    " ilaç sorunsuz" + (bad ? " — " + bad + " SAPMA (yukarıda)" : ""));
-  return { toplam: MEDICINES.length, sapma: bad, satırlar: rows };
-}
-
-// kategori sekmelerinin yatay yerleşimi (içerik koordinatında x; tabScroll ile kaydırılır)
 function buildTabs() {
   const ta = layout.tabsArea;
   layout.tabs = [];
@@ -1705,7 +1588,6 @@ function approvePrescription() {
   if (!activeNeedsDecision() || p.request.type !== "prescription") return;
   p.decided = "approve";          // ilaç verme moduna geç
   game.counter = [];
-  rebuildCounterSlots();
 }
 
 function rejectPrescription() {
@@ -1735,18 +1617,51 @@ function flashStockToast(txt) {
   game.stockToast = { text: txt, until: game.clock + CONFIG.stockToastDuration };
 }
 
+// --- SEPET ---
+// game.counter DEĞİŞMEDİ: hâlâ düz id listesi (aynı ilaç birden çok kez geçer).
+// checkOrder / sameMultiset / expectedMedicineIds bu biçime bağlı olduğu için eşleşme
+// mantığına hiç dokunulmadı — değişen yalnız sepetin nasıl doldurulup gösterildiği.
+function cartCount(id) {
+  let n = 0;
+  for (const cId of game.counter) if (cId === id) n++;
+  return n;
+}
+// Sepeti (id, adet) satırlarına indirger — ekleme SIRASI korunur (SATIŞ ekranı bunu çizer).
+function cartRows() {
+  const order = [], byId = {};
+  for (const id of game.counter) {
+    if (!(id in byId)) { byId[id] = 0; order.push(id); }
+    byId[id]++;
+  }
+  return order.map(id => ({ id, qty: byId[id], med: getMedicine(id) }));
+}
+
+// Rafa dokunuş: STOK KONTROL EDİLİR ama DÜŞÜLMEZ. Gerçek stok düşümü yalnız
+// checkOrder içinde, SERVİS ET anında olur — sepet boşaltılırsa hiçbir stok kaybı olmaz.
 function tapMedicine(id) {
   if (!servingAllowed()) return;
   const stock = game.stock[id] || 0;
   const m = getMedicine(id);
-  // stok yoksa tezgaha ekleme
   if (stock <= 0) { flashStockToast("⛔ " + (m ? m.name : "İlaç") + " — Stok yok!"); return; }
-  // tezgahtaki aynı ilaç adedi stoğu aşamaz
-  let onCounter = 0;
-  for (const cId of game.counter) if (cId === id) onCounter++;
-  if (onCounter >= stock) { flashStockToast("⛔ " + (m ? m.name : "İlaç") + " — Stok yetersiz!"); return; }
+  if (cartCount(id) >= stock) { flashStockToast("⛔ " + (m ? m.name : "İlaç") + " — Stok yetersiz!"); return; }
   game.counter.push(id);
-  rebuildCounterSlots();
+  return true;                      // çağıran uçuş animasyonunu bu dönüşe göre başlatır
+}
+
+// SATIŞ ekranındaki − / + . delta +1 stok tavanına takılır; adet 0'a inince satır düşer.
+function cartChange(id, delta) {
+  if (delta > 0) { tapMedicine(id); return; }
+  const idx = game.counter.lastIndexOf(id);
+  if (idx >= 0) game.counter.splice(idx, 1);
+}
+function clearCart() { game.counter = []; }
+
+// Gün/oyun geçişlerinde ve oyun bitiminde geçici animasyonları söndür.
+// KRİTİK: yarım kalmış bir bagAnim, gün değişince checkOrder()'ı BAŞKA bir hastaya
+// uygulardı (kuyruk sıfırlanmış olur). Geçişin parçası olarak mutlaka sıfırlanmalı.
+function resetTransientAnims() {
+  game.bagAnim = null;
+  game.flyAnims = [];
 }
 
 // --- Ecza deposu (PC sipariş ekranı) ---
@@ -1756,7 +1671,20 @@ function openDepot() {
   game.depotOpen = true;
   game.pcScreen = "depot";
 }
-// PC'ye dokununca: doğrudan depo değil, iki butonlu ANA EKRAN
+// SATIŞ ekranı: seçilen ilaçların onayı ve adet düzenlemesi. Hizmet anının parçası
+// olduğu için oyunu DONDURMAZ (bkz. pcFreezesGame).
+function openSale() {
+  game.depotPending = {};
+  game.depotOpen = true;
+  game.pcScreen = "sale";
+}
+// SATIŞ ekranı açık mı? (sabır/spawn akışı bu ekranda devam eder)
+function isSaleOpen() { return game.depotOpen && game.pcScreen === "sale"; }
+// PC paneli oyunu donduruyor mu? SATIŞ hariç hepsi dondurur — depo, geliştirme ve
+// Medula ekranları hizmet anının parçası değil, oyuncu orada zaman baskısı hissetmemeli.
+function pcFreezesGame() { return game.depotOpen && game.pcScreen !== "sale"; }
+
+// PC'ye dokununca: doğrudan depo değil, dört butonlu ANA EKRAN
 function openPc() {
   game.depotPending = {};
   game.depotOpen = true;
@@ -1775,6 +1703,17 @@ function openMedulaScreen() {
   game.depotOpen = true;
   game.pcScreen = "medula";
 }
+// SERVİS ET (SATIŞ ekranı): panel kapanır, tezgahta poşet belirip hastaya kayar,
+// uçuş bitince update() checkOrder()'ı çağırır — karar/ekonomi/itibar mantığı
+// DEĞİŞMEDİ, yalnız araya kısa bir görsel gecikme girdi.
+function serveFromSale() {
+  if (!servingAllowed() || game.counter.length === 0) return;
+  game.depotOpen = false;
+  game.pcScreen = "home";
+  game.flyAnims = [];
+  game.bagAnim = { t: 0 };
+}
+
 function pcHome() { game.depotPending = {}; game.pcScreen = "home"; }
 function closeDepot() { game.depotOpen = false; game.depotPending = {}; game.pcScreen = "home"; }
 
@@ -1851,15 +1790,6 @@ function medulaKeyPress(ch) {
   if (game.medulaResult && game.medulaResult.error) game.medulaResult = null;
 }
 function medulaBackspace() { game.medulaInput = game.medulaInput.slice(0, -1); }
-
-// gruplu kutuya tıklayınca o ilaçtan BİR adet çıkar (tek tek geri alma korunur)
-function removeOneFromCounter(id) {
-  if (!servingAllowed()) return;
-  const idx = game.counter.lastIndexOf(id);
-  if (idx < 0) return;
-  game.counter.splice(idx, 1);
-  rebuildCounterSlots();
-}
 
 // --- TEŞHİS: her servis/red kararında tek okunabilir blok ---
 // countList: ["a","a","b"] -> "a×2, b×1" (ilaç ADI ile, id de parantezde)
@@ -2061,7 +1991,6 @@ function onFeedbackEnd() {
   const done = game.queue.shift();
   game.counter = [];
   game.feedback = null;
-  rebuildCounterSlots();
   if (done && done.bonus) return;          // cheat hastası: günün programına sayılmaz
   game.dayCompleted++;
   const sch = game.daySchedule;
@@ -2119,8 +2048,8 @@ function startNextDay() {
   game.queue = [];
   game.counter = [];
   game.feedback = null;
+  resetTransientAnims();
   game.dayStats = { served: 0, correct: 0, wrong: 0, angry: 0, money: 0, moneyDay: 0, moneyNight: 0, medulaAccrued: 0 };
-  rebuildCounterSlots();
   game.state = STATE.PLAYING;
   spawnPatient();
 }
@@ -2158,6 +2087,7 @@ function startNewGame() {
   game.dayCompleted = 0;
   game.queue = [];
   game.counter = [];
+  resetTransientAnims();
   game.feedback = null;
   game.stockToast = null;
   game.depotOpen = false;
@@ -2175,7 +2105,6 @@ function startNewGame() {
   game.dayStats = { served: 0, correct: 0, wrong: 0, angry: 0, money: 0, moneyDay: 0, moneyNight: 0, medulaAccrued: 0 };
   game.state = STATE.PLAYING;
   game.hasRun = true;               // menüde DEVAM ET görünebilir
-  rebuildCounterSlots();
   spawnPatient();
 }
 
@@ -2209,6 +2138,7 @@ function triggerGameOver() {
   game.state = STATE.GAMEOVER;
   game.hasRun = false;              // bitmiş oyuna DEVAM ET yok
   game.feedback = null;
+  resetTransientAnims();            // havadaki poşet kararı ölü kuyruğa uygulamasın
 }
 
 // =====================================================================
@@ -2234,8 +2164,23 @@ function update(dt) {
     else if (game.nightT > target) game.nightT = Math.max(target, game.nightT - step);
   }
 
-  // depo paneli açıkken oyun donsun (sabır/spawn/feedback işlemesin) — clock akmaya devam eder
-  if (game.depotOpen) return;
+  // Poşet uçuşu (SERVİS ET → checkOrder arası ~0,6 sn). Sonunda kararı UYGULAR.
+  // Uçuş sırasında sabır işlemez: aksi halde poşet havadayken hasta küsüp kuyruktan
+  // düşebilir ve checkOrder BAŞKA bir hastaya uygulanırdı.
+  if (game.bagAnim) {
+    game.bagAnim.t += dt;
+    if (game.bagAnim.t >= CONFIG.bagFlyTime) { game.bagAnim = null; checkOrder(); }
+    return;
+  }
+  // sepete ekleme geri bildirimi (salt görsel; oyunu etkilemez, donmuşken de sönümlenir)
+  if (game.flyAnims.length) {
+    for (const f of game.flyAnims) f.t += dt;
+    game.flyAnims = game.flyAnims.filter(f => f.t < CONFIG.flyTime);
+  }
+
+  // PC paneli açıkken oyun donsun — AMA SATIŞ ekranı hariç. Satış hizmet anının
+  // parçasıdır: sabır işlemeye devam eder. Depo/geliştirme/Medula dondurur.
+  if (pcFreezesGame()) return;
 
   // "NÖBET BAŞLIYOR" kartı açıkken oyun donar (depo paneliyle aynı kalıp)
   if (game.nightIntro !== null) {
@@ -2279,6 +2224,13 @@ function update(dt) {
     if (act && act.patience <= 0) {
       act.patience = 0;
       game.dayStats.angry++;
+      // Hasta gitti: onun için kurulan sepet anlamını yitirdi. Stok DÜŞMEDİĞİ için
+      // (düşüm yalnız checkOrder'da) kayıp yok, sadece seçim sıfırlanır.
+      clearCart();
+      game.flyAnims = [];
+      // SATIŞ ekranı açıksa orada durmanın anlamı kalmadı — ana ekrana dön.
+      // (Depo/geliştirme/Medula zaten oyunu dondurduğu için buraya hiç düşemez.)
+      if (isSaleOpen()) game.pcScreen = "home";
       game.feedback = { ok: false, angry: true, text: "😠 Çok beklettin!", t: 0 };
       loseReputation(CONFIG.angryRepLoss);
     }
@@ -3358,43 +3310,66 @@ function drawLowerBackdrop() {
 }
 
 function drawCounter() {
-  const c = CONFIG.colors;
-  const area = layout._counterArea;
-  if (!area) return;
-
   // bg'nin gömülü tezgahını gizleyen temiz koyu zemin (tek tezgah için)
   drawLowerBackdrop();
   // tek ahşap bant (counter.png) — müşterinin önünde
   drawCounterBand();
+  // Tezgah yüzeyi BOŞ kalır: ürün tepsisi kaldırıldı (kalemler PC → SATIŞ ekranında).
+  // Yüzeyde yalnız defter ve PC objeleri durur; artık hiçbir şeyle çakışmıyorlar.
+  drawBagFly();
+}
 
-  if (game.counter.length === 0) return;  // tezgah temiz kalsın
-  for (const slot of layout.counterSlots) {
-    const m = getMedicine(slot.id);
-    // rozetler slot köşesine değil GERÇEK çizim dikdörtgenine bağlanır
-    const R = counterItemRects(slot);
-    // ilaç görseli — raftaki gibi şeffaf PNG, ama tezgahta taban hizalı (contain-bottom);
-    // PNG yoksa renkli kutu + emoji (o zaman slotu doldurur, R.img de slot olur)
-    Sprite.draw(ctx, m.assetKey, slot.x, slot.y, slot.w, slot.h, () => {
-      ctx.save();
-      ctx.shadowColor = c.panelShadow;
-      ctx.shadowBlur = 8;
-      ctx.shadowOffsetY = 2;
-      fillRoundRect(slot.x, slot.y, slot.w, slot.h, slot.w * 0.24, m.color);
-      ctx.restore();
-      drawEmoji(m.emoji, slot.x + slot.w / 2, slot.y + slot.h * 0.5, slot.w * 0.55, "#000");
-    }, "contain-bottom");
-    // kaldır işareti (görselin sol üst köşesi; sağ üst adet rozetine ayrıldı)
-    text("✕", R.del.x, R.del.y, R.del.r * 1.2, "rgba(255,235,210,0.85)", "center", "800");
-    // aynı ilaçtan 2+ varsa görselin sağ üst köşesinde adet rozeti
-    if (slot.count >= 2) {
-      const br = R.cnt.r;
-      const bx = R.cnt.x, by = R.cnt.y;
-      ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(20,16,28,0.88)"; ctx.fill();
-      ctx.strokeStyle = c.panelBorder; ctx.lineWidth = Math.max(1, br * 0.10);
-      ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.stroke();
-      text("×" + slot.count, bx, by, br * 0.95, CONFIG.colors.neon, "center", "800");
-    }
+// SERVİS ET sonrası: dolu eczane poşeti tezgahtan hastaya doğru kayar. Yeni asset YOK —
+// kağıt poşet gövdesi + katlanmış ağız + yeşil haç kodla çizilir.
+function drawBagFly() {
+  if (!game.bagAnim) return;
+  const b = layout._band, S = layout.stage;
+  if (!b) return;
+  const t = clamp(game.bagAnim.t / CONFIG.bagFlyTime, 0, 1);
+  const e = 1 - Math.pow(1 - t, 3);                 // ease-out: hızlı çıkış, yumuşak varış
+  const w = S.w * 0.15, h = w * 1.25;
+  // tezgah yüzeyinden hastanın göğüs hizasına: sağa değil YUKARI-ORTAYA doğru
+  const x0 = b.x + b.w * 0.5 - w / 2, y0 = b.y + b.h * 0.10;
+  const x1 = b.x + b.w * 0.5 - w / 2, y1 = b.y - S.h * 0.16;
+  const x = lerp(x0, x1, e), y = lerp(y0, y1, e);
+  const alpha = t < 0.75 ? 1 : 1 - (t - 0.75) / 0.25;   // varışta söner
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  drawGroundShadow(x + w / 2, y + h * 0.98, w * 0.42, h * 0.10);
+  // gövde (kraft kağıt)
+  fillRoundRect(x, y + h * 0.18, w, h * 0.82, w * 0.08, "#c9a06a");
+  strokeRoundRect(x, y + h * 0.18, w, h * 0.82, w * 0.08, "rgba(90,60,30,0.55)", Math.max(1, w * 0.02));
+  // katlanmış ağız
+  fillRoundRect(x, y + h * 0.10, w, h * 0.16, w * 0.05, "#b98d58");
+  // yan kat çizgisi (kağıt hissi)
+  ctx.strokeStyle = "rgba(90,60,30,0.30)"; ctx.lineWidth = Math.max(1, w * 0.015);
+  ctx.beginPath(); ctx.moveTo(x + w * 0.30, y + h * 0.26); ctx.lineTo(x + w * 0.30, y + h * 0.98); ctx.stroke();
+  // yeşil haç
+  const cx = x + w * 0.62, cy = y + h * 0.58, arm = w * 0.19, th = arm * 0.40;
+  ctx.fillStyle = "#3f9c63";
+  ctx.fillRect(cx - arm / 2, cy - th / 2, arm, th);
+  ctx.fillRect(cx - th / 2, cy - arm / 2, th, arm);
+  ctx.restore();
+}
+
+// Sepete eklenen ilacın karttan PC'ye uçuşu — dokunuşun kaydedildiğini gösteren
+// kısa geri bildirim. Salt görsel: oyun durumuna hiç dokunmaz.
+function drawFlyAnims() {
+  if (!game.flyAnims.length) return;
+  for (const f of game.flyAnims) {
+    const t = clamp(f.t / CONFIG.flyTime, 0, 1);
+    const e = 1 - Math.pow(1 - t, 2);
+    const size = lerp(f.size, f.size * 0.35, e);
+    const x = lerp(f.x0, f.x1, e);
+    const y = lerp(f.y0, f.y1, e) - Math.sin(e * Math.PI) * layout.stage.h * 0.06;  // hafif kavis
+    ctx.save();
+    ctx.globalAlpha = 1 - t * 0.7;
+    const m = getMedicine(f.id);
+    if (m) Sprite.draw(ctx, m.assetKey, x - size / 2, y - size / 2, size, size, () => {
+      fillRoundRect(x - size / 2, y - size / 2, size, size, size * 0.24, m.color);
+      drawEmoji(m.emoji, x, y, size * 0.55, "#000");
+    }, "contain");
+    ctx.restore();
   }
 }
 
@@ -3420,39 +3395,8 @@ function drawDecisionButtons() {
   drawSolidButton(layout.approveBtn, "✓ ONAYLA", "rgba(20,38,24,0.92)", "#5ec48a", "rgba(94,196,138,0.6)");
 }
 
-function drawServeButton() {
-  const c = CONFIG.colors;
-  const b = layout.serveBtn;
-  const enabled = game.counter.length > 0 && servingAllowed();
-
-  Sprite.draw(ctx, "btn_serve", b.x, b.y, b.w, b.h, () => {
-    const r = b.h * 0.32;
-    // koyu zemin
-    ctx.save();
-    ctx.shadowColor = c.panelShadow;
-    ctx.shadowBlur = 14;
-    ctx.shadowOffsetY = 5;
-    fillRoundRect(b.x, b.y, b.w, b.h, r, c.btnDark);
-    ctx.restore();
-
-    // neon çerçeve + glow (aktifken nabız gibi parlar)
-    ctx.save();
-    if (enabled) {
-      const pulse = 0.6 + 0.4 * (0.5 + 0.5 * Math.sin(game.clock * 4));
-      ctx.shadowColor = c.neonGlow;
-      ctx.shadowBlur = 22 * pulse;
-    }
-    strokeRoundRect(b.x, b.y, b.w, b.h, r, enabled ? c.neon : c.neonDim, Math.max(2, b.w * 0.006));
-    ctx.restore();
-  });
-
-  // neon yazı (glow'lu)
-  ctx.save();
-  if (enabled) { ctx.shadowColor = c.neonGlow; ctx.shadowBlur = 16; }
-  text("SERVİS ET", b.x + b.w / 2, b.y + b.h / 2, b.h * 0.34,
-    enabled ? c.neon : c.neonDim, "center", "800");
-  ctx.restore();
-}
+// (KALDIRILDI) drawServeButton — alt şeritteki SERVİS ET butonu. Servis artık
+// PC → SATIŞ ekranındaki butondan yapılıyor (drawSale).
 
 function drawFeedback() {
   if (!game.feedback) return;
@@ -3679,6 +3623,23 @@ function drawCounterPC() {
     fillRoundRect(px + pw * 0.42, py + mh, pw * 0.16, ph * 0.12, 2, "#1c1626");
     fillRoundRect(px + pw * 0.30, py + ph * 0.92, pw * 0.40, ph * 0.08, 2, "#2a2138");
   }
+
+  // --- sepet rozeti (PC'nin sağ üst köşesi) ---
+  // Tezgah tepsisi kaldırıldığı için oyuncunun "seçtiklerim nerede" sorusunun tek
+  // görünür cevabı bu rozet: sepetteki TOPLAM kalem sayısını gösterir.
+  const nCart = game.counter.length;
+  if (nCart > 0) {
+    const br = Math.max(pw * 0.13, S.w * 0.022);
+    const bx = px + pw - br * 0.35, by = surfaceY - ph - br * 0.15;
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.5)"; ctx.shadowBlur = 8;
+    ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2);
+    ctx.fillStyle = CONFIG.colors.neon; ctx.fill();
+    ctx.restore();
+    ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(20,16,28,0.85)"; ctx.lineWidth = Math.max(1, br * 0.14); ctx.stroke();
+    text(String(nCart), bx, by, br * 1.15, "#1a1420", "center", "800");
+  }
 }
 
 // Kısa stok uyarısı toast'u (feedback'ten bağımsız, süreli; random yok — clock ile fade).
@@ -3774,14 +3735,18 @@ function drawPcHome() {
 
   text("💰 " + formatMoney(game.money), r.x + r.w * 0.05, r.y + r.h * 0.05, r.h * 0.032, c.cream, "left", "700");
 
-  const bw = r.w * 0.80, bh = r.h * 0.155;
+  // Dört buton (SATIŞ eklendi) — panele sığması için yükseklik ve boşluk daraltıldı.
+  const bw = r.w * 0.80, bh = r.h * 0.135;
   const bx = r.x + (r.w - bw) / 2;
-  const gap = r.h * 0.045;
-  const by0 = r.y + r.h * 0.18;
+  const gap = r.h * 0.030;
+  const by0 = r.y + r.h * 0.16;
 
   layout.pcMenuBtns = [];
   const unlocked = medulaUnlocked();
+  const nCart = game.counter.length;
   const items = [
+    { key: "sale",     emoji: "🧾", label: "SATIŞ",              on: true,
+      sub: nCart > 0 ? "Sepette " + nCart + " kalem — hazırla ve servis et" : "Siparişi hazırla ve servis et" },
     { key: "depot",    emoji: "📦", label: "ECZA DEPOSU",       sub: "İlaç siparişi ver", on: true },
     { key: "upgrades", emoji: "🔧", label: "ECZANE GELİŞTİRME", sub: "Kalıcı yükseltmeler", on: true },
     { key: "medula",   emoji: "🖥️", label: "MEDULA SİSTEMİ",
@@ -3809,10 +3774,150 @@ function drawPcHome() {
     const rows = game.receivables.slice().sort((a, b) => a.dueDay - b.dueDay)
       .map(x => "gün " + x.dueDay + ": " + Math.round(x.amount) + "₺").join("   ");
     fitText("🏦 Bekleyen SGK alacağı: " + formatMoney(pend), r.x + r.w / 2,
-      by0 + 3 * (bh + gap) + r.h * 0.02, r.w * 0.86, r.h * 0.030, c.cream, "center", "700");
-    fitText(rows, r.x + r.w / 2, by0 + 3 * (bh + gap) + r.h * 0.058, r.w * 0.86, r.h * 0.024,
+      by0 + items.length * (bh + gap) + r.h * 0.02, r.w * 0.86, r.h * 0.030, c.cream, "center", "700");
+    fitText(rows, r.x + r.w / 2, by0 + items.length * (bh + gap) + r.h * 0.052, r.w * 0.86, r.h * 0.024,
       c.creamSoft, "center", "600");
   }
+}
+
+// --- SATIŞ ekranı: İSTENEN (üstte) + SEPET (altta) + SERVİS ET ---
+// Oyuncu paneli kapatmadan istenenle sepeti karşılaştırabilsin diye ikisi AYNI ekranda.
+// Bu ekran oyunu DONDURMAZ (bkz. pcFreezesGame) — sabır işlemeye devam eder.
+function drawSale() {
+  const c = CONFIG.colors;
+  const r = drawPcScreen("SATIŞ — Sipariş Hazırla");
+  layout.saleRows = [];
+  layout.saleServeBtn = null;
+
+  // GERİ (diğer ekranlarla aynı buton dili)
+  const backW = r.w * 0.26, backH = r.h * 0.055;
+  const backX = r.x + r.w * 0.95 - backW, backY = r.y + r.h * 0.028;
+  layout.pcBackBtn = { x: backX, y: backY, w: backW, h: backH };
+  fillRoundRect(backX, backY, backW, backH, backH * 0.35, c.btnDark);
+  strokeRoundRect(backX, backY, backW, backH, backH * 0.35, "rgba(245,170,70,0.55)", 1.5);
+  text("‹ GERİ", backX + backW / 2, backY + backH / 2, backH * 0.46, c.neon, "center", "800");
+
+  const p = activePatient();
+  const pad = r.w * 0.06;
+  const colX = r.x + pad, colW = r.w - pad * 2;
+
+  // Tezgahta hasta yoksa: ekran bunu söyler, sepet boş.
+  if (!p) {
+    fitText("🚪 Tezgahta hasta yok", r.x + r.w / 2, r.y + r.h * 0.45, colW, r.h * 0.045, c.creamSoft, "center", "800");
+    fitText("Hasta gelince siparişi buradan hazırlarsın.", r.x + r.w / 2, r.y + r.h * 0.53,
+      colW, r.h * 0.028, c.creamSoft, "center", "600");
+    return;
+  }
+
+  // ============ ÜST: İSTENEN ============
+  const wantTop = r.y + r.h * 0.115;
+  fitText("İSTENEN", colX, wantTop, colW * 0.5, r.h * 0.030, c.neon, "left", "800");
+
+  const wantRows = saleWantRows(p);
+  const wantH = r.h * 0.245;
+  const wantY = wantTop + r.h * 0.022;
+  fillRoundRect(colX, wantY, colW, wantH, r.h * 0.018, "rgba(255,255,255,0.05)");
+  strokeRoundRect(colX, wantY, colW, wantH, r.h * 0.018, "rgba(245,170,70,0.22)", 1);
+
+  if (!wantRows.length) {
+    fitText("—", colX + colW / 2, wantY + wantH / 2, colW * 0.8, r.h * 0.028, c.creamSoft, "center", "600");
+  } else {
+    // 6 kalemlik reçete de sığsın: satır yüksekliği kalem sayısına göre daralır,
+    // taban punto fitText ile zaten kırpılıyor => taşma olmaz.
+    const lineH = Math.min(wantH / 6.4, wantH / (wantRows.length + 0.4));
+    let ly = wantY + lineH * 0.7;
+    for (const w of wantRows) {
+      drawEmoji(w.emoji, colX + colW * 0.045, ly, lineH * 0.62, c.cream);
+      fitText(w.label, colX + colW * 0.10, ly, colW * 0.66, lineH * 0.52, c.cream, "left", "700");
+      if (w.qty > 1) text("×" + w.qty, colX + colW * 0.955, ly, lineH * 0.56, c.neon, "right", "800");
+      ly += lineH;
+    }
+  }
+
+  // ============ ALT: SEPET ============
+  const serveH = r.h * 0.085;
+  const serveY = r.y + r.h * 0.905 - serveH;
+  const cartTop = wantY + wantH + r.h * 0.030;
+  fitText("SEPET", colX, cartTop, colW * 0.5, r.h * 0.030, c.neon, "left", "800");
+  const rows = cartRows();
+  const totalQty = game.counter.length;
+  text(totalQty + " kalem", colX + colW, cartTop, r.h * 0.026, c.creamSoft, "right", "700");
+
+  const cartY = cartTop + r.h * 0.022;
+  const cartH = serveY - cartY - r.h * 0.022;
+  fillRoundRect(colX, cartY, colW, cartH, r.h * 0.018, "rgba(255,255,255,0.05)");
+  strokeRoundRect(colX, cartY, colW, cartH, r.h * 0.018, "rgba(245,170,70,0.22)", 1);
+
+  if (!rows.length) {
+    fitText("Sepet boş — aşağıdaki raftan ilaç seç", colX + colW / 2, cartY + cartH / 2,
+      colW * 0.86, r.h * 0.028, c.creamSoft, "center", "600");
+  } else {
+    // 6 satır referans yükseklik; daha azsa satırlar ferahlar, daha çoksa sıkışır (taşmaz)
+    const rowH = Math.min(cartH / 6.2, cartH / (rows.length + 0.2));
+    const btnR = Math.min(rowH * 0.34, colW * 0.055);
+    let ry = cartY + rowH * 0.15;
+    for (const row of rows) {
+      const cy = ry + rowH / 2;
+      const m = row.med;
+      Sprite.draw(ctx, m.assetKey, colX + colW * 0.02, ry + rowH * 0.10, rowH * 0.8, rowH * 0.8, () => {
+        fillRoundRect(colX + colW * 0.02, ry + rowH * 0.10, rowH * 0.8, rowH * 0.8, rowH * 0.18, m.color);
+        drawEmoji(m.emoji, colX + colW * 0.02 + rowH * 0.4, cy, rowH * 0.45, "#000");
+      }, "contain");
+      fitText(m.name, colX + colW * 0.15, cy, colW * 0.42, rowH * 0.42, c.cream, "left", "700");
+
+      // − / + adımlayıcı (depo ekranıyla aynı dil)
+      const plusX = colX + colW * 0.93, minusX = colX + colW * 0.70;
+      const qtyX = (plusX + minusX) / 2;
+      const stock = game.stock[row.id] || 0;
+      const plusOn = row.qty < stock;
+      const minus = { id: row.id, x: minusX - btnR, y: cy - btnR, w: btnR * 2, h: btnR * 2, delta: -1, on: true };
+      const plus  = { id: row.id, x: plusX - btnR, y: cy - btnR, w: btnR * 2, h: btnR * 2, delta: 1, on: plusOn };
+      layout.saleRows.push(minus, plus);
+      for (const b of [minus, plus]) {
+        fillRoundRect(b.x, b.y, b.w, b.h, b.w * 0.32, c.btnDark);
+        strokeRoundRect(b.x, b.y, b.w, b.h, b.w * 0.32, b.on ? "rgba(245,170,70,0.65)" : c.neonDim, 1.5);
+        text(b.delta > 0 ? "+" : "−", b.x + b.w / 2, b.y + b.h / 2, b.h * 0.62,
+          b.on ? c.neon : c.neonDim, "center", "800");
+      }
+      text(String(row.qty), qtyX, cy, rowH * 0.48, c.cream, "center", "800");
+      ry += rowH;
+    }
+  }
+
+  // ============ SERVİS ET ============
+  const enabled = game.counter.length > 0 && servingAllowed();
+  layout.saleServeBtn = { x: colX, y: serveY, w: colW, h: serveH, enabled };
+  fillRoundRect(colX, serveY, colW, serveH, serveH * 0.32, c.btnDark);
+  ctx.save();
+  if (enabled) {
+    const pulse = 0.6 + 0.4 * (0.5 + 0.5 * Math.sin(game.clock * 4));
+    ctx.shadowColor = c.neonGlow; ctx.shadowBlur = 20 * pulse;
+  }
+  strokeRoundRect(colX, serveY, colW, serveH, serveH * 0.32,
+    enabled ? c.neon : c.neonDim, Math.max(2, colW * 0.005));
+  ctx.restore();
+  text("SERVİS ET", colX + colW / 2, serveY + serveH / 2, serveH * 0.36,
+    enabled ? c.neon : c.neonDim, "center", "800");
+}
+
+// İSTENEN listesinin satırları. Reçete/Medula => kalem + adet; semptom => semptomlar.
+// Medula hastasında kod HENÜZ sorgulanmadıysa liste gizli kalır (oyuncu önce sorgulamalı).
+function saleWantRows(p) {
+  const req = p.request;
+  if (req.type === "prescription" || req.type === "medula") {
+    if (req.type === "medula" && !medulaIsRevealed(req.code)) {
+      return [{ emoji: "🖥️", label: "Kod " + req.code + " — önce MEDULA'dan sorgula", qty: 1 }];
+    }
+    if (req.type === "prescription" && p.decided !== "approve") {
+      return [{ emoji: "📋", label: "Reçete henüz onaylanmadı", qty: 1 }];
+    }
+    return req.items.map(it => {
+      const m = getMedicine(it.id);
+      return { emoji: m ? m.emoji : "💊", label: m ? m.name : it.id, qty: it.qty };
+    });
+  }
+  const items = req.items || [{ symptom: req.symptom, qty: 1 }];
+  return items.map(it => ({ emoji: it.symptom.emoji || "🩺", label: it.symptom.label || it.symptom.text || "—", qty: it.qty }));
 }
 
 // --- MEDULA SİSTEMİ ekranı: kod girişi + tuş takımı + sonuç ---
@@ -4136,7 +4241,10 @@ function drawPcPanel() {
   layout.medulaKeys = null;
   layout.medulaOk = null;
   layout.medulaDel = null;
+  layout.saleRows = null;
+  layout.saleServeBtn = null;
   if (game.pcScreen === "home") drawPcHome();
+  else if (game.pcScreen === "sale") drawSale();
   else if (game.pcScreen === "upgrades") drawUpgrades();
   else if (game.pcScreen === "medula") drawMedula();
   else drawDepot();
@@ -4151,11 +4259,25 @@ function handlePcTap(px, py) {
       for (const b of layout.pcMenuBtns) {
         if (!pointInRect(px, py, b)) continue;
         if (!b.enabled) return;                       // kilitli sekme: dokunuş yutulur
-        if (b.key === "depot") openDepot();
+        if (b.key === "sale") openSale();
+        else if (b.key === "depot") openDepot();
         else if (b.key === "upgrades") openUpgrades();
         else openMedulaScreen();
         return;
       }
+    }
+    if (layout.depotPanel && !pointInRect(px, py, layout.depotPanel)) { closeDepot(); return; }
+    return;
+  }
+  if (game.pcScreen === "sale") {
+    if (layout.saleRows) {
+      for (const b of layout.saleRows) {
+        if (pointInRect(px, py, b)) { if (b.on) cartChange(b.id, b.delta); return; }
+      }
+    }
+    if (layout.saleServeBtn && pointInRect(px, py, layout.saleServeBtn)) {
+      if (layout.saleServeBtn.enabled) serveFromSale();
+      return;
     }
     if (layout.depotPanel && !pointInRect(px, py, layout.depotPanel)) { closeDepot(); return; }
     return;
@@ -4219,7 +4341,8 @@ function render() {
     drawCounterPC();    // tezgahtaki bilgisayar (depo sipariş ekranını açar)
     drawTabs();         // kategori sekmeleri
     drawShelf();        // seçili kategorinin ilaçları
-    if (activeNeedsDecision()) drawDecisionButtons(); else drawServeButton();
+    if (activeNeedsDecision()) drawDecisionButtons();
+    drawFlyAnims();     // sepete ekleme geri bildirimi (karttan PC'ye)
     drawStockToast();   // kısa stok uyarısı (feedback'ten bağımsız)
     drawInfoToast();    // SGK ödeme bildirimi (ayrı kanal)
     drawFeedback();
@@ -4231,7 +4354,7 @@ function render() {
     drawClosedBook();
     drawTabs();
     drawShelf();
-    if (activeNeedsDecision()) drawDecisionButtons(); else drawServeButton();
+    if (activeNeedsDecision()) drawDecisionButtons();
     drawDayEnd();
   } else if (game.state === STATE.MENU) {
     // oyun dünyası çizilmesin; arka plan + menü kartı
@@ -4244,7 +4367,7 @@ function render() {
     drawClosedBook();
     drawTabs();
     drawShelf();
-    if (activeNeedsDecision()) drawDecisionButtons(); else drawServeButton();
+    if (activeNeedsDecision()) drawDecisionButtons();
     drawGameOver();
   }
 
@@ -4453,19 +4576,14 @@ function handleTap(px, py) {
     return;
   }
 
-  if (pointInRect(px, py, layout.serveBtn)) { checkOrder(); return; }
-
-  // dokunma alanı slot karesi değil, çizilen görselin kutusu (counterItemRects.hit) —
-  // çizim ile tıklama tek kaynaktan gelsin, dar şişede boşluğa basınca ilaç düşmesin
-  for (const slot of layout.counterSlots) {
-    if (pointInRect(px, py, counterItemRects(slot).hit)) { removeOneFromCounter(slot.id); return; }
-  }
+  // Tezgahta tepsi kalmadı: geri alma SATIŞ ekranındaki − butonundan yapılır.
   // raf kartları: içerik koordinatında saklanır, scroll düşülür; gridArea dışı (kırpılan kısım) tıklanamaz
   const shelfScroll = layout.shelfScroll || 0;
   for (const btn of layout.shelfButtons) {
     const r2 = { x: btn.x, y: btn.y - shelfScroll, w: btn.w, h: btn.h };
     if (pointInRect(px, py, r2) && layout.gridArea && pointInRect(px, py, layout.gridArea)) {
-      tapMedicine(btn.id);
+      // eklendiyse karttan PC'ye uçuş: dokunuşun kaydedildiği görünür olsun
+      if (tapMedicine(btn.id)) startFlyToPc(btn.id, r2);
       return;
     }
   }
@@ -4482,6 +4600,18 @@ function getEventPos(e) {
     clientY = e.clientY;
   }
   return { x: clientX - rect.left, y: clientY - rect.top };
+}
+
+// Karttan PC'ye uçuş animasyonunu kuyruğa ekler (salt görsel geri bildirim).
+function startFlyToPc(id, cardRect) {
+  const pc = layout.pcBtn;
+  if (!pc) return;
+  game.flyAnims.push({
+    id: id, t: 0,
+    x0: cardRect.x + cardRect.w / 2, y0: cardRect.y + cardRect.h / 2,
+    x1: pc.x + pc.w / 2, y1: pc.y + pc.h / 2,
+    size: Math.min(cardRect.w, cardRect.h) * 0.62
+  });
 }
 
 // işaretçi: tap + sekme şeridinde YATAY, ilaç grid'inde DİKEY kaydırma (drag)
@@ -4563,7 +4693,7 @@ window.cheats = {
   setReputation(n) { game.reputation = clamp(n, CONFIG.minReputation, CONFIG.repMax); },
   skipDay() { if (game.state === STATE.PLAYING) endDay(); },
   setPatience(n) { const p = activePatient(); if (p) p.patience = n; },
-  clearQueue() { game.queue = []; game.counter = []; game.feedback = null; rebuildCounterSlots(); },
+  clearQueue() { game.queue = []; game.counter = []; game.feedback = null; resetTransientAnims(); },
   // cheat hastaları BONUS: günün programına, hedefe ve gün sonu sayacına karışmaz
   newPatient() { return spawnPatient({}); },
   spawnFake() { return spawnPatient({ forcePrescription: true, forceFake: true }); },
@@ -4597,7 +4727,6 @@ window.cheats = {
     return r;
   },
   setGroup(gid) { if (medsInGroup(gid).length) { game.activeGroup = gid; buildShelf(); } },
-  checkCounter() { const r = verifyCounterLayout(); console.table(r.satırlar); return r; },
   // Sipariş konsantrasyon tavanı — AKTİF koşunun tohumu ve geliştirme seviyeleriyle
   concentration(days) {
     days = days || 10;
@@ -4725,8 +4854,7 @@ window.cheats = {
     game.dayCompleted = sch.dayN;
     game.daySpawned = sch.dayN;
     game.queue = []; game.counter = []; game.feedback = null;
-    rebuildCounterSlots();
-    game.state = STATE.PLAYING;
+      game.state = STATE.PLAYING;
     beginNightShift();
     spawnPatient();
     console.log("Gün " + d + " nöbete çevrildi: " + sch.dayN + " gündüz + " + sch.nightN + " gece, hedef " + sch.goal + "₺");
@@ -4895,7 +5023,6 @@ function loadAssets() {
   const vt = setInterval(() => {
     if (Assets.loaded < Assets.total) return;
     clearInterval(vt);
-    verifyCounterLayout();
   }, 200);
 }
 
