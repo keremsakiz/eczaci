@@ -1,5 +1,5 @@
 # ECZACI — PROJE DURUM BELGESİ
-Son güncelleme: 2026-09-02 (sıfırdan koddan yeniden yazıldı, index.html **5.523 satır**)
+Son güncelleme: 2026-09-03 (servis akışı bölümleri güncellendi, index.html **5.650 satır**)
 
 Bu belge, projeyi hiç bilmeyen bir asistanın okuyup kaldığı yerden devam edebilmesi için yazılmış bir devir notudur. Buradaki her sayı koddan ya da ölçüm çıktısından doğrulanmıştır; doğrulanamayan hiçbir iddia yazılmadı.
 
@@ -347,15 +347,59 @@ Gece hastaları gün programının parçası olarak `buildDaySchedule` içinde �
 Paranın harcanacağı yer. Geliştirmeler kalıcı bir para gideridir.
 
 ### 9.1 PC navigasyonu
-Tezgahtaki PC'ye dokununca doğrudan depo açılmaz; `openPc()` ana ekranı getirir:
+Tezgahtaki PC'ye dokununca `openPc()` **dört butonlu** ana ekranı getirir:
 
 ```
-[ 📦 ECZA DEPOSU       — İlaç siparişi ver    ]
-[ 🔧 ECZANE GELİŞTİRME — Kalıcı yükseltmeler ]
-[ 🖥️ MEDULA SİSTEMİ    — (Lv2 alınmadan kilitli) ]
+[ 🧾 SATIŞ              — Siparişi hazırla ve servis et  (sepet doluysa "Sepette N kalem") ]
+[ 📦 ECZA DEPOSU        — İlaç siparişi ver                                                ]
+[ 🔧 ECZANE GELİŞTİRME  — Kalıcı yükseltmeler                                              ]
+[ 🖥️ MEDULA SİSTEMİ     — (Lv2 alınmadan kilitli)                                          ]
 ```
 
-`game.pcScreen` = `"home" | "depot" | "upgrades" | "medula"`. `drawPcPanel()` hangisi açıksa onu çizer ve **her frame önce kapalı ekranların rect'lerini temizler** (görünmeyen buton tıklanabilir kalmasın). Alt ekranlarda sağ üstte "‹ GERİ" ana ekrana döner; ✕ paneli kapatır. DAYEND kartındaki "📦 Depodan Sipariş" doğrudan depo ekranına gider.
+`game.pcScreen` = `"home" | "sale" | "depot" | "upgrades" | "medula"`. `drawPcPanel()` hangisi açıksa onu çizer ve **her frame önce kapalı ekranların rect'lerini temizler** (görünmeyen buton tıklanabilir kalmasın). Alt ekranlarda sağ üstte "‹ GERİ" ana ekrana döner; ✕ paneli kapatır. Medula'nın kilit davranışı değişmedi: satın alınmadan buton görünür ama pasiftir, "🔒 Geliştirme'den satın al" yazar ve dokunuş yutulur. DAYEND kartındaki "📦 Depodan Sipariş" doğrudan depo ekranına gider.
+
+#### SATIŞ ekranı (`drawSale`)
+Tek ekranda iki bölüm, üst üste: **İSTENEN** üstte, **SEPET** altta. Oyuncu paneli kapatmadan ikisini karşılaştırabilsin diye aynı ekranda dururlar.
+
+**Üstte İSTENEN** (`saleWantRows`) — hastanın ne istediği:
+
+| Hasta tipi | Gösterilen |
+|---|---|
+| Reçeteli (onaylanmış) | kalem adı + adet listesi |
+| Reçeteli (henüz onaylanmamış) | "Reçete henüz onaylanmadı" |
+| Medula (kod sorgulanmış) | kalem adı + adet listesi |
+| Medula (kod sorgulanmamış) | "Kod XXXXXX — önce MEDULA'dan sorgula" |
+| Semptomlu | semptomların emoji + etiketi (adet >1 ise ×N) |
+
+Tablodaki iki "gizli" hâl (onaylanmamış reçete, sorgulanmamış Medula kodu) bilinçlidir: SATIŞ ekranı **bilgi kaynağı değildir**. Reçetenin onaylanması ONAYLA/REDDET fazından, Medula listesinin görülmesi MEDULA ekranındaki kod sorgusundan geçmek zorundadır — aksi halde SATIŞ ekranı iki mekaniği birden atlatan bir kestirme olurdu.
+
+**Altta SEPET** — seçilen her kalem bir satır: ilaç görseli, adı, `−` / `+` adımlayıcı ve adet. Başlığın sağında toplam kalem sayısı yazar. `+` sepetteki adet stoğa eşitken pasifleşir; `−` adedi 0'a indirince **satır sepetten düşer**. Sepet boşken "Sepet boş — aşağıdaki raftan ilaç seç" yazar.
+
+**En altta SERVİS ET** — sepet boşken ya da servis izni yokken pasif; aktifken nabız gibi parlar.
+
+**Tezgahta hasta yoksa** ekran "🚪 Tezgahta hasta yok" der, sepet bölümü hiç çizilmez.
+
+**Sığma:** İSTENEN kutusu panel yüksekliğinin %24,5'i, sepet kutusu SERVİS ET'e kadar kalan alan. İkisinde de satır yüksekliği **6 satır referansına göre** hesaplanır (`min(kutuH/6.2, kutuH/(n+0.2))`), yani kalem sayısı arttıkça satırlar sıkışır, taşmaz. Ölçüldü (390×844, 6 kalemlik reçete): 6 sepet satırı ve 12 adımlayıcı butonun tamamı panel içinde, satır çakışması 0, SERVİS ET son satırın 18 px altında ve panel alt kenarının 49 px üstünde.
+
+#### DONMA KURALI — SATIŞ dondurmaz, diğer üçü dondurur
+Bu **bilinçli bir tasarım kararıdır** ve tek noktadan verilir:
+
+```js
+function pcFreezesGame() { return game.depotOpen && game.pcScreen !== "sale"; }
+```
+
+`update()` yalnız bu fonksiyona bakar (`if (pcFreezesGame()) return;`).
+
+| Ekran | Sabır / spawn | Gerekçe |
+|---|---|---|
+| **SATIŞ** | **İŞLER** | Hizmet anının parçası. Oyuncu siparişi hazırlarken hasta beklemeye devam eder; sepeti PC'ye taşımak zaman baskısını kaldırmak için değil, tezgahı boşaltmak içindir. |
+| ECZA DEPOSU | donar | Hizmet anının parçası değil |
+| ECZANE GELİŞTİRME | donar | Hizmet anının parçası değil |
+| MEDULA SİSTEMİ | donar | Hizmet anının parçası değil |
+
+Ölçüldü (1 sn = 60 frame): SATIŞ Δsabır = 1,000 sn · DEPO / GELİŞTİRME / MEDULA Δ = 0,000 · panel kapalı Δ = 1,000.
+
+> Medula'nın dondurması bir takastır: kod girişi tuş takımıyla yapıldığı için zaman baskısı altında yapılması cezalandırıcı olurdu. Bunun bedeli, Medula hastasında oyuncunun sorgu için istediği kadar zaman bulmasıdır.
 
 ### 9.2 Kalemler ve fiyatlar
 Fiyatlar sabit değil: `round100(avgPrice × costK[n])`, ve `costK.length === maxLevel − 1` (n'inci alım = `costK[n−1]`). Lv1 herkeste bedava başlangıç durumudur.
@@ -439,29 +483,43 @@ Stokla **aynı yol**: `initUpgrades()` yalnız `startNewGame()` tarafından ça�
 
 ---
 
-## 11. Tezgah ve Arayüz
+## 11. Servis Akışı, Tezgah ve Arayüz
 
-### 11.1 Sprite.rect — rozet ve dokunma alanının tek kaynağı
-`Sprite.rect(key, x, y, w, h, fit)` görselin kutu içinde **gerçekten kaplayacağı** dikdörtgeni döndürür (asset yoksa `null`). Oran korunduğu için görsel kutuyu genelde doldurmaz: **en dar şişe kutunun ~%34'ünü, en geniş kutu %100'ünü** kaplar; aradaki fark boşluktur.
+### 11.1 Servis akışı — seçim altta, onay PC'de
+Akış üç adıma ayrılmıştır ve tezgah yüzeyi **tamamen boş** kalır:
 
-> **Kural: rozet ve dokunma alanı gibi şeyler slot karesine değil, BU dikdörtgene bağlanmalıdır.** Rozetler eskiden slot köşesine sabitlendiği için dar şişelerde boşluğa düşüyordu.
+1. **Seçim (alt alan).** Kategori sekmeleri ve ilaç kartı gridi değişmedi. Karta dokunmak ilacı **sepete** ekler; aynı karta tekrar dokunmak adedi artırır (`tapMedicine`). Dokunuşta **stok kontrol edilir ama düşülmez**: stok 0 ise ya da sepetteki adet stoğa eşitse ekleme yapılmaz ve toast uyarısı çıkar.
+2. **Sepet ve onay (PC → SATIŞ ekranı).** Adet düzenlemesi ve servis onayı burada (bkz. 9.1).
+3. **Servis (poşet animasyonu).** SERVİS ET'e basılınca panel kapanır, tezgahta kodla çizilen dolu bir eczane poşeti belirip hastaya doğru kayar (`CONFIG.bagFlyTime` = 0,6 sn), uçuş bitince `checkOrder()` çalışır ve mevcut doğru/yanlış geri bildirimi görünür.
 
-`fit` modları: `"contain"`, `"contain-bottom"` (contain + kutunun **alt çizgisine** otur, yatayda ortalı), `"cover"`, `"stretch"`.
+**Sepet veri yapısı DEĞİŞMEDİ:** `game.counter` hâlâ düz bir id listesidir (aynı ilaç birden çok kez geçer). `checkOrder`, `sameMultiset` ve `expectedMedicineIds` bu biçime bağlı olduğu için **eşleşme mantığına hiç dokunulmadı**; üzerine yalnız `cartRows()`, `cartCount()`, `cartChange()`, `clearCart()` yardımcıları eklendi.
 
-**Taban hizası:** tezgahtaki ürünler `"contain-bottom"` ile çizilir — dar/uzun ve geniş/kısa ürünler **aynı yüzeye** otursun diye.
+**Stok düşümü tek noktadadır:** yalnız `checkOrder()` içinde, servis anında. Sepete eklemek, sepetten çıkarmak ya da sepeti boşaltmak **hiçbir stok kaybı yaratmaz**. Hasta sabrı bitip giderse `clearCart()` çalışır ve SATIŞ ekranı açıksa PC ana ekranına dönülür — yine stok kaybı olmaz.
 
-### 11.2 counterItemRects
-Tezgahtaki bir ürünün gerçek çizim dikdörtgenini, ✕ / ×N rozet merkezlerini ve dokunma kutusunu **tek fonksiyondan** üretir. Çizim ve tıklama aynı kaynaktan beslendiği için ayrışamaz; asset geç yüklenirse de anlık hesaplandığı için bayatlamaz.
+**Poşet uçuşu sırasında sabır donar.** Aksi halde poşet havadayken hasta küsüp kuyruktan düşebilir ve `checkOrder()` **başka bir hastaya** uygulanırdı.
 
-- Rozet çapı görselle ölçeklenir ama `clamp(img.w × 0.26, slot.w × 0.10, slot.w × 0.18)` ile sınırlanır — dar şişede okunmaz, geniş kutuda devasa olmaz.
-- Dokunma alanı çizimle **eşmerkezli**; parmak payı kadar büyür ama **slotu aşmaz** (slotlar arası boşluğa taşıp komşu ürünü çalmasın).
+> **`resetTransientAnims()`** — `bagAnim` ve `flyAnims`'i söndürür. `startNextDay`, `startNewGame`, `triggerGameOver` ve `cheats.clearQueue` çağırır. Yarım kalmış bir poşet uçuşu gün değişince kararı sıfırlanmış kuyruğa uygulardı; bu geçişlerin zorunlu parçasıdır.
 
-`verifyCounterLayout()` (cheat: `checkCounter()`) her ilaç için rozetlerin ve dokunma kutusunun görsel dikdörtgeni içinde kaldığını denetler.
+**Görsel geri bildirim.** Karta dokunulup ilaç gerçekten eklendiğinde (`tapMedicine` true dönerse) `startFlyToPc()` karttan PC'ye kısa bir uçuş başlatır (`CONFIG.flyTime` = 0,35 sn, hafif kavisli, sönümlenerek). **Salt görseldir**, oyun durumuna hiç dokunmaz. Ayrıca sepette ürün varken PC objesinin sağ üst köşesinde **toplam kalem sayısını** gösteren rozet durur — tepsi kalktığı için oyuncunun "seçtiklerim nerede" sorusunun tek görünür cevabı budur.
 
-### 11.3 drawEmoji — glif kutusuna göre ortalama
+**Sahnede kalanlar:** reçete kağıdı ve konuşma balonu yerinde durur. SATIŞ ekranı onların yerine geçmez; panel kapalıyken de görünürler.
+
+### 11.2 Sprite.rect
+`Sprite.rect(key, x, y, w, h, fit)` görselin kutu içinde **gerçekten kaplayacağı** dikdörtgeni döndürür (asset yoksa `null`). Oran korunduğu için görsel kutuyu genelde doldurmaz; aradaki fark boşluktur.
+
+**Hâlâ kullanılıyor** ama artık yalnız `Sprite.draw` içinden: dokuz `Sprite.draw` çağrısının hepsi ondan geçer. Dışarıdan çağıran kalmadı — tek dış çağıran `counterItemRects` idi, o da tepsiyle birlikte silindi.
+
+`fit` modları: `"contain"`, `"contain-bottom"`, `"cover"`, `"stretch"`. Fiilen kullanılan iki tanesi: `"cover"` (arka plan, tezgah bandı) ve `"contain"` (kalan yedi çağrı — hasta avatarı, defter, ilaç kartı, sepet satırı, uçuş animasyonu).
+
+> **`"contain-bottom"` modunun artık HİÇ ÇAĞIRANI YOK.** Taban hizası (dar/uzun ve geniş/kısa ürünleri aynı yüzeye oturtma) yalnız tezgah tepsisi için vardı. Kod duruyor ama ölü daldır — bkz. bölüm 15.
+
+### 11.3 Kaldırılan tepsi katmanı
+Tezgah ürün tepsisi tamamen söküldüğü için `counterItemRects`, tepsi rozet/dokunma hesabı ve onu denetleyen `verifyCounterLayout()` **koddan silindi**. Rozet çapı sınırlama, eşmerkezli dokunma kutusu ve "rozeti slot karesine değil çizim dikdörtgenine bağla" kuralı artık geçerli değil — bağlanacak rozet kalmadı.
+
+### 11.4 drawEmoji — glif kutusuna göre ortalama
 Emojiler font metriklerine göre değil, **gerçek glif kutusuna** göre ortalanır: `measureText`'in `actualBoundingBoxLeft/Right/Ascent/Descent` değerleriyle ölçülüp merkez düzeltmesi uygulanır. Aksi halde farklı emojiler aynı kutuda farklı yerlere oturuyordu. `selfTestEmoji()` oyundaki her emojiyi 64px referans kutuda çizip merkez sapmasını denetler (tolerans ~%6); tarayıcı `actualBoundingBox` vermiyorsa denetim atlanır.
 
-### 11.4 HUD ve diğer arayüz
+### 11.5 HUD ve diğer arayüz
 - **HUD**: sol kutuda satır1 GÜN, satır2 tarih (emojisiz); nöbet günlerinde sol kutu ile EV butonu arasındaki boşlukta 🌙 rozeti; ortada kare EV butonu (menüye döner, veri silinmez); sağ kutuda itibar (emoji eşikleri: <35 😡, 35–69 😑, ≥70 😊) ve binlik ayraçlı para.
 - `formatMoney` `toLocaleString` kullanmaz, kendi ayraç mantığı vardır ve değer değişmediği sürece **cache'li string** döner. `dateShort()` de gün değişmediği sürece cache'lidir — çizim içinde `new Date()` çağrısı titremeye yol açar.
 - **İlaç kartları**: 3 sütunlu grid, görsel `contain` ile çizilir (asla ezilmez), dikeyde taşarsa drag-scroll + sağ kenarda ince retro scrollbar (salt görsel, tıklama hedefi değil). Stok 0 → "TÜKENDİ" etiketi; stoğu olanlarda sağ üstte stok rozeti.
@@ -499,11 +557,15 @@ Hepsi yalnız sorun bulursa `console.warn` atar; oyuncuya hiçbir şey görünme
 - **(0e)** nöbet kuralları: gece hasta sayısı ≥ `nightPatientMin`, `nightFakeChance()` tavanı aşmıyor, gecede ≥1 gerçek reçete, gündüz bölümünde `night:true` hasta yok, nöbet olmayan günde hiç gece hastası yok
 - **(f–i)** hastanın tam ihtiyacı verilince sonuç daima "doğru" mu; her sahte reçetenin tespit edilebilir en az 1 kusuru var mı; gerçek reçetelerde kusur yok mu ve doktoru defterde mi; gerçek reçetenin tarihi o günün tarihi mi
 
-**`selfTestEmoji()`** — oyundaki her emojinin glif kutusuna göre doğru ortalandığını denetler (bkz. 11.3).
+**`selfTestEmoji()`** — oyundaki her emojinin glif kutusuna göre doğru ortalandığını denetler (bkz. 11.4).
 
 **`checkDataHealth()`** — her ilaç kategorisinin en az bir semptomu, her semptom kategorisinin en az bir ilacı var mı.
 
-### 12.3 Debug cheatleri (`window.cheats` — **30 adet**, koddan sayıldı)
+> **(KALDIRILDI) `verifyCounterLayout()`** — tezgah tepsisindeki rozet ve dokunma kutusunun görsel dikdörtgeni içinde kaldığını denetliyordu. Tepsiyle birlikte silindi; boot'ta artık çağrılmıyor ve `cheats.checkCounter()` de kaldırıldı.
+>
+> **Yerine dosya İÇİNDE bir denetim gelmedi.** SATIŞ ekranının sığması (satırlar panelden taşmıyor mu, adımlayıcılar panel içinde mi, SERVİS ET son satırın altında mı) yalnız **dışarıdan headless ölçümle** doğrulandı — boot self-test'i bunu görmez. Panel yerleşimi değiştirilirse ölçüm elle tekrarlanmalı. Bkz. bölüm 15.
+
+### 12.3 Debug cheatleri (`window.cheats` — **29 adet**, koddan sayıldı)
 
 | Cheat | Ne yapar |
 |---|---|
@@ -519,7 +581,6 @@ Hepsi yalnız sorun bulursa `console.warn` atar; oyuncuya hiçbir şey görünme
 | `gameOver()` | `triggerGameOver()` tetikler |
 | `revealFlaws()` | aktif reçetenin sahte/kusur/doktor/tarih/kaşe/imza dökümünü yazar |
 | `setGroup(gid)` | aktif ilaç grubunu değiştirir |
-| `checkCounter()` | `verifyCounterLayout()` sonucunu tabloyla basar (rozet/dokunma hizası) |
 | `concentration(days)` | konsantrasyon tavanı dökümü: en yüksek paylı hasta, payı, tavan, yeniden üretme/zorla sığdırma sayısı |
 | `stock()` | tüm ilaçların stok tablosu |
 | `setStock(id, n)` | bir ilacın stoğunu clamp'li ayarlar |
@@ -637,7 +698,15 @@ Bunlar tekrar denenmesin diye yazıldı. Her biri gerçekten uygulandı ve ölç
 
 **Geliştirme doyması.** Tüm geliştirmeler A profilinde medyan **12. günde** bitiyor (60/60 koşuda). Kalan 18 gün boyunca paranın harcanacağı yer yok; kasa 30. günde ~41.872₺'ye çıkıyor ve son 5 günde günde ~1.560₺ birikmeye devam ediyor. Tavan bu sorunu bir gün öteledi ama çözmedi. Yeni bir para gideri (personel, kira, ekipman bakımı, ceza/vergi) ya da geliştirme ağacının derinleştirilmesi gerekiyor.
 
-**Tezgahta 5+ ürün olunca en soldaki slot doktor defterinin altında kalıyor.** Oyun sırasında gözlemlendi; **koddan doğrulanmadı** (yerleşim ancak gerçek çizimde ölçülebiliyor, statik okumayla teyit edilemedi). İlgili yer `rebuildCounterSlots()`: slotlar tezgah bandında **ortalanır** ve bandın %92'sine sığacak şekilde küçültülür, yani satır bandı taşmaz — dolayısıyla sorun büyük olasılıkla slot genişliğinde değil, defter objesinin bu satırla çakışan konumunda. Not: slotlar **benzersiz ilaca** göre gruplanır (aynı ilaçtan iki kutu tek slot + ×2 rozeti), yani "5+ ürün" pratikte **5+ farklı ilaç** demektir. Düzeltmeden önce gerçek cihazda/ekran görüntüsüyle konum ölçülmeli.
+**(ÇÖZÜLDÜ) Tezgahta 5+ ürün doktor defteriyle çakışıyordu.** Ürün tepsisi tamamen kaldırıldı; tezgah yüzeyinde yalnız defter ve PC kaldı. Ölçüldü (390×844): defter x[8–133], PC x[291–391] — kesişmiyorlar ve çakışacak üçüncü nesne yok.
+
+**SATIŞ ekranının sığması dosya içinde denetlenmiyor.** `verifyCounterLayout()` silindi ve yerine boot self-test'ine bir karşılık konmadı. Panel yerleşimi (İSTENEN kutusu %24,5, sepet kutusu kalan alan, 6 satır referanslı satır yüksekliği) yalnız dışarıdan headless ölçümle doğrulandı. Panel oranları ya da `maxPrescriptionItems` değiştirilirse sığma sessizce bozulabilir — ya ölçüm elle tekrarlanmalı ya da boot'a bir yerleşim denetimi eklenmeli.
+
+**`Sprite.rect`'in `"contain-bottom"` modu ölü dal.** Taban hizası yalnız tezgah tepsisi için vardı; tepsi kalkınca çağıranı kalmadı (dokuz `Sprite.draw` çağrısının yedisi `"contain"`, ikisi `"cover"`). Kod duruyor. Silmek mi, ileride kullanmak mı — karar verilmedi; silinirse `Sprite.rect`'in yorum bloğu da sadeleşir.
+
+**Poşet animasyonu görsel olarak doğrulanmadı.** `bagAnim` zamanlaması ve `checkOrder`'ın uçuş sonunda çalıştığı ölçüldü, ama poşetin nasıl göründüğü, nereden nereye kaydığı ve PC rozetinin konumu headless ölçümle görülemez. **Gerçek cihazda bakılmalı.**
+
+**Sepetin kalıcılığı test edilmedi.** Sepet hasta küsünce ve gün geçince temizleniyor (doğrulandı), ama oyuncu SATIŞ ekranını kapatıp DEVAM ET'e ya da menüye giderse sepetin ne olması gerektiği tasarım olarak kararlaştırılmadı. Şu an `startNewGame` temizliyor, menüye gidip DEVAM ET ile dönmek temizlemiyor — bilinçli bir karar değil, mevcut kodun yan etkisi.
 
 **Sabit %85 oynayan oyuncu hiç tehlikeye girmiyor.** B profili 60/60 çıkıyor ve 30 günün hiçbirinde itibar 25'in altına inmiyor. Kompozisyon eksenleri B′'yi (korelasyonlu kötü seriler) vuruyor ama i.i.d. %85'i vurmuyor: izinli hata gün 30'da bile hasta başına 0,10, yani 36 hastalık günde 3,6 hata hakkı var; %85 doğruluk beklenen 5,4 hataya karşılık geliyor, oyuncu hedefi **kaçırıyor** ama hedefi kaçırmanın cezası yok — sadece +3 itibardan mahrum kalıyor.
 
@@ -648,7 +717,7 @@ Bunlar tekrar denenmesin diye yazıldı. Her biri gerçekten uygulandı ve ölç
 ## 16. Sıradaki İşler
 
 1. **Geliştirme doymasına çözüm** — yeni para gideri ya da daha derin geliştirme ağacı. Açık konuların en somutu; ölçüm zaten hazır (13.6).
-2. **Tezgah yerleşimi** — 5+ farklı ilaç durumunda en soldaki slotun defterin altında kalması. Önce ekran görüntüsüyle konum ölçülmeli (bkz. 15).
+2. **Yeni servis akışını cihazda görmek** — poşet animasyonu, karttan PC'ye uçuş ve PC sepet rozeti yalnız kodla doğrulandı; görünüş gerçek cihazda değerlendirilmeli. Aynı turda SATIŞ ekranının sığması için boot'a bir yerleşim denetimi eklenip eklenmeyeceğine karar verilmeli (bkz. 15).
 3. **Karar bekleyen: hedefe yaptırım.** Eklenecekse önce miss-maliyeti harmanlaması yapılmalı. Bu karar verilmeden sabit %85 oyuncusu tehlikeye girmez.
 4. **Capacitor ile iOS paketleme** — henüz hiç yapılmadı; gerçek cihazda oturum uzunluğu ve dokunma hedefi boyutları ölçülmeli (10 sn/müşteri varsayımı gerçek cihazda doğrulanmadı).
 5. **30 günden sonrası tanımsız.** Kampanya ufku 30 gün varsayımıyla dengelendi (`missRateFloorDay` 30, sahte rampası 25. günde doyuyor). 30. günden sonra hiçbir eksen ilerlemiyor — oyun orada bitiyor mu, döngüye mi giriyor, karar verilmedi.
