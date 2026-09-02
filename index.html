@@ -57,7 +57,15 @@ const CONFIG = {
   repOverflowFactor: 0.5,   // repSoftCap üstündeki kazanç bu katsayıyla eklenir
 
   // --- Sahte reçete inceleme ---
-  fakeChance: 0.42,             // reçetenin sahte olma ihtimali (inceleme mekaniği yeterince devreye girsin)
+  // --- Sahte oranı GÜN NUMARASINA bağlı rampa ---
+  // Sabit 0.42, gün 11'den sonra ilerlemeyen eksenlerden biriydi. Artık gün 1'de
+  // fakeChance, fakeChanceLateDay'de fakeChanceLate; ikisinin arası doğrusal, üstü
+  // fakeChanceMax'ta durur. GECE yolu değişmedi: aynı çarpan (nightFakeRateBoost) ve
+  // aynı tavan (nightFakeRateCap), sadece çarptığı taban artık güne duyarlı.
+  fakeChance: 0.42,             // GÜN 1 sahte olma ihtimali (inceleme mekaniği devreye girsin)
+  fakeChanceLate: 0.55,         // fakeChanceLateDay'de ulaşılan oran
+  fakeChanceLateDay: 25,        // rampanın fakeChanceLate'e vardığı gün
+  fakeChanceMax: 0.60,          // rampa bu oranı ASLA aşmaz (gündüzde de ≥ %40 gerçek)
   // NOT (ölçüm geçmişi): repGainCorrect / fakeCatchRepGain / angryRepLoss bir ara
   // %85 doğrulukla oynayan oyuncunun ölmesini telafi etmek için yükseltilmişti; sonra
   // TABAN değerlere geri alındı. Sebep: o ölümün kaynağı itibar ekonomisi değil, geç
@@ -70,7 +78,16 @@ const CONFIG = {
   fakeCatchBonus: 20,           // sahteyi yakalayınca küçük para bonusu (₺)
   wrongRejectRepLoss: 5,        // gerçeği yanlışlıkla reddedince itibar cezası (PARA CEZASI YOK — sadece satış kaybı)
 
-  prescriptionChance: 0.5,  // %50 reçeteli, %50 semptomlu
+  // --- Hasta karışımı + VİTRİN ---
+  // Vitrin ARTIK MÜŞTERİ SAYISI EKLEMEZ. Gün büyüklüğü maxPatientsPerDay'de tavanlandığı
+  // için "+2/+4 müşteri" 10. günden sonra hiçbir şey yapmıyordu (ölçüldü: Lv1 ile Lv3
+  // aynı günü üretiyordu). Yeni işlevi müşteri SAYISINI değil DEĞERİNİ artırmak:
+  // seviye başına reçeteli hasta payı yükselir. Reçeteli hasta semptomludan ~2,8 kat
+  // değerli olduğu için bu R'yi büyütür; hedef R'den türediği için hedef kendiliğinden
+  // ölçeklenir (hedef formülüne DOKUNULMADI).
+  prescriptionChance: 0.5,     // Vitrin Lv1: %50 reçeteli, %50 semptomlu
+  vitrinRxBonus: 0.05,         // Vitrin seviyesi başına reçeteli payına eklenen oran
+  vitrinSymptomFloor: 0.40,    // semptomlu hasta payı BUNUN ALTINA İNEMEZ (karışım tek tipe dönmesin)
   minPrescriptionItems: 1,
   maxPrescriptionItems: 3,
 
@@ -101,9 +118,14 @@ const CONFIG = {
   //   izinliHata(gün) = N × missRate(gün)
   //   hedef(gün)      = floor10( clamp( R − izinliHata × missCost, R×0.40, R×0.90 ) )
   // R/C/missCost o güne özel gerçek rakamlar (avgPrice/avgCost tahmini değil).
+  // Daralma hızı ARTIK ELLE VERİLMEZ: tabana kaç günde inileceğinden türetilir.
+  // Eski missRateDecay 0.015 idi => taban 11. GÜNDE doluyordu ve kalan 20 gün boyunca
+  // hata toleransı hiç değişmiyordu (ölçüldü: 11–30 arası düz plato). Artık taban
+  // missRateFloorDay'de dolar, yani daralma tüm koşuya yayılır.
+  // NOT: base/floor değiştirilirse hız kendiliğinden yeniden türetilir — tek kaynak burası.
   missRateBase: 0.25,       // gün 1'de hasta başına izinli hata oranı
-  missRateDecay: 0.015,     // her gün orandan düşen miktar
   missRateFloor: 0.10,      // oran bunun altına inmez
+  missRateFloorDay: 30,     // tabana bu günde ulaşılır (daralma bu güne kadar sürer)
   goalRatioClamp: [0.40, 0.90],  // hedef/R oranı güvenlik bandı
   daySeedBase: 20260617,    // gün üretimi seed TABANI (koşu tohumuyla harmanlanır)
 
@@ -121,7 +143,11 @@ const CONFIG = {
   concentrationMaxPasses: 25,   // yeniden üretme turu üst sınırı (sonsuz döngü olmasın)
 
   // --- Nöbetçi eczane (aynı günün İKİNCİ bölümü; ayrı gün tipi değil) ---
-  nightDutyEvery: 4,           // her 4. gün nöbetçi (gün 4, 8, 12…)
+  // Nöbet sıklığı da geç oyunda artar: erken oyunda her nightDutyEvery günde bir,
+  // nightDutyLateFromDay'den itibaren her nightDutyEveryLate günde bir.
+  nightDutyEvery: 4,           // gün < nightDutyLateFromDay: her 4. gün (4, 8, 12)
+  nightDutyEveryLate: 3,       // gün ≥ nightDutyLateFromDay: her 3. gün (18, 21, 24, 27, 30)
+  nightDutyLateFromDay: 16,    // sıklığın arttığı gün
   nightPatientRatio: 0.4,      // gündüz müşteri sayısının oranı; taban 3
   nightPatientMin: 3,          // gece en az bu kadar hasta
   nightFakeRateBoost: 1.8,     // gece sahte reçete oranı çarpanı
@@ -302,8 +328,8 @@ const UPGRADES = [
   },
   {
     id: "vitrin", name: "Vitrin", emoji: "🪟", maxLevel: 3, costK: [15, 30],
-    desc: "Günlük müşteri sayısı",
-    valueAt: lv => (lv === 1 ? "normal" : "+" + ((lv - 1) * 2) + " müşteri")
+    desc: "Reçeteli müşteri oranı — reçete daha değerli",
+    valueAt: lv => "%" + Math.round(vitrinRxShare(lv) * 100) + " reçeteli"
   },
   {
     id: "bekleme", name: "Bekleme Alanı", emoji: "🪑", maxLevel: 3, costK: [15, 30],
@@ -335,7 +361,26 @@ function upgradeMaxed(id) { return upgradeLevel(id) >= UPGRADE_BY_ID[id].maxLeve
 // --- Efektif değerler: kod ARTIK CONFIG.maxQueue/maxStock/basePatience'ı doğrudan okumaz ---
 function effMaxQueue()    { return CONFIG.maxQueue + (upgradeLevel("tezgah") - 1); }        // 3 / 4 / 5
 function effMaxStock()    { return CONFIG.maxStock + (upgradeLevel("depo") - 1) * 15; }     // 30 / 45 / 60
-function effExtraPatients() { return (upgradeLevel("vitrin") - 1) * 2; }                    // 0 / +2 / +4
+// VİTRİN: müşteri sayısı değil, reçeteli hasta PAYI. Semptomlu payı vitrinSymptomFloor'un
+// altına inemez => Lv3'te bile karışım tek tipe dönüşmez.
+function vitrinRxShare(lv) {
+  const raw = CONFIG.prescriptionChance + (lv - 1) * CONFIG.vitrinRxBonus;
+  return clamp(raw, 0, 1 - CONFIG.vitrinSymptomFloor);                                      // 0.50 / 0.55 / 0.60
+}
+function effPrescriptionChance() { return vitrinRxShare(upgradeLevel("vitrin")); }
+
+// Vitrin'in getirdiği fazladan reçeteliler GERÇEK olmalı — yoksa geliştirme ZARAR ettirir.
+// ÖLÇÜLDÜ: geçerli bir reçete semptomlu hastanın 1,44 katı değerinde, ama reçetelilerin
+// ~%51'i sahte (rev 0) olduğu için bir reçeteli hastanın BEKLENEN değeri semptomlunun
+// yalnızca 0,70 katı. Payı ham hâliyle yükseltmek R'yi Lv3'te %4,2 DÜŞÜRÜYORDU.
+// Çözüm: reçete başına sahte ihtimali, payın büyüdüğü oranda seyreltilir. Böylece
+// GÜN BAŞINA DÜŞEN SAHTE SAYISI değişmez (inceleme mekaniği ve sahte oranı ekseni
+// aynen korunur), Vitrin'in eklediği hastalar ise gerçek reçete olur.
+//   sahte/hasta = pay × sahteŞansı × (taban/pay) = taban × sahteŞansı  → paydan bağımsız
+function vitrinFakeDilution() {
+  const share = effPrescriptionChance();
+  return share > 0 ? Math.min(1, CONFIG.prescriptionChance / share) : 1;                    // 1.00 / 0.91 / 0.83
+}
 function effPatience()    { return CONFIG.basePatience * (1 + (upgradeLevel("bekleme") - 1) * 0.2); }
 // Terminal Lv2'de açılır: PC'de MEDULA SİSTEMİ sekmesinin kilidi kalkar ve
 // Medula hastaları gelmeye başlar. Reçete sahteliğiyle HİÇBİR ilgisi yoktur.
@@ -998,15 +1043,15 @@ function lerp(a, b, t) { return a + (b - a) * t; }
 function activePatient() { return game.queue.length ? game.queue[0] : null; }
 
 // o günün müşteri limiti (gün bağımsız hesap; hedef fonksiyonu da bunu kullanır)
-// Vitrin bonusu ham değere eklenir, SONRA tavan uygulanır => bonus tavanı aşamaz.
+// Geliştirmelerden BAĞIMSIZDIR: Vitrin artık sayıyı değil karışımı etkiliyor.
 // Hedef formülü, konsantrasyon tavanı ve nöbet oranları hep bu fonksiyonun ürettiği
 // GERÇEK listeden hesaplandığı için tavana kendiliğinden uyum sağlar.
 function patientLimitFor(day) {
-  const raw = CONFIG.patientsPerDayBase + (day - 1) * CONFIG.patientsPerDayStep + effExtraPatients();
+  const raw = CONFIG.patientsPerDayBase + (day - 1) * CONFIG.patientsPerDayStep;
   return Math.min(CONFIG.maxPatientsPerDay, raw);
 }
 // OYNANAN gün, üretildiği andaki listeye SABİTLENİR — gün ortasında vitrin yükseltilirse
-// o günün müşteri sayısı ve hedefi değişmez, etki bir sonraki günden başlar.
+// o günün hasta karışımı ve hedefi değişmez, etki bir sonraki günden başlar.
 function patientsForDay() {
   if (game.daySchedule && game.daySchedule.day === game.dayNumber) return game.daySchedule.N;
   return patientLimitFor(game.dayNumber);
@@ -1016,24 +1061,41 @@ function patientsForDay() {
 // Nöbet, günün ikinci bölümüdür: aynı gün programına night:true hastalar eklenir.
 // Böylece R, C ve hedef mevcut formülle kendiliğinden doğru çıkar (formüle dokunulmadı).
 const _forcedNightDays = {};   // yalnız cheats.forceNight() doldurur; normal oyunda boş
+// Nöbet sıklığı geç oyunda artar (bkz. CONFIG.nightDutyEveryLate).
+function nightDutyEveryFor(day) {
+  return day >= CONFIG.nightDutyLateFromDay ? CONFIG.nightDutyEveryLate : CONFIG.nightDutyEvery;
+}
 function isNightDutyDay(day) {
   if (_forcedNightDays[day]) return true;
-  return CONFIG.nightDutyEvery > 0 && day % CONFIG.nightDutyEvery === 0;
+  const every = nightDutyEveryFor(day);
+  return every > 0 && day % every === 0;
 }
 function nightPatientsFor(day) {
   if (!isNightDutyDay(day)) return 0;
   return Math.max(CONFIG.nightPatientMin, Math.round(patientLimitFor(day) * CONFIG.nightPatientRatio));
 }
-// gece sahte reçete ihtimali — çarpan uygulanır ama tavanı aşamaz
-function nightFakeChance() {
-  return Math.min(CONFIG.nightFakeRateCap, CONFIG.fakeChance * CONFIG.nightFakeRateBoost);
+// GÜNDÜZ sahte reçete ihtimali — gün numarasına bağlı rampa (bkz. CONFIG.fakeChanceLate).
+// Gün 1'de CONFIG.fakeChance, fakeChanceLateDay'de fakeChanceLate, üstü fakeChanceMax'ta durur.
+function fakeChanceFor(day) {
+  const d0 = Math.max(1, CONFIG.fakeChanceLateDay - 1);
+  const step = (CONFIG.fakeChanceLate - CONFIG.fakeChance) / d0;
+  return Math.min(CONFIG.fakeChanceMax, CONFIG.fakeChance + (day - 1) * step);
+}
+// gece sahte reçete ihtimali — ÇARPAN VE TAVAN DEĞİŞMEDİ, yalnız çarptığı taban güne duyarlı
+function nightFakeChance(day) {
+  return Math.min(CONFIG.nightFakeRateCap, fakeChanceFor(day) * CONFIG.nightFakeRateBoost);
 }
 // günün TOPLAM hasta sayısı (gündüz + gece)
 function totalPatientsFor(day) { return patientLimitFor(day) + nightPatientsFor(day); }
 
-// hasta başına izinli hata oranı — gün ilerledikçe daralır, floor'un altına inmez
+// hasta başına izinli hata oranı — gün ilerledikçe daralır, floor'un altına inmez.
+// Daralma hızı CONFIG'te elle verilmez: tabana missRateFloorDay'de varacak şekilde türetilir.
+function missRateDecayPerDay() {
+  const d0 = Math.max(1, CONFIG.missRateFloorDay - 1);
+  return (CONFIG.missRateBase - CONFIG.missRateFloor) / d0;
+}
 function missRateFor(day) {
-  return Math.max(CONFIG.missRateFloor, CONFIG.missRateBase - (day - 1) * CONFIG.missRateDecay);
+  return Math.max(CONFIG.missRateFloor, CONFIG.missRateBase - (day - 1) * missRateDecayPerDay());
 }
 // o gün kaç yanlış servise tolerans var — müşteri sayısıyla ÖLÇEKLENİR
 function allowedMissesFor(day) {
@@ -1249,7 +1311,7 @@ function buildDaySchedule(day) {
 
 // gün listesi cache'i — hedef sorulunca üretilir, oynanınca AYNI liste kullanılır (iki kez üretilmez)
 const _dayScheduleCache = {};
-// Vitrin seviyesi patientLimitFor'u değiştirir => önden üretilmiş günler ve hedefleri
+// Vitrin seviyesi hasta karışımını değiştirir => önden üretilmiş günler ve hedefleri
 // geçersizleşir. Oynanan gün game.daySchedule snapshot'ından okunduğu için etkilenmez.
 function invalidateDaySchedules() {
   for (const k in _dayScheduleCache) delete _dayScheduleCache[k];
@@ -1277,6 +1339,10 @@ const MONTHS_TR = ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Ey
 // Gün listesi önden üretilirken (buildDaySchedule) reçetelere O GÜNÜN tarihi basılmalı,
 // oynanan günün değil. Üretim sırasında bu override doldurulur.
 let _dateDayOverride = 0;
+// ÜRETİLEN gün: buildDaySchedule içindeysek o gün, değilse oynanan gün. Sahte oranı gibi
+// güne bağlı üretim parametreleri bunu okur — böylece önden üretilen her gün KENDİ
+// gününün oranlarıyla kurulur, oynanan günün oranlarıyla değil.
+function genDay() { return _dateDayOverride || game.dayNumber; }
 function gameDate(offsetDays) {
   const d = new Date(2026, 5, 17);
   d.setDate(d.getDate() + ((_dateDayOverride || game.dayNumber) - 1) + (offsetDays || 0));
@@ -1523,7 +1589,9 @@ function makePatient(opts) {
   opts = opts || {};
   const night = !!opts.night;
   const avatarDef = pick(PATIENT_AVATARS);
-  const isPrescription = opts.forcePrescription ? true : (rng() < CONFIG.prescriptionChance);
+  const day = genDay();
+  // Reçeteli payı VİTRİN seviyesiyle yükselir (semptomlu payı vitrinSymptomFloor'da korunur)
+  const isPrescription = opts.forcePrescription ? true : (rng() < effPrescriptionChance());
 
   let request;
   if (isPrescription) {
@@ -1533,7 +1601,8 @@ function makePatient(opts) {
       (medulaUnlocked() && opts.forceFake === undefined && rng() < CONFIG.medulaPatientRatio);
     if (medula) request = makeMedulaRequest();
     // gece: sahte reçete girişimi artar (tavanla sınırlı)
-    else request = makePrescription(opts.forceFake, night ? nightFakeChance() : CONFIG.fakeChance);
+    else request = makePrescription(opts.forceFake,
+      (night ? nightFakeChance(day) : fakeChanceFor(day)) * vitrinFakeDilution());
   } else {
     request = makeSymptomRequest();
   }
@@ -1753,8 +1822,9 @@ function buyUpgrade(id) {
   if (game.money < cost) return false;              // yetersiz bakiye
   game.money -= cost;
   game.upgrades[id] = cur + 1;
-  // Vitrin gün büyüklüğünü, Medula ise hasta tiplerini değiştirir => önden üretilmiş
-  // günler geçersizleşir. Oynanan gün snapshot'tan okunduğu için etkilenmez.
+  // Vitrin hasta KARIŞIMINI (reçeteli payı), Medula ise reçeteli hastaların tipini
+  // değiştirir => önden üretilmiş günler geçersizleşir. Oynanan gün snapshot'tan
+  // okunduğu için etkilenmez.
   if (id === "vitrin" || id === "medula") invalidateDaySchedules();
   return true;
 }
@@ -4679,6 +4749,7 @@ window.cheats = {
     console.log("kasa: " + formatMoney(game.money) +
       " | efektif: kuyruk=" + effMaxQueue() + " stokTavan=" + effMaxStock() +
       " günMüşteri(gün " + game.dayNumber + ")=" + patientLimitFor(game.dayNumber) +
+      " reçeteliPay=%" + Math.round(effPrescriptionChance() * 100) +
       " sabır=" + effPatience().toFixed(1) + "sn medula=" + (medulaUnlocked() ? "açık" : "kilitli"));
     return out;
   },
@@ -4935,7 +5006,7 @@ function verifyGoalBalance(verbose, days) {
   return allOk;
 }
 // Belirli geliştirme seviyeleri altında fn'i çalıştır (gün cache'i her iki yönde de
-// geçersiz kılınır — vitrin seviyesi gün üretimini değiştirir).
+// geçersiz kılınır — vitrin seviyesi hasta karışımını değiştirir).
 function withUpgradeLevels(levels, fn) {
   const prev = game.upgrades;
   const prevSch = game.daySchedule;
@@ -5135,7 +5206,7 @@ function selfTestPatientsInner(days) {
     let prevCost = -1;
     for (let lv = 1; lv <= u.maxLevel; lv++) {
       game.upgrades = allLevels(x => x.id === u.id ? lv : 1);
-      const vals = { tezgah: effMaxQueue(), depo: effMaxStock(), vitrin: patientLimitFor(1), bekleme: effPatience(), medula: medulaUnlocked() ? 1 : 0 };
+      const vals = { tezgah: effMaxQueue(), depo: effMaxStock(), vitrin: effPrescriptionChance(), bekleme: effPatience(), medula: medulaUnlocked() ? 1 : 0 };
       for (const k in vals) {
         const v = vals[k];
         if (typeof v !== "number" || !isFinite(v) || v < 0)
@@ -5163,33 +5234,86 @@ function selfTestPatientsInner(days) {
   game.upgrades = prevUp; game.money = prevMoney;
   invalidateDaySchedules();
 
-  // 0c2) GÜN BÜYÜKLÜĞÜ TAVANI — sınırın gerçekten bağlayıcı olduğunu ve VİTRİN dahil
-  // hiçbir yolun sınırı aşamadığını doğrula. (Vitrin sınıra takıldığında etkisiz kalır;
-  // bu BİLİNEN ve kabul edilmiş bir sonuçtur — Vitrin'in yeni işlevi ayrıca ele alınacak.)
+  // 0c2) GÜN BÜYÜKLÜĞÜ TAVANI + GEÇ OYUN KOMPOZİSYON EĞRİSİ
+  // Ana kural: 30 günün TAMAMI boyunca en az bir eksen ilerlemeli. Tavan müşteri
+  // sayısını dondurduğu için ilerlemeyi kompozisyon eksenleri taşır (sahte oranı,
+  // izinli hata, nöbet sıklığı). Bu blok o eksenlerin gerçekten ilerlediğini denetler.
   {
     const cap = CONFIG.maxPatientsPerDay;
+    const LAST = 30;                       // kampanya uzunluğu (ölçüm ve hedef davranış bu ufukta)
     if (!(cap >= CONFIG.patientsPerDayBase))
       warn.push("maxPatientsPerDay (" + cap + ") gün 1 müşteri sayısının (" + CONFIG.patientsPerDayBase + ") altında");
+
+    // (i) tavan bağlayıcı, aşılamıyor, dizi hiç azalmıyor
+    let capHitDay = null, prevN = 0;
+    for (let d = 1; d <= 40; d++) {
+      const n = patientLimitFor(d);
+      if (n > cap) warn.push("gün " + d + ": müşteri sayısı tavanı aştı (" + n + " > " + cap + ")");
+      if (n < prevN) warn.push("gün " + d + ": müşteri sayısı bir önceki günden AZALDI (" + prevN + " → " + n + ")");
+      if (n >= cap && capHitDay === null) capHitDay = d;
+      prevN = n;
+    }
+    if (capHitDay === null) warn.push("maxPatientsPerDay (" + cap + ") 40 gün içinde hiç devreye girmiyor — tavan işlevsiz");
+
+    // (ii) VİTRİN müşteri sayısına DOKUNMAMALI (yeni işlevi karışım) ve payı floor'u delmemeli
     const prevUp2 = game.upgrades;
-    let capHitDay = null;
+    const nAtLv = [];
     for (const lv of [1, UPGRADE_BY_ID.vitrin.maxLevel]) {
       game.upgrades = allLevels(x => x.id === "vitrin" ? lv : 1);
       invalidateDaySchedules();
-      let prev = 0;
-      for (let d = 1; d <= 40; d++) {
-        const n = patientLimitFor(d);
-        if (n > cap) warn.push("gün " + d + " (vitrin Lv" + lv + "): müşteri sayısı tavanı aştı (" + n + " > " + cap + ")");
-        if (n < prev) warn.push("gün " + d + " (vitrin Lv" + lv + "): müşteri sayısı bir önceki günden AZALDI (" + prev + " → " + n + ")");
-        if (lv === 1 && n >= cap && capHitDay === null) capHitDay = d;
-        prev = n;
-      }
+      nAtLv.push([5, 15, 30].map(d => patientLimitFor(d)).join(","));
     }
     game.upgrades = prevUp2; invalidateDaySchedules();
-    // Tavan 30 günlük kampanya içinde hiç devreye girmiyorsa ayar anlamsızdır.
-    if (capHitDay === null) warn.push("maxPatientsPerDay (" + cap + ") 40 gün içinde hiç devreye girmiyor — tavan işlevsiz");
-    // Tavan sonrası zorluk KOMPOZİSYONDAN gelmeli: missRate hâlâ daralıyor olmalı.
-    if (capHitDay !== null && !(missRateFor(capHitDay) > CONFIG.missRateFloor))
-      warn.push("tavan gün " + capHitDay + "'de devreye giriyor ama missRate zaten tabanda — o günden sonra zorluk hiç artmıyor");
+    if (nAtLv[0] !== nAtLv[1])
+      warn.push("Vitrin hâlâ müşteri SAYISINI değiştiriyor (Lv1: " + nAtLv[0] + " / Lv3: " + nAtLv[1] + ")");
+    let prevShare = -1;
+    for (let lv = 1; lv <= UPGRADE_BY_ID.vitrin.maxLevel; lv++) {
+      const sh = vitrinRxShare(lv);
+      if (1 - sh < CONFIG.vitrinSymptomFloor - 1e-9)
+        warn.push("Vitrin Lv" + lv + ": semptomlu payı tabanın altına indi (%" + Math.round((1 - sh) * 100) + " < %" + Math.round(CONFIG.vitrinSymptomFloor * 100) + ")");
+      if (sh <= prevShare)
+        warn.push("Vitrin Lv" + lv + ": reçeteli payı bir önceki seviyeden yüksek değil — geliştirme ölü");
+      prevShare = sh;
+    }
+
+    // (iii) İZİNLİ HATA ekseni kampanya boyunca daralmalı — tabana LAST'tan önce oturmamalı
+    if (!(missRateFor(LAST - 1) > CONFIG.missRateFloor))
+      warn.push("missRate " + (LAST - 1) + ". günden önce tabana oturuyor (missRateFloorDay=" +
+        CONFIG.missRateFloorDay + ") — geç oyunda hata toleransı ekseni ilerlemiyor");
+    if (!(missRateFor(1) > missRateFor(LAST)))
+      warn.push("missRate hiç daralmıyor");
+
+    // (iv) SAHTE ORANI ekseni artmalı, tavanı aşmamalı, geceyi bozmamalı
+    if (!(fakeChanceFor(LAST) > fakeChanceFor(1)))
+      warn.push("sahte oranı gün boyunca artmıyor — kompozisyon ekseni ilerlemiyor");
+    for (let d = 1; d <= LAST; d++) {
+      if (fakeChanceFor(d) > CONFIG.fakeChanceMax + 1e-9)
+        warn.push("gün " + d + ": sahte oranı tavanı aştı (" + fakeChanceFor(d).toFixed(3) + " > " + CONFIG.fakeChanceMax + ")");
+      if (d > 1 && fakeChanceFor(d) < fakeChanceFor(d - 1) - 1e-9)
+        warn.push("gün " + d + ": sahte oranı bir önceki günden AZALDI");
+      if (nightFakeChance(d) > CONFIG.nightFakeRateCap + 1e-9)
+        warn.push("gün " + d + ": gece sahte oranı nightFakeRateCap'i aştı");
+      if (nightFakeChance(d) < fakeChanceFor(d) - 1e-9)
+        warn.push("gün " + d + ": gece sahte oranı gündüzün altına düştü");
+    }
+
+    // (v) NÖBET SIKLIĞI geç oyunda artmalı (aynı uzunlukta pencerede daha çok nöbet)
+    const lateFrom = CONFIG.nightDutyLateFromDay;
+    let early = 0, late = 0;
+    for (let d = 1; d < lateFrom; d++) if (isNightDutyDay(d)) early++;
+    for (let d = lateFrom; d <= LAST; d++) if (isNightDutyDay(d)) late++;
+    const earlyRate = early / Math.max(1, lateFrom - 1), lateRate = late / Math.max(1, LAST - lateFrom + 1);
+    if (!(lateRate > earlyRate))
+      warn.push("nöbet sıklığı geç oyunda artmıyor (erken %" + Math.round(earlyRate * 100) +
+        " / geç %" + Math.round(lateRate * 100) + ")");
+
+    // (vi) NİHAİ KURAL: tavan bağlandıktan SONRAKİ her gün için en az bir eksen hâlâ hareketli mi
+    for (let d = Math.max(2, capHitDay || 2); d <= LAST; d++) {
+      const moved = missRateFor(d) < missRateFor(d - 1) - 1e-9 ||
+                    fakeChanceFor(d) > fakeChanceFor(d - 1) + 1e-9 ||
+                    nightDutyEveryFor(d) < nightDutyEveryFor(d - 1);
+      if (!moved) warn.push("gün " + d + ": hiçbir zorluk ekseni ilerlemiyor (düz plato)");
+    }
   }
 
   // 0d2) REÇETE GARANTİLERİ — her günde ≥1 gerçek reçete; 2. günden itibaren ≥1 sahte
