@@ -1,5 +1,5 @@
 # ECZACI — PROJE DURUM BELGESİ
-Son güncelleme: 2026-09-03 (servis akışı bölümleri güncellendi, index.html **5.650 satır**)
+Son güncelleme: 2026-09-10 (kariyer modeli + fiyat güncellemeleri + dilenci turları işlendi, index.html **7.335 satır**)
 
 Bu belge, projeyi hiç bilmeyen bir asistanın okuyup kaldığı yerden devam edebilmesi için yazılmış bir devir notudur. Buradaki her sayı koddan ya da ölçüm çıktısından doğrulanmıştır; doğrulanamayan hiçbir iddia yazılmadı.
 
@@ -11,12 +11,14 @@ Bu belge, projeyi hiç bilmeyen bir asistanın okuyup kaldığı yerden devam ed
 
 Çekirdek döngü: hasta gelir → reçete uzatır, semptom söyler ya da e-reçete kodu verir → reçeteliyse ONAYLA/REDDET incelemesi → raftan doğru ilaç(lar) seçilir → SERVİS ET → para + itibar.
 
-**Tek dosya**: `index.html` — 5.523 satır, HTML5 Canvas + vanilla JS, harici kütüphane yok, tüm CSS/JS inline. Yanında yalnız `assets/` klasörü (52 PNG) var.
+**Üst çerçeve KARİYER**: 30 günlük sezonlar, her yeni sezonda büyüyen bir ruhsat yenileme bedeli, ödeyemediğin gün kariyer biter (bkz. 2.1–2.5).
+
+**Tek dosya**: `index.html` — 7.335 satır, HTML5 Canvas + vanilla JS, harici kütüphane yok, tüm CSS/JS inline. Yanında yalnız `assets/` klasörü (53 PNG) var.
 
 - 9:16 dikey mobil layout, `devicePixelRatio` retina desteği
 - Capacitor ile iOS paketleme planlı (henüz yapılmadı)
 - GitHub: `github.com/keremsakiz/eczaci`
-- State machine: `MENU / PLAYING / DAYEND / GAMEOVER`
+- State machine: `MENU / PLAYING / DAYEND / SEASONEND / CAREEREND` (eski `GAMEOVER` kaldırıldı — yerini bu iki bitiş ekranı aldı)
 - 60 FPS `requestAnimationFrame` döngüsü; `update(dt)` ve `render()` ayrı
 - Tüm sayısal ayarlar dosyanın başında tek bir `CONFIG` objesinde
 - Rastgelelik tek bir değiştirilebilir kaynaktan akar: `rng()` → `_rngSource` (varsayılan `Math.random`). `withSeed(seed, fn)` bu kaynağı geçici olarak mulberry32 ile değiştirir; `rand()` ve `pick()` zaten `rng()` kullandığı için üretim kodu değişmeden deterministik olur.
@@ -25,6 +27,68 @@ Bu belge, projeyi hiç bilmeyen bir asistanın okuyup kaldığı yerden devam ed
 ---
 
 ## 2. Çekirdek Döngü
+
+### 2.1 Kariyer ve sezon yapısı
+Üç iç içe ölçek var: **gün** (müşteri limiti) → **sezon** (`seasonDays` = 30 gün) → **kariyer** (birden çok sezon).
+
+Sezon sabit uzunlukta olmak zorundaydı: gün sayısı serbest bırakılırsa bir skor tablosu "en iyi oynayan" değil **"en çok oynayan"** sıralaması olur.
+
+**Sezonlar arası DEVREDENLER** — bunlara yalnız `startNewCareer()` dokunur, `beginSeason()` ve `startNextDay()` hiç dokunmaz; devretmelerinin tek sebebi bu:
+
+| Devreder | Devretmez |
+|---|---|
+| kasa (`money`) | itibar → her sezon `startReputation` (50) |
+| geliştirme seviyeleri (`upgrades`) | gün sayacı → her sezon 1. günden |
+| stok (`stock`) | sezon istatistikleri (`seasonStats`) |
+| SGK alacak defteri (`receivables`) | sezon tohumu (her sezon kendi tohumu) |
+| dilenci borç defteri (`beggarReturns`) | Medula kod kayıtları (`medulaRevealed`) |
+| Medula defter sayaçları (`medulaBooked` / `medulaCollected`) | |
+
+**İtibarın sıfırlanması bilinçli bir karardır**, kodda da not düşülü: sezonu bitiren şey itibar çöküşü *olabilmeli* (o yüzden sezon içinde 0'a inmek kariyeri bitirir), ama çökmemiş bir sezonun yorgun itibarı bir sonrakine **ceza olarak taşınmamalı**. Taşınsaydı kötü bir sezon bir sonrakini de sakatlar ve kariyer tek bir kötü günden geri dönülemez hâle gelirdi. Devreden şey **para ve eczane**; itibar her sezon yeniden kazanılır.
+
+Medula defter sayaçlarının kariyer ölçeğinde tutulması bir zorunluluk: alacaklar sezonlar arası devrettiği için `verifyMedulaLedger()`'ın "yazılan = yatan + bekleyen" denkliği ancak kariyer boyunca toplanınca tutar (bkz. 17).
+
+### 2.2 Ruhsat yenileme bedeli
+Her yeni sezon bir açılış bedeli ödenir ve bedel sezon numarasıyla **geometrik** büyür:
+
+```
+seasonFeeFor(n) = n ≤ 1 ? 0
+                : round( seasonFeeBase × seasonFeeGrowth^(n−2) , seasonFeeRound )
+```
+
+`seasonFeeBase` fiyat tablosundan türer (`avgPrice × seasonFeeBaseK`), sabit sayı gömülü değil. Şu anki değerler: **`seasonFeeBaseK` 88 → `seasonFeeBase` 8.000₺**, **`seasonFeeGrowth` 1,70**, `seasonFeeRound` 100.
+
+| Sezon | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|---|---|---|
+| Bedel | **0₺** | 8.000₺ | 13.600₺ | 23.100₺ | 39.300₺ | 66.800₺ | 113.600₺ | 193.100₺ |
+
+**1. sezon bedelsizdir** (kariyerin açılışı). Bedel yeni sezon **başlarken** `beginSeason()` içinde kasadan düşer; ödenebilirlik kontrolü orada değil **tek kapıda** (`tryStartNextSeason`) yapılır — o fonksiyon çağrıldığında bedelin karşılandığı garantidir, böylece yarım state oluşamaz.
+
+Bedel ne için ödendiği **dört yerde** yazılı: sezon sonu kartındaki ayrı şerit ("Sezon 4 ruhsat yenileme bedeli · 23.100₺"), butonun kendisi ("YENİ SEZON (−23.100₺)"), sezon başındaki bilgi şeridi ("🧾 Ruhsat yenileme (Sezon 4): −23.100₺") ve kariyer sonu kartı.
+
+**Neden bu değerler** (kalibrasyon, bkz. 14.3): `seasonFeeGrowth` A profilinin ömrünü hızlı belirliyor — 1,3'te bedel 12 sezonda bile yakalamıyor, 1,6'da A 8 sezon, 1,7'de 7, 1,9'da 6. `seasonFeeBase` mutlak seviyeyi kaydırıyor: 6.000 → A 7 / B 4, 8.000 → A 7 / B 3. Aranan davranış (A 6–10, B 2–4, C 1'i bile zor) yalnız **8.000 / 1,70** ile birden tutuyor.
+
+### 2.3 İki bitiş, iki ekran
+| Ekran | Koşul | Sonra ne olur |
+|---|---|---|
+| **SEZON SONU** (`SEASONEND`) | 30 gün doldu | Kariyer sürüyor. Kart sezon özetini + sonraki sezonun bedelini gösterir. Bedel karşılanıyorsa "YENİ SEZON (−X₺)"; karşılanmıyorsa buton **pasif** ve yanına "KARİYERİ BİTİR" pill'i çıkar. |
+| **KARİYER SONU** (`CAREEREND`) | (a) sezon içinde itibar 0'a indi → `reason: "reputation"`  ·  (b) ruhsat bedeli ödenemedi → `reason: "fee"` | Kariyer kapandı. Yalnız YENİ KARİYER · ANA MENÜ. |
+
+**İtibar çöküşü artık sezonu değil kariyeri bitirir.** `finishSeason("reputation")` sezonu kapatıp doğrudan `finishCareer`'a devreder. Bunun sonucu: SEASONEND ekranına **yalnız "completed" yolundan** gelinir, o yüzden o kartın erken-bitiş varyantı koddan kaldırıldı (ölü dal olacaktı). Kırmızımsı bitiş dili artık kariyer sonu kartında yaşıyor.
+
+Son gün bitince DAYEND kartı **hiç gösterilmez**, doğrudan sezon kartı gelir — "Sonraki Gün →" butonu olmayan bir günün kapısı olmamalı. `startNextDay` başında ikinci bir kapı daha var, cheat ve uç yollardan 31. günün başlamasını engelliyor.
+
+### 2.4 Kariyer skoru = ulaşılan en yüksek kasa
+`careerResult.score` = **peak kasa** (`career.peakMoney`), o anki kasa değil. Sebep: kariyer zaten parasızlıktan biter, yani bitiş anındaki kasa neredeyse sıfırdır ve beceriyi hiç ölçmez. Peak her gün sonunda (`endDay`) ve sezon kapanışında `updateCareerPeak()` ile güncellenir; monoton arttığı için her yerden çağrılması güvenlidir.
+
+**"En iyi sezon" o sezonun KAZANCINA (`earned`) göre seçilir, bitiş kasasına göre değil.** Kasa sezonlar arası devrettiği için en yüksek bitiş kasası her zaman **son** sezon olurdu ve sezonların kendi performansını hiç ölçmezdi.
+
+İki leaderboard nesnesi var, ikisi de JSON-serileşir ve **hiçbir yere gönderilmez** (sonraki tur): `seasonResult` (28 alan, `buildSeasonResult`) ve `careerResult` (26 alan, `buildCareerResult`). `version` alanı şema değişirse ayırt etmek için.
+
+### 2.5 Her sezonun kendi tohumu
+`game.runSeed = seasonSeedFor(career.seed, n)`. Tek tohum kullanılsaydı 2. sezon 1. sezonun **aynı 30 gününü** oynatırdı. Bu türetmeyle kariyer bir bütün olarak tek tohumdan tekrarlanabilir kalır ama sezonlar birbirini tekrar etmez. `careerResult.careerSeed` kariyerin tamamını yeniden üretmeye yeter.
+
+---
 
 **Gün = süre değil, müşteri limiti.** Gün, o günün listesindeki hastalar bitince kapanır. Takvim gün numarasından ilerler (17 Haziran 2026 = Gün 1).
 
@@ -63,6 +127,8 @@ Semptomlu hastalar tek ürün istemez: **1–3 kalem**, ölçülen dağılım **
 ---
 
 ## 3. Gün Üretimi ve Determinizm
+
+> **Kariyerde tohum hiyerarşisi**: `career.seed` → `seasonSeedFor(seed, n)` → `game.runSeed` → `daySeedFor(day)`. Ayrıca aynı `runSeed`'ten türeyen ama **birbirinden bağımsız** üç akış daha var: fiyat turları (`priceSeedFor`), dilenci planı (`beggarSeedFor`) ve dilenci geri dönüşü (`beggarReturnSeedFor`). Hepsi ayrı salt kullanır ki biri diğerinin RNG akışını kaydırmasın — hasta listesi bu üç sistemden hiç etkilenmez.
 
 ### 3.1 Tohumlama
 Her yeni oyun `newRunSeed()` ile rastgele bir **koşu tohumu** üretir (`Math.random ^ Date.now`). Günün tohumu bundan ve gün numarasından türetilir:
@@ -108,12 +174,16 @@ Ekonominin hiçbir temel sayısı elle yazılmaz; hepsi `MEDICINES` dizisinden h
 
 | Değer | Kaynak | Şu anki |
 |---|---|---|
-| avgPrice | 39 ilacın `price` ortalaması | **90,97₺** |
-| avgCost | 39 ilacın `cost` ortalaması | **62,69₺** |
-| ortalama kâr marjı | 1 − cost/price ortalaması | **%28,6** (ilaç bazında %18–41) |
+| avgPrice | 39 ilacın **taban** `price` ortalaması | **90,97₺** |
+| avgCost | 39 ilacın **taban** `cost` ortalaması | **62,69₺** |
+| ortalama kâr marjı (taban) | 1 − cost/price ortalaması | **%28,6** (ilaç bazında %18–41) |
 | startMoney | 100'e yuvarlı (avgCost × 30) | **1.900₺** |
 | fakeApproveMoneyPenalty | round(avgPrice × 2) | **182₺** |
 | geliştirme fiyatları | round100(avgPrice × costK[n]) | **1.400₺ / 2.700₺** |
+| beggarMoneyGive | round(avgPrice × beggarMoneyK 1,0) | **91₺** |
+| seasonFeeBase | round100(avgPrice × seasonFeeBaseK 88) | **8.000₺** |
+
+> **DİKKAT — `MEDICINES`'teki `cost`/`price` artık TABAN fiyattır, güncel fiyat değil.** Oyun içinde geçerli fiyatlar `medPrice(m)` / `medCost(m)` üzerinden okunur (bkz. 4.8). `avgPrice`/`avgCost` taban tablodan **bir kez** türetilir ve asla yeniden hesaplanmaz; bu dondurma bilinçlidir ve şunları sabitler: **startMoney, geliştirme fiyatları (`upgradeCost`), sahte servis cezası, dilenciye verilen para ve ruhsat bedeli**. Fiyatlar dalgalanırken geliştirme fiyatı da oynasa oyuncu hiçbir bütçe planı yapamazdı. Self-test bunu üç ayrı günde (1/15/30) karşılaştırarak denetler ve `MEDICINES`'in runtime'da değiştirilip değiştirilmediğine de bakar.
 
 39 ilaç, 9 kategori, 35 semptom. **Kategori ↔ sekme 1:1** (koddan doğrulandı: her `group` tam bir `category`'ye karşılık geliyor), yani bir sekmedeki her ilaç o sekmenin semptomları için doğru cevaptır.
 
@@ -153,7 +223,7 @@ patientLimitFor(day) = min(maxPatientsPerDay, patientsPerDayBase + (day−1) × 
 
 Tavan **iki ayrı sorunu birden** çözmek için kondu:
 
-1. **İtibar oynaklığı.** İtibar ölçeği sabit (0–150) ama kazanç/kayıp müşteri sayısıyla ölçekleniyor. Tavansız hâlde gün 28'de 87 müşteri vardı; geç oyunda tek kötü gün 30–40 puan sallıyor, yumuşak tavanın verdiği yastık (en fazla 50 puan) bir günde siliniyordu. Ödül/ceza değerlerini oynatmak bunu **çözmedi** (bkz. 14) — sorun değerlerde değil, gün ölçeğinin itibar ölçeğine göre sınırsız büyümesindeydi.
+1. **İtibar oynaklığı.** İtibar ölçeği sabit (0–150) ama kazanç/kayıp müşteri sayısıyla ölçekleniyor. Tavansız hâlde gün 28'de 87 müşteri vardı; geç oyunda tek kötü gün 30–40 puan sallıyor, yumuşak tavanın verdiği yastık (en fazla 50 puan) bir günde siliniyordu. Ödül/ceza değerlerini oynatmak bunu **çözmedi** (bkz. 15) — sorun değerlerde değil, gün ölçeğinin itibar ölçeğine göre sınırsız büyümesindeydi.
 2. **Oturum uzunluğu.** 87 müşterilik gün mobilde ~14,5 dakika kesintisiz dokunma demek.
 
 Tavandan sonra en uzun **kesintisiz blok 26 müşteri ≈ 4,3 dk**. En uzun tam gün (nöbet dahil) 36 müşteri ≈ 6,0 dk, ama araya "NÖBET BAŞLIYOR" kartı girdiği için 4,3 + 1,7 dk olarak bölünür.
@@ -174,15 +244,18 @@ gün fakeChanceLateDay (25) → fakeChanceLate 0.55
 **Gece sahte oranı** — çarpan ve tavan değişmedi, sadece çarptıkları taban güne duyarlı: `nightFakeChance(day) = min(nightFakeRateCap 0.60, fakeChanceFor(day) × nightFakeRateBoost 1.8)`. 0.42 × 1.8 zaten tavanı aştığı için gece **1. günden beri tavanda** (%60).
 
 ### 4.6 Gün 1 / 10 / 20 / 30 (40 runSeed ortalaması, Vitrin Lv1, terminal kilitli)
+**Fiyat güncellemeleri açık** olarak yeniden ölçüldü (2026-09-10):
 
-| Gün | Müşteri (gündüz+gece) | Sahte oranı | İzinli hata | Geçerli hasta | R (ciro) | Hedef |
-|---|---|---|---|---|---|---|
-| 1 | 8 (8+0) | %42,0 | 2,00 | 6,1 | 1.067₺ | 520₺ |
-| 10 | 26 (26+0) | %46,9 | 5,29 | 19,6 | 3.560₺ | 1.933₺ |
-| 20 | 26 (26+0) | %52,3 | 3,94 | 19,0 | 3.520₺ | 2.283₺ |
-| 30 | 36 (26+10) | %57,7 | 3,60 | 25,7 | 5.168₺ | 3.968₺ |
+| Gün | Müşteri (gündüz+gece) | Sahte oranı | İzinli hata | Geçerli hasta | R (ciro) | Hedef | Hedef/R |
+|---|---|---|---|---|---|---|---|
+| 1 | 8 (8+0) | %42,0 | 2,00 | 6,2 | 1.148₺ | 545₺ | 0,47 |
+| 10 | 26 (26+0) | %46,9 | 5,29 | 20,0 | 3.745₺ | 2.068₺ | 0,55 |
+| 20 | 26 (26+0) | %52,3 | 3,94 | 19,9 | 3.798₺ | 2.525₺ | 0,66 |
+| 30 | 36 (26+10) | %57,7 | 3,60 | 25,5 | 5.185₺ | 3.982₺ | 0,77 |
 
-Gün 10 → 20 satırı mekanizmayı gösteriyor: müşteri sayısı ve R **donmuş** (ikisi de 26 hasta, ~3,5k₺), ama izinli hata 5,29 → 3,94'e daraldığı için hedef 1.933 → 2.283₺'ye çıkıyor. **Boyut ekseni dururken tolerans ekseni işi devralıyor.** Hedef/R oranı: g10 0,54 → g20 0,65 → g30 0,77.
+Gün 10 → 20 satırı mekanizmayı gösteriyor: müşteri sayısı ve R **donmuş** (ikisi de 26 hasta, ~3,7–3,8k₺), ama izinli hata 5,29 → 3,94'e daraldığı için hedef 2.068 → 2.525₺'ye çıkıyor. **Boyut ekseni dururken tolerans ekseni işi devralıyor.** Hedef/R oranı 0,47 → 0,77 tırmanıyor.
+
+Fiyat çarpanları R'yi hafifçe yukarı kaydırdı (marj rayının küçük şişirme yan etkisi, bkz. 4.8) ama **hedef R'den türediği için oran eğrisi aynı kaldı**. Hedef formülüne dokunulmadı; güncel fiyatlara kendiliğinden uyum sağlıyor. Güvenlik bandı 40 koşu × 30 günün **%4,2**'sinde devreye giriyor (yalnız alt bant; üst bant hiç girmiyor).
 
 ### 4.7 Sipariş konsantrasyon tavanı
 Tek bir hastanın günün cirosunda tutabileceği en yüksek pay sınırlıdır. **Sabit yüzde işe yaramaz**: 6 geçerli hastalı bir günde kimsenin %15'in altında kalması matematiksel olarak imkânsızdır. Bu yüzden tavan **adil paya oranlıdır**:
@@ -195,11 +268,44 @@ tavan = clamp(concentrationCapFactor / geçerliHasta, concentrationCapMin, conce
 
 Neden gerekli: hedef bir **ortalama** olan `missCost`'a dayanır, ama hasta değerleri heterojendir. Tavan olmadan "3 hata" tek bir sayı değildir — en ucuz üç hastayı kaçırmakla en pahalı üçünü kaçırmak arasında birkaç yüz ₺ fark oluşur, yani **hangi müşteride hata yaptığın günü tek başına belirleyebilir.**
 
-Uygulama iki aşamalı: önce en yüksek paylı hastanın siparişi yeniden üretilir (en fazla `concentrationMaxPasses` = 25 tur), yetmezse en pahalı kalem kademe kademe küçültülür (zorla sığdırma). Ölçüldü (40 koşu × 30 gün): **710 yeniden üretme, 0 zorla sığdırma** — birinci aşama her zaman yetiyor. `validN ≤ 2` olan günlerde kural matematiksel olarak sağlanamayacağı için hiç uygulanmaz (sonsuz döngü yerine dokunmadan çıkılır). Sahteler kapsam dışıdır (R'ye 0 katkı yapıyorlar).
+Uygulama iki aşamalı: önce en yüksek paylı hastanın siparişi yeniden üretilir (en fazla `concentrationMaxPasses` = 25 tur), yetmezse en pahalı kalem kademe kademe küçültülür (zorla sığdırma). Ölçüldü (40 koşu × 30 gün, fiyat güncellemeleri açık): **703 yeniden üretme, 0 zorla sığdırma** — birinci aşama her zaman yetiyor. Tavan **güncel fiyatlarla** ölçülür (`refValuesFor` → `medPrice`), taban fiyatla değil; bu ayrımın bir kez yanlış kurulmuş olması gerçek bir hataya yol açtı (bkz. 17). `validN ≤ 2` olan günlerde kural matematiksel olarak sağlanamayacağı için hiç uygulanmaz (sonsuz döngü yerine dokunmadan çıkılır). Sahteler kapsam dışıdır (R'ye 0 katkı yapıyorlar).
+
+### 4.8 Fiyat güncellemeleri — taban fiyat × güne bağlı çarpan
+Belirli günlerde bazı ilaçların **alış ve satış fiyatı ayrı ayrı** oynar; kâr oranları birbirinden ayrışır. Amaç oyunun geç aşamada karar içermeyen deterministik bir banda girmesini kırmak: oyuncu zam gelmeden ucuz stok alıp kâr edebilsin.
+
+**Okuma katmanı.** `MEDICINES` taban tablodur, hiç değişmez. Güncel fiyat:
+```
+medPrice(m) = max(1, round(m.price × mul.p))
+medCost(m)  = max(1, round(m.cost  × mul.c))
+```
+Fiyatın okunduğu **her** yer bu ikisinden geçer: referans ciro (`refValuesFor`), semptom kategori ortalaması, konsantrasyon küçültme, depo sepeti (`depotOrderTotal`), servis kazancı, yanlış servis zararı, depo ekranı, dilencinin verdiği ilacın değeri.
+
+**`priceStateFor(gün)` SAF bir fonksiyondur** — mutable birikim yok. `(runSeed, gün)` → çarpanlar; gün 1'den o güne kadarki turlar sırayla yeniden oynanır ve sonuç gün başına cache'lenir. **Neden mutable state kullanılmadı:** `buildDaySchedule(30)` gün 1'de de çağrılabiliyor (hedef sorgusu, self-test, denge doğrulaması) ve o günün R/C/hedefi **o günün** fiyatlarıyla hesaplanmalı. Birikimli mutable state olsaydı önden üretilen gün yanlış fiyatla cache'lenirdi. Hangi günün fiyatı okunduğunu `genDay()` söyler — sahte oranı ve reçete tarihi ile **tam aynı mekanizma**.
+
+**Tur sıklığı ve seçim.** Bir turun kendisini `applyPriceRound(mul, day)` uygular; `priceRoundOn(day)` o günün turunu (varsa) döndürür ve haber/gösterge/şerit çizen her yer bunu okur. `isPriceUpdateDay(d)` → `d ≥ 2 && (d−1) % priceUpdateEvery === 0`. `priceUpdateEvery` = 5 ile turlar **6, 11, 16, 21, 26**. Gün 1 asla tur günü değildir (öğretici gün).
+
+Seçim **kategori kümelidir**: kota (`round(39 × priceUpdateShare 0.25)` = 10 ilaç) dolana kadar kategoriler **bütün olarak** eklenir. Ölçülen sonuç: tur başına **10–14 ilaç / 2–3 kategori**. İlk hâlinde pay ilaçlara serpiliyordu ve bir tur 8 kategoriye dokunuyordu — o hâlde haber "her şey oynadı" demekle aynı şey oluyordu (bkz. 15).
+
+Adımlar:
+- **ALIŞ yönü kategoriden** gelir (haberin doğru olması için), büyüklüğü ilaç başına ayrı çekilir
+- **SATIŞ adımı ilaç başına tamamen bağımsız** çekilir — marjların ayrışması bu bağımsızlıktan doğar
+- her adım `[priceDriftMin 0.60, priceDriftMax 1.60]` bandında clamp'lenir, yani sezon boyunca birikerek uçmaz
+
+Ölçüldü (40 koşu × 30 gün × 39 ilaç): çarpanlar **0,600–1,600** bandının içinde kaldı; gün 30'da **637 ilaç-koşuda alış/satış ters yönde**, 646'sında aynı yönde hareket etmiş — bağımsızlık gerçekten çalışıyor. Marj yayılımı taban **%18–41 (sd 0,059)** → gün 30 **%3–64 (sd 0,152)**.
+
+**Bir gün önceden yön haberi — sistemin şartı.** Haber olmasa oyuncu turu ancak olduktan sonra görür ve kâr karardan değil şanstan gelir. Gün sonu kartında iki satırlı amber şerit, **depo sekmesi diliyle**: `💱 Yarın alış fiyatları değişiyor` / `Mide ↓ · İlk Yrd. ↓ · Ağrı ↑`. Kategori adı yerine sekme etiketi kullanılır çünkü oyuncunun alışveriş yaptığı dil odur (kategori ↔ sekme 1:1). **Tutar verilmez, yalnız yön** — kesin tutar kararı bir hesaba indirir, yön ise karar bırakır. Tur gününde ayrıca gün başı bilgi şeridi, depo ekranı başlık notu ve satır başına ↑/↓ göstergesi çıkar.
+
+**`priceMinMargin` rayı ve yan etkisi.** Bağımsız adımlar satışı alışın altına düşürebiliyordu ve oyuncunun buna karşı bir hamlesi yok (geçerli reçeteyi reddetmek itibar yakar). Ray marj tabanını sağlar: önce satışı yükseltir, yetmezse alışı düşürür; ikisi de bantta kalır.
+
+Ama ray **asimetriktir** — satışı yukarı / alışı aşağı ittiği için simetrik adımlarda bile **ortalama marjı yukarı şişirir**. Ölçüldü: `priceStepMax` 0,22'de şişme **+0,23 puan** (%28,6 → %28,8, ihmal edilebilir), 0,35'te +1,64, 0,50'de +3,17 puan. Yani büyük adım sezon skorunu enflasyonla yukarı çeker ve "yüksek skor" beceriden değil ayardan gelir. **`priceStepMax` bu yüzden 0,22'de bırakıldı** ve self-test'e şişme 1 puanı aşarsa uyaran bir denetim eklendi (0,50 ile denendi, uyarıyı veriyor).
+
+Rayın küçük bir kaçağı var ve dürüstlük adına yazılı: ray **çarpan** düzeyinde çalışır, `medPrice`/`medCost` ise tam sayıya yuvarlar. Yuvarlama sonrası gerçekleşen en düşük marj 40 koşu × 30 gün × 39 ilaçta **%2,86** (rayın ima ettiği %4,76'nın altı). Negatife hiç düşmüyor: aynı 46.800 kontrolde **0 zararına satış**.
 
 ---
 
 ## 5. İtibar Sistemi
+
+> **İtibar SEZON ölçeğinde yaşar.** Her sezon `startReputation` (50) ile başlar, sezonlar arası devretmez (gerekçe: 2.1). Sezon içinde 0'a inmek **kariyeri** bitirir (2.3).
 
 **Tek fail state itibarın 0'a inmesidir** (`loseReputation` → `triggerGameOver`). Başlangıç 50.
 
@@ -226,7 +332,7 @@ Kodu okuyan biri eksiklik sanabilir, o yüzden net yazılıyor: **günlük para 
 
 Para baskısı **dolaylıdır**: kasa erir → depo siparişi verilemez → stok biter → hasta servis edilemez → itibar düşer → oyun biter. Hedef bu zincirin ölçüm göstergesidir, ceza mekanizması değil.
 
-Bunun bir bedeli var ve bölüm 15'te açık konu olarak duruyor: sabit iyi oynayan oyuncu hedefi kaçırsa bile ölmüyor.
+Bunun bir bedeli var ve bölüm 16'da açık konu olarak duruyor: sabit iyi oynayan oyuncu hedefi kaçırsa bile ölmüyor.
 
 ---
 
@@ -461,7 +567,57 @@ Stokla **aynı yol**: `initUpgrades()` yalnız `startNewGame()` tarafından ça�
 
 ---
 
-## 10. Görseller
+## 10. Dilenci
+
+Tezgaha nadiren gelen, günün hasta programına **ait olmayan** karakter. İki tipi var: `"beggar"` (yardım isteyen) ve `"beggarpay"` (borcunu ödemeye gelen). `isBeggarType()` ikisinin ortak dışlamalarını taşır.
+
+### 10.1 Programın dışında olması (kritik)
+Dilenci `daySchedule`'a **hiç girmez**; `patient.bonus = true` ile cheat hastalarının izlediği yolun aynısını kullanır. Sonuç: **N, R, C, missCost, hedef, konsantrasyon tavanı ve gün sonu sayacı onu görmez.** Ölçüldü — dilenci kuyruğa girdikten sonra `N`, `R`, `goal` ve `daySpawned` birebir aynı kalıyor.
+
+Hasta mantığının hiçbir yoluna girmez: `servingAllowed()` false, `activeNeedsDecision()` false, `expectedMedicineIds()` boş, `refValuesFor` sıfır katkı + `valid:false`, `request`'te `fake` alanı yok. Self-test bunların hepsini ayrı ayrı denetler.
+
+Buna rağmen **gelişi deterministiktir**: `beggarPlanFor(gün)` kendi tohum akışında (`BEGGAR_SEED_SALT`) hangi gün, kaçıncı hastadan sonra ve hangi replikle geleceğini verir — hasta listesinin RNG akışını kaydırmaz. Gün 1'de asla gelmez, günde en fazla bir kez. `beggarChance` 0,30 → sabit test tohumunda 30 günde **9 ziyaret** (beklenen 0,30 × 29 = 8,7).
+
+### 10.2 Üç seçenek
+Reçetenin ikili şeridiyle **aynı yerde, aynı buton dilinde, üç eşit kolon**; her buton iki satır (ne yapıldığı / bedeli). İkisi asla aynı anda görünmez.
+
+| Seçenek | Bedel | İtibar | Pasif olma koşulu |
+|---|---|---|---|
+| **💊 İLAÇ VER** | stoktaki **en ucuz** kalemden 1 adet (güncel alışa göre) | `beggarRepGive` **+6** | stok tamamen boşsa |
+| **💵 PARA VER** | `beggarMoneyGive` **91₺** (avgPrice × 1,0) | +6 | kasa yetmezse |
+| **✕ REDDET** | — | `beggarRepReject` **−8** | hiç |
+
+Sabrı `beggarPatienceMul` 0,8 ile normal hastadan kısadır. **Sabır dolarsa reddetmiş sayılır** (aynı ceza) — bekleyip görmezden gelmek reddetmenin ucuz yolu olmasın. Dilenci sayaçları hasta sayaçlarından ayrı tutulur: `served`/`correct`/`wrong`/`angry` hiç kirletilmez.
+
+### 10.3 İtibar tavanı asimetrisi — geri ödemenin var olma sebebi
+Ölçüldü (kariyer boyu, 60 tohum): A profilinde yardımın **nominal** itibar karşılığı **+353**, **fiilen uygulanan** ise yalnız **+22** — yumuşak tavan %94'ünü yiyor. Reddetme ise tam değerle **−466** işliyor.
+
+Yani itibar tavanındaki oyuncu için yardımın karşılığı fiilen sıfırdı, reddetmek de ona pahalıya gelmiyordu (zaten tavanda): **dilenci güçlü oyuncu için her iki yönde de anlamsızdı.** Çözüm, yardımın **itibar tavanından bağımsız, nakit** bir karşılığı olması.
+
+### 10.4 Geri ödeme
+Yardım edilince (`beggarGiveMedicine` / `beggarGiveMoney`) `scheduleBeggarReturn()` bir zar atar; tutarsa geri ödeme defterine `{ dueDay, amount, line }` yazılır. Vadesi gelen borçlu tezgaha **bonus hasta** olarak gelir ve **tek butonu** olur: `💵 ÖDEMEYİ AL (+X₺)`. Yapay bir ikinci seçenek uydurulmadı — üç butonlu şerit yerine aynı şeride tam genişlikte tek buton kondu.
+
+| CONFIG | Değer | Ne |
+|---|---|---|
+| `beggarReturnChance` | 0,55 | geri dönme ihtimali (garantili DEĞİL) |
+| `beggarReturnDelayMin/Max` | 2 / 5 gün | vade aralığı |
+| `beggarReturnMul` | 2,5 | ödeme = verilenin değeri × bu |
+
+**Borç RAF fiyatı üzerinden hesaplanır** (`medPrice`), alış maliyeti üzerinden değil: borcun değeri dilencinin **eline geçen** değerdir, kişi aldığı şeyin karşılığını öder, senin tedarik maliyetini bilmez. Para verildiyse verilen tutar esas alınır.
+
+**Reddedilen geri dönmez** — `beggarRefuse` içinden `scheduleBeggarReturn` çağrılmaz; sabır bitişinde de çağrılmaz. Self-test ikisini de denetler.
+
+**Seed'li**: zar, yardımın **yapıldığı güne** bağlı kendi tohum akışında atılır (günde en fazla bir dilenci olduğu için gün tek başına anahtar). Aynı runSeed + aynı yardım kararları her zaman aynı geri dönüşleri verir, ve zar hasta üretim akışını kaydırmaz.
+
+Ödeme kasaya girer **ve** `addDayMoney` ile günün kazanç sayacına yazılır; **hedef formülüne dokunulmadı** — hedef o günün hasta listesinden hesaplanıyor, bu bonus hasta o listede yok, yani ödeme hedefi kolaylaştıran serbest bir paydır. Sezon ve kariyer kartında dilenci satırı varsa geri ödeme satırı da çıkar.
+
+Borçlunun sabrı biterse para alınmaz ama **ceza da yoktur**: bu bir ödül hastası, kaçırmanın bedeli ödülün kendisi. Küsen müşteri sayacına da girmez.
+
+Defter, SGK alacaklarıyla **aynı kalıcılık yolunda**: kariyer boyu kalıcı, `startNewCareer` sıfırlar, `beginSeason` vadeyi bir sezon geriye çeker (yoksa 31. güne yazılan borç bir daha asla gelmezdi — bkz. 17).
+
+---
+
+## 11. Görseller
 
 **39 ilacın 39'u gerçek PNG** — emoji fallback'e düşen ilaç kalmadı (koddan ve diskten doğrulandı).
 
@@ -483,9 +639,9 @@ Stokla **aynı yol**: `initUpgrades()` yalnız `startNewGame()` tarafından ça�
 
 ---
 
-## 11. Servis Akışı, Tezgah ve Arayüz
+## 12. Servis Akışı, Tezgah ve Arayüz
 
-### 11.1 Servis akışı — seçim altta, onay PC'de
+### 12.1 Servis akışı — seçim altta, onay PC'de
 Akış üç adıma ayrılmıştır ve tezgah yüzeyi **tamamen boş** kalır:
 
 1. **Seçim (alt alan).** Kategori sekmeleri ve ilaç kartı gridi değişmedi. Karta dokunmak ilacı **sepete** ekler; aynı karta tekrar dokunmak adedi artırır (`tapMedicine`). Dokunuşta **stok kontrol edilir ama düşülmez**: stok 0 ise ya da sepetteki adet stoğa eşitse ekleme yapılmaz ve toast uyarısı çıkar.
@@ -504,22 +660,22 @@ Akış üç adıma ayrılmıştır ve tezgah yüzeyi **tamamen boş** kalır:
 
 **Sahnede kalanlar:** reçete kağıdı ve konuşma balonu yerinde durur. SATIŞ ekranı onların yerine geçmez; panel kapalıyken de görünürler.
 
-### 11.2 Sprite.rect
+### 12.2 Sprite.rect
 `Sprite.rect(key, x, y, w, h, fit)` görselin kutu içinde **gerçekten kaplayacağı** dikdörtgeni döndürür (asset yoksa `null`). Oran korunduğu için görsel kutuyu genelde doldurmaz; aradaki fark boşluktur.
 
 **Hâlâ kullanılıyor** ama artık yalnız `Sprite.draw` içinden: dokuz `Sprite.draw` çağrısının hepsi ondan geçer. Dışarıdan çağıran kalmadı — tek dış çağıran `counterItemRects` idi, o da tepsiyle birlikte silindi.
 
 `fit` modları: `"contain"`, `"contain-bottom"`, `"cover"`, `"stretch"`. Fiilen kullanılan iki tanesi: `"cover"` (arka plan, tezgah bandı) ve `"contain"` (kalan yedi çağrı — hasta avatarı, defter, ilaç kartı, sepet satırı, uçuş animasyonu).
 
-> **`"contain-bottom"` modunun artık HİÇ ÇAĞIRANI YOK.** Taban hizası (dar/uzun ve geniş/kısa ürünleri aynı yüzeye oturtma) yalnız tezgah tepsisi için vardı. Kod duruyor ama ölü daldır — bkz. bölüm 15.
+> **`"contain-bottom"` modunun artık HİÇ ÇAĞIRANI YOK.** Taban hizası (dar/uzun ve geniş/kısa ürünleri aynı yüzeye oturtma) yalnız tezgah tepsisi için vardı. Kod duruyor ama ölü daldır — bkz. bölüm 16.
 
-### 11.3 Kaldırılan tepsi katmanı
+### 12.3 Kaldırılan tepsi katmanı
 Tezgah ürün tepsisi tamamen söküldüğü için `counterItemRects`, tepsi rozet/dokunma hesabı ve onu denetleyen `verifyCounterLayout()` **koddan silindi**. Rozet çapı sınırlama, eşmerkezli dokunma kutusu ve "rozeti slot karesine değil çizim dikdörtgenine bağla" kuralı artık geçerli değil — bağlanacak rozet kalmadı.
 
-### 11.4 drawEmoji — glif kutusuna göre ortalama
+### 12.4 drawEmoji — glif kutusuna göre ortalama
 Emojiler font metriklerine göre değil, **gerçek glif kutusuna** göre ortalanır: `measureText`'in `actualBoundingBoxLeft/Right/Ascent/Descent` değerleriyle ölçülüp merkez düzeltmesi uygulanır. Aksi halde farklı emojiler aynı kutuda farklı yerlere oturuyordu. `selfTestEmoji()` oyundaki her emojiyi 64px referans kutuda çizip merkez sapmasını denetler (tolerans ~%6); tarayıcı `actualBoundingBox` vermiyorsa denetim atlanır.
 
-### 11.5 HUD ve diğer arayüz
+### 12.5 HUD ve diğer arayüz
 - **HUD**: sol kutuda satır1 GÜN, satır2 tarih (emojisiz); nöbet günlerinde sol kutu ile EV butonu arasındaki boşlukta 🌙 rozeti; ortada kare EV butonu (menüye döner, veri silinmez); sağ kutuda itibar (emoji eşikleri: <35 😡, 35–69 😑, ≥70 😊) ve binlik ayraçlı para.
 - `formatMoney` `toLocaleString` kullanmaz, kendi ayraç mantığı vardır ve değer değişmediği sürece **cache'li string** döner. `dateShort()` de gün değişmediği sürece cache'lidir — çizim içinde `new Date()` çağrısı titremeye yol açar.
 - **İlaç kartları**: 3 sütunlu grid, görsel `contain` ile çizilir (asla ezilmez), dikeyde taşarsa drag-scroll + sağ kenarda ince retro scrollbar (salt görsel, tıklama hedefi değil). Stok 0 → "TÜKENDİ" etiketi; stoğu olanlarda sağ üstte stok rozeti.
@@ -528,12 +684,12 @@ Emojiler font metriklerine göre değil, **gerçek glif kutusuna** göre ortalan
 
 ---
 
-## 12. Geliştirici Araçları
+## 13. Geliştirici Araçları
 
-### 12.1 Karar teşhis bloğu
+### 13.1 Karar teşhis bloğu
 `CONFIG.debugDecisions` (varsayılan **true**) açıkken her servis/red kararında konsola tek okunabilir blok basılır: hasta tipi, istenen liste (ad + id + adet), verilen liste, doktorun defterde olup olmadığı, her kusur kontrolünün sonucu, karşılaştırılan iki değer (reçete tarihi ↔ oyun tarihi), iç bayraklar ve sonuç + gerekçe.
 
-### 12.2 Boot'ta sessiz çalışan self-test'ler
+### 13.2 Boot'ta sessiz çalışan self-test'ler
 Hepsi yalnız sorun bulursa `console.warn` atar; oyuncuya hiçbir şey görünmez. **Şu an boot'ta 0 uyarı çıkıyor.**
 
 **`verifyGoalBalanceAllTiers(false)`** — dengeyi iki uçtan koşturur (tüm geliştirmeler Lv1'de ve tümü maksimumdayken; `withUpgradeLevels` seviyeleri geçici değiştirip iki yönde de cache'i temizler). Her turda: izinli hata kadar hata hedefi tutturmalı, bir fazlası tutturmamalı. Ayrıca patolojik uçları arar — izinli hata kadar hata **en iyi** hâlde bile tutmuyorsa "hedef imkânsız", bir fazlası **en kötü** hâlde bile tutuyorsa "hedef anlamsız". Güvenlik bandına takılan günlerde tolerans ölçütü uygulanmaz.
@@ -551,21 +707,30 @@ Hepsi yalnız sorun bulursa `console.warn` atar; oyuncuya hiçbir şey görünme
   - sahte oranı artıyor mu, tavanı aşıyor mu, gece oranını bozuyor mu
   - nöbet sıklığı geç oyunda gerçekten artıyor mu
   - **nihai kural:** tavan bağladıktan sonraki **her gün** için en az bir eksen hâlâ hareketli mi — değilse `"gün N: hiçbir zorluk ekseni ilerlemiyor (düz plato)"`
+- **(0c3) FİYAT GÜNCELLEMELERİ** — bu turda eklendi:
+  - **bant**: 30 günün *her* günü, her ilaç, her iki alan için çarpan `[priceDriftMin, priceDriftMax]` içinde mi
+  - **determinizm**: cache temizlenip aynı gün yeniden türetilince birebir aynı sonuç mu
+  - **sabitler**: geliştirme fiyatı ve startMoney fiyat turlarından etkilenmiyor mu, `MEDICINES` runtime'da değiştirilmiş mi
+  - **zararına satış**: hiçbir gün `medPrice < medCost` olmuyor mu
+  - **marj rayının yan etkisi**: ortalama kâr oranı şişmesi 1 puanı aşarsa uyarır (bkz. 4.8)
+  - gün 1 tur günü değil mi, sezonda en az 2 tur var mı
+- **(0c4) DİLENCİ** — gün listesine sızmıyor mu, gün 1'de gelmiyor mu, bonus işaretli mi, `fake` alanı yok mu, `refValuesFor`'da sıfır katkı mı, sabır çarpanı devrede mi, servis/inceleme yolları kapalı mı. **Geri ödeme**: `beggarReturnMul > 1` mi, ihtimal ve gecikme aralığı geçerli mi, `beggarReturnDelayMax` sezon uzunluğuna yakın mı (geri dönüşler sezon dışına taşar), borçlu da hasta mantığından dışlanmış mı, zar deterministik mi, tutar verilenin üstünde mi
+- **(0c5) KARİYER** — bedel formülü (1. sezon bedelsiz, kesin artan, sonlu, 100'e yuvarlı), devredenler/devretmeyenler tek tek, sezon geçişinde kasa denkliği (`önceki − bedel + tahsil edilen alacak`), SGK defter bütünlüğü, alacak vadesinin yeniden tabanlanması, yeni sezonun farklı tohumla başlaması, peak monotonluğu ve sezonlar arası korunması, bedel ödenemezken sezon başlatılamaması, `careerResult` şeması ve JSON-serileşirliği
 - **(0d2)** reçete garantileri: her günde ≥1 gerçek, 2. günden itibaren ≥1 sahte, gerçek reçetelerde kusur bayrağı yok, `overdose` hiç üretilmiyor
 - **(0d3)** Medula kuralları (terminal geçici olarak maks seviyeye alınır): kod uzunluğu ve "2" başlangıcı, alfabe dışı karakter yok, kodlar gün içinde benzersiz, hiçbir Medula hastası sahte değil, kalem listesi boş değil, R'ye giriyor, terminal açıkken en az bir Medula hastası üretiliyor, **alacak defteri bütünlüğü**
 - **(0d4)** çok kalemli semptom sabrı: 3 kalemli hasta 1 kalemliden kesin uzun bekliyor, çarpan tam 1,5 ve **Bekleme Alanı seviyesinden bağımsız** (geliştirme çarpanı yerine geçmemiş)
 - **(0e)** nöbet kuralları: gece hasta sayısı ≥ `nightPatientMin`, `nightFakeChance()` tavanı aşmıyor, gecede ≥1 gerçek reçete, gündüz bölümünde `night:true` hasta yok, nöbet olmayan günde hiç gece hastası yok
 - **(f–i)** hastanın tam ihtiyacı verilince sonuç daima "doğru" mu; her sahte reçetenin tespit edilebilir en az 1 kusuru var mı; gerçek reçetelerde kusur yok mu ve doktoru defterde mi; gerçek reçetenin tarihi o günün tarihi mi
 
-**`selfTestEmoji()`** — oyundaki her emojinin glif kutusuna göre doğru ortalandığını denetler (bkz. 11.4).
+**`selfTestEmoji()`** — oyundaki her emojinin glif kutusuna göre doğru ortalandığını denetler (bkz. 12.4). Yeni kartların ikonları (📅 🔎 🚨 ⭐ 🤝 🏆 💵 ✓ ✗) denetim listesine eklendi.
 
 **`checkDataHealth()`** — her ilaç kategorisinin en az bir semptomu, her semptom kategorisinin en az bir ilacı var mı.
 
 > **(KALDIRILDI) `verifyCounterLayout()`** — tezgah tepsisindeki rozet ve dokunma kutusunun görsel dikdörtgeni içinde kaldığını denetliyordu. Tepsiyle birlikte silindi; boot'ta artık çağrılmıyor ve `cheats.checkCounter()` de kaldırıldı.
 >
-> **Yerine dosya İÇİNDE bir denetim gelmedi.** SATIŞ ekranının sığması (satırlar panelden taşmıyor mu, adımlayıcılar panel içinde mi, SERVİS ET son satırın altında mı) yalnız **dışarıdan headless ölçümle** doğrulandı — boot self-test'i bunu görmez. Panel yerleşimi değiştirilirse ölçüm elle tekrarlanmalı. Bkz. bölüm 15.
+> **Yerine dosya İÇİNDE bir denetim gelmedi.** SATIŞ ekranının sığması (satırlar panelden taşmıyor mu, adımlayıcılar panel içinde mi, SERVİS ET son satırın altında mı) yalnız **dışarıdan headless ölçümle** doğrulandı — boot self-test'i bunu görmez. Panel yerleşimi değiştirilirse ölçüm elle tekrarlanmalı. Bkz. bölüm 16.
 
-### 12.3 Debug cheatleri (`window.cheats` — **29 adet**, koddan sayıldı)
+### 13.3 Debug cheatleri (`window.cheats` — **41 adet**, koddan sayıldı)
 
 | Cheat | Ne yapar |
 |---|---|
@@ -578,7 +743,20 @@ Hepsi yalnız sorun bulursa `console.warn` atar; oyuncuya hiçbir şey görünme
 | `spawnFake()` | zorla sahte reçeteli BONUS hasta spawn eder |
 | `daySchedule(day)` | o günün üretilmiş listesini ve gün ekonomisini tabloyla yazar |
 | `menu()` | MENU state'ine geçer |
-| `gameOver()` | `triggerGameOver()` tetikler |
+| `gameOver()` | itibar tükenmiş gibi: sezon erken biter **ve kariyer kapanır** |
+| `endSeason()` | son gün tamamlanmış gibi: sezon normal biter (kariyer sürer) |
+| `seasonResult()` | sezon özet nesnesini JSON olarak basar ve döner |
+| `career()` | sezon no, tamamlanan sezon, peak kasa, kasa, sonraki bedel + ödenebilir mi + geçmiş sezon tablosu |
+| `fees(n)` | ilk n sezonun ruhsat bedeli ve kümülatif toplamı |
+| `nextSeason()` | `tryStartNextSeason()` — bedel yetmezse kariyeri bitirir |
+| `endCareer(reason)` | kariyeri kapatır (`"fee"` / `"reputation"`) |
+| `careerResult()` | kariyer özet nesnesini JSON olarak basar ve döner |
+| `prices(day)` | o günün taban/güncel alış-satış, çarpanlar ve kâr% tablosu + yarının haberi |
+| `priceRounds()` | sezondaki tüm fiyat turları: gün, etkilenen ilaç sayısı, kategoriler |
+| `beggar()` | dilenciyi hemen tezgaha alır |
+| `beggarPlan()` | sezon boyunca dilencinin hangi gün, kaçıncı hastadan sonra geleceği |
+| `beggarPay(n)` | borcunu ödemeye gelen dilenciyi tezgaha alır (tutar opsiyonel) |
+| `beggarReturns()` | bekleyen geri ödeme defteri + toplam |
 | `revealFlaws()` | aktif reçetenin sahte/kusur/doktor/tarih/kaşe/imza dökümünü yazar |
 | `setGroup(gid)` | aktif ilaç grubunu değiştirir |
 | `concentration(days)` | konsantrasyon tavanı dökümü: en yüksek paylı hasta, payı, tavan, yeniden üretme/zorla sığdırma sayısı |
@@ -586,7 +764,6 @@ Hepsi yalnız sorun bulursa `console.warn` atar; oyuncuya hiçbir şey görünme
 | `setStock(id, n)` | bir ilacın stoğunu clamp'li ayarlar |
 | `emptyStock(id)` | bir ilacın stoğunu sıfırlar |
 | `openDepot()` | PC panelini doğrudan DEPO ekranında açar |
-| `prices()` | tüm ilaçların alış/satış/kâr% tablosu |
 | `explainPatient()` | mevcut hasta için karar teşhis bloğunu istek üzerine basar |
 | `setSeed(v)` | koşu tohumunu sabitler, gün cache'ini temizler, oynanan günü yeni tohumla kurar |
 | `seed()` | mevcut `runSeed`'i yazar |
@@ -595,18 +772,24 @@ Hepsi yalnız sorun bulursa `console.warn` atar; oyuncuya hiçbir şey görünme
 | `forceNight()` | mevcut günü nöbet gününe çevirip gece bölümünü başlatır (`_forcedNightDays` yalnız buradan dolar) |
 | `upgrades()` | tüm kalemlerin seviyesi, etkisi, sonraki seviye ve fiyatı + efektif değer özeti (reçeteli pay dahil) |
 | `setUpgrade(id, seviye)` | test için seviye zorlar; vitrin/medula ise cache'i geçersiz kılar |
-| `balance()` | avgPrice/avgCost/marj/startMoney + gün 1..10 tablosu + `verifyGoalBalanceAllTiers(true)` |
+| `balance()` | avgPrice/avgCost/**taban** marj/startMoney + gün 1..10 tablosu + `verifyGoalBalanceAllTiers(true)` |
 | `assetStatus()` | hangi asset'lerin yüklendiğini/boş olduğunu ve kapsam özetini döner |
 | `state()` | gün/para/itibar/aktif sabır/kuyruk/tezgah/beklenen ilaç/gün istatistikleri |
 
 ---
 
-## 13. ÖLÇÜM BULGULARI
+## 14. ÖLÇÜM BULGULARI
 
-Bu bölüm belgenin en değerli kısmı. Sayılar **2026-09-02 tarihli son ölçüm turundan** gelir (gün büyüklüğü tavanı + geç oyun kompozisyon eğrisi + Vitrin yeniden amaçlandırma turu).
+Bu bölüm belgenin en değerli kısmı. **2026-09-10'da tamamen yenilendi**; tek sezonluk eski tablolar (hayatta kalma 60/60, B′ itibar eğrisi, tek sezon kasa dağılımı) kariyer modeliyle **geçersizleşti** ve silindi.
 
-### 13.1 Ölçüm düzeneği
-Headless Node harness: `index.html`'in **gerçek** fonksiyonları (canvas stub'lı `vm` sandbox) çalıştırılır — `buildDaySchedule`, `checkOrder`, `rejectPrescription`, `gainReputation` hepsi orijinal koddur, yeniden yazılmamıştır. Bot karar seviyesinde oynar (frame döngüsü koşmaz), kendi RNG'si oyunun RNG'sinden bağımsızdır ki gün üretimini bozmasın.
+Sayıların hangi turdan geldiği her alt bölümde yazılı. Dört tur var:
+- **T1 — sezon yapısı turu**: 30 günlük sezon, tek sezonluk skor dağılımı
+- **T2 — fiyat + dilenci turu**: fiyat güncellemeleri, dilenci, tek sezonluk getiri ölçümü
+- **T3 — kariyer turu**: ruhsat bedeli kalibrasyonu, ilk kariyer ölçümü
+- **T4 — geri ödeme turu**: dilenci geri ödemesi, kariyer modelinde yeniden ölçümler (en güncel)
+
+### 14.1 Ölçüm düzeneği
+Headless Node harness: `index.html`'in **gerçek** fonksiyonları (canvas stub'lı `vm` sandbox) çalıştırılır — `buildDaySchedule`, `checkOrder`, `rejectPrescription`, `gainReputation`, `beginSeason`, `tryStartNextSeason`, `placeDepotOrder`, `beggarPayCollect` hepsi orijinal koddur, yeniden yazılmamıştır. Bot karar seviyesinde oynar (frame döngüsü koşmaz), kendi RNG'si oyunun RNG'sinden bağımsızdır ki gün üretimini bozmasın.
 
 **Bot profilleri:**
 
@@ -617,35 +800,97 @@ Headless Node harness: `index.html`'in **gerçek** fonksiyonları (canvas stub'l
 | **B′** | %25 ihtimalle kötü gün (%65), diğer günler %88 (ort. ~%82) | **korelasyonlu kötü seri** — gerçek oyuncunun kötü gününü modeller |
 | **C** | %70 | "vasat oyuncu", ölmesi beklenen |
 
-**Düzeltilmiş satın alma politikası:** sabah önce o günün gerçek listesinden ihtiyaç çıkarılıp **stok tamamlanır** (ihtiyaç × 1,5, `effMaxStock`'a kırpık), geliştirme **ancak** 20 × avgCost'luk rezervin üstündeki fazladan alınır. Bu düzeltme şart: eski politika rafı boşken kasayı geliştirmeye yatırıyor, stok tükeniyor, satış düşüyor ve sarmal kapanıyordu — ölçüm bu yüzden yanlış sonuç veriyordu.
+**Bot politikası** (kariyer modeline uyarlanmış hâli):
+1. Sabah o günün gerçek listesinden ihtiyaç çıkarılıp **stok tamamlanır** (ihtiyaç × 1,5, `effMaxStock`'a kırpık). Bu adım bedel rezervinden **etkilenmez** — ölçüldü ve rafı boş bırakmak itibardan öldürüyor, o zaman bedeli ödeyecek sezon da kalmıyor (B′'nin 1. sezonda ölme oranı %28 → %50+ olmuştu).
+2. **Zam haberi varsa** o kategorilerde bir sonraki tura kadar gerçekten satılacak miktar alınır (%20 payla). Sezonun son 2 gününde hiç alınmaz: devredilemeyen stok yakılmış nakittir.
+3. **Geliştirme** ancak 20 × avgCost rezervin üstündeki fazladan alınır; sezonun son 3 gününde rezerve **sonraki sezonun bedeli** de eklenir.
+4. **Dilenci**: stok bolsa (≥3) ilaç, değilse para, ikisi de yoksa reddet. Borçlu geldiğinde ödeme her zaman alınır.
 
-### 13.2 Hayatta kalma (60 runSeed × 30 gün)
+Harness'ın bilinçli modelleme kararları: rafta ilaç yoksa hasta küstürülür (`angryRepLoss`) — gerçek oyuncu kısmi/yanlış servis de yapabilir, bu model biraz daha sert. Dilencinin kuyrukta yer tutma maliyeti modellenmez (zaman yok).
 
-| Profil | Hayatta | Ölüm günü | Geç oyunda (g16+) ölen |
-|---|---|---|---|
-| A | **60/60** | — | — |
-| B | **60/60** | — | — |
-| **B′** | **49/60 (%82)** | med **26** (min 12, max 30) | **10/11** |
-| C | **1/60 (%2)** | med 12 | 20 |
+### 14.2 KARİYER ÖLÇÜMÜ (T4 — 60 tohum, kariyer bitene kadar, en fazla 12 sezon)
+En güncel ve en önemli tablo. `seasonFeeBase` 8.000 / `seasonFeeGrowth` 1,70, fiyat güncellemeleri ve dilenci geri ödemesi açık.
 
-Kompozisyon eğrisi eklenmeden önce (yalnız tavan varken) B′ 45/60 idi ve **medyan ölüm günü 20**'ydi. Şimdi 49/60 ve **medyan 26** — ölümler geç oyuna kaydı, yani zorluk artık sona doğru birikiyor.
+| Profil | Tamamlanan sezon (ort / med / aralık) | Kariyer skoru ort | Medyan | En kötü | En iyi | CV | En iyi/en kötü | Bitiş sebebi |
+|---|---|---|---|---|---|---|---|---|
+| **A** | **6,8 / 7 / 6–7** | 140.976₺ | 141.076₺ | 127.101₺ | 162.045₺ | **%5** | 1,27× | **bedel 60/60** |
+| **B** | **2,9 / 3 / 0–4** | 21.421₺ | 20.627₺ | 4.663₺ | 40.598₺ | %44 | 8,71× | bedel 59 · itibar 1 |
+| **B′** | 1,4 / 1 / 0–4 | 10.766₺ | 7.542₺ | 2.216₺ | 27.738₺ | %63 | 12,52× | bedel 40 · itibar 20 |
+| **C** | **0,2 / 0 / 0–1** | 4.041₺ | 4.033₺ | 2.033₺ | 6.126₺ | %20 | 3,01× | itibar 49 · bedel 11 |
 
-### 13.3 B′ itibar eğrisi
+**Hedef davranış tutuyor**: A 6–10 bandında (6–7), B 2–4 bandında (medyan 3), C 1 sezonu bile zor tamamlıyor (medyan 0). A'nın **hiçbir koşusu 12 sezon cap'ine dayanmıyor** — bedel her zaman yakalıyor.
 
-| gün | 1 | 5 | 10 | 15 | 20 | 25 | 30 |
+**Bitiş sebebi ayrımı sistemin amaçlandığı gibi çalıştığını gösteriyor**: iyi oyuncuyu **ekonomi** bitiriyor (A ve B'nin neredeyse tamamı bedelden), kötü oyuncuyu **itibar** bitiriyor (C'nin %82'si). B′ tam ortada bölünüyor (40 bedel / 20 itibar).
+
+**Profiller arası ayrım kariyer modeliyle güçlendi.** A/B oranı tek sezonlu modelde 3,71× idi, şimdi **6,6×**. A'nın en kötü koşusu (127.101₺) B'nin en iyisinin (40.598₺) 3,1 katı — bantlar açık arayla ayrık.
+
+### 14.3 Ruhsat bedeli kalibrasyonu (T3 — 11 kombinasyon × 20–40 tohum)
+Aranan davranış: A 6–10 sezon, B 2–4, C ≤1.
+
+| base | growth | A (med) | B (med) | C (med) | Sonuç |
+|---|---|---|---|---|---|
+| 7.000 | 1,30 | **12 (cap)** | 6 | 0 | ✗ bedel hiç yakalamıyor |
+| 7.000 | 1,60 | 8 | 4 | 0 | ✓ ama B bandın üst kenarında |
+| 7.000 | 1,70 | 7 | 4 | 0 | ✓ B hâlâ üst kenarda |
+| **8.000** | **1,70** | **7** | **3** | **0** | ★ **seçildi** — üçü de bandın ortasında |
+| 6.000 | 1,70 | 7 | 4 | 0 | ✓ B üst kenarda |
+| 7.000 | 1,90 | 6 | 3 | 0 | ✓ ama A bandın alt kenarında |
+| 12.000+ | ≥1,60 | ≤6 | 1 | 0 | ✗ B çöküyor |
+| 30.000 | 1,90 | 3 | 1 | 0 | ✗ A da çöküyor |
+
+Okunacak ders: **`growth` A'nın ömrünü, `base` B'nin ömrünü belirliyor.** A'nın sezon başına net birikimi B'nin ~6 katı olduğu için aynı geometrik eğri ikisini farklı sezon indekslerinde yakalıyor; iki hedefi birden tutmak `growth`'u orta bantta (1,6–1,7) tutmayı gerektiriyor.
+
+### 14.4 Fiyat sisteminin karar getirisi (T4 — kariyer modeli, 60 tohum)
+Aynı tohumlarda, aynı dilenci politikasıyla; tek fark zam haberini kullanmak.
+
+| Profil | Haberi kullanan | Kullanmayan | **Getiri** | Tamamlanan sezon (kullanan/kullanmayan) |
+|---|---|---|---|---|
+| **A** | 140.976₺ | 135.787₺ | **%3,8** | **7 / 6** |
+| **B** | 21.421₺ | 20.489₺ | **%4,5** | 3 / 3 |
+| B′ | 10.766₺ | 10.562₺ | %1,9 | 1 / 1 |
+| C | 4.041₺ | 4.097₺ | %−1,4 (gürültü) | 0 / 0 |
+
+**T2'de bu getiri %1,7 idi.** Sebep doğru teşhis edilmişti: tek sezonlu modelde 11. günden sonra para kıt değildi, ucuzken stoklamanın değeri ancak "ucuz alamazsam alamam" olduğunda ortaya çıkar. **Ruhsat bedeli parayı yeniden kıt yapınca getiri %3'ün üstüne çıktı** — fiyat sistemi artık atmosfer değil, karar mekaniği.
+
+**Mekanizma beklenen yerde değil.** Sezon başına *ciro* (`earned`) karşılaştırıldığında fark **tam sıfır** çıkıyor, her sezonda: ucuza stoklamak ciroyu değiştirmiyor, **maliyeti** düşürüyor. Sezon başına **net kasa artışı** ölçülünce görünüyor (A profili):
+
+| Sezon | S1 | S2 | S3 | S4 | S5 | S6 | S7 |
 |---|---|---|---|---|---|---|---|
-| ortalama | 65 | 118 | 126 | 129 | 129 | **116** | **120** |
-| min | 10 | 57 | 42 | 47 | 16 | **1** | **0** |
-| yaşayan koşu | 60 | 60 | 60 | 59 | 58 | 55 | 51 |
+| Haberi kullanan | 41.449₺ | 44.622₺ | 43.656₺ | 43.928₺ | 44.539₺ | 43.487₺ | 44.023₺ |
+| Kullanmayan | 40.864₺ | 43.298₺ | 42.773₺ | 42.873₺ | 43.310₺ | 41.976₺ | 42.667₺ |
+| Getiri | %1,4 | %3,1 | %2,1 | %2,5 | %2,8 | **%3,6** | %3,2 |
 
-- Tehlike bölgesine (**<25**) giren koşu: **14/60 (%23)** — bunların **10'u geç oyunda**.
-- `<40`'a düşen: 24/60 · `<60`'a düşen: 46/60
-- `<25`'te geçen gün oranı: tüm koşu %1,5 · geç oyun (g16+) **%2,5**
-- Günlük `|Δitibar|`: tüm koşu 20,9 · geç oyun 21,2
+Geç sezonlarda daha çok işe yarıyor (S1 %1,4 → S6 %3,6) ama fark dramatik değil; S2 zaten %3,1. **Asıl kazanç sezon içi yüzdelerde değil, kariyer uzunluğunda**: biriken tasarruf bir sezonluk bedeli daha karşılıyor ve A **6 yerine 7 sezon** oynuyor. Bir fazladan sezon peak'e ~44k₺ ekliyor; %3,8'in çoğu oradan geliyor.
 
-Ortalama 15–20. günde tepe yapıp düşüyor. **Plato yok**, geç oyunda gerçek tehlike var.
+**T2'de reddedilen ayar denemeleri** (tek sezonlu, 40 tohum): `priceStepMax` 0,22 → 0,50 ve `priceUpdateEvery` 5 → 3 aralığında **getiri %1,7–2,8'de takılıyordu**, CV ise %9 → %15'e çıkıyordu; yani eklenen şey ağırlıkla gürültüydü. `effMaxStock` 30 → 80 → 200 **hiçbir şeyi değiştirmedi** (birebir aynı sayılar): bağlayıcı kısıt depo kapasitesi değil **talep** — yalnız önümüzdeki günlerde gerçekten satacağın kadar ucuz alabilirsin. Bu yüzden ayarlar oynatılmadı, çözüm bedelin getirdiği nakit kıtlığından geldi.
 
-### 13.4 Oturum uzunluğu (10 sn/müşteri varsayımı)
+### 14.5 Dilenci: eşleştirilmiş karşılaştırma (T4 — 60 tohum, aynı tohumlar)
+"Hep yardım et" ile "hep reddet" aynı tohumlarda koşturuldu.
+
+| Profil | Skor: yardım | Reddet | Fark | Yardımın kazandırdığı koşu | Kaybettirdiği | Eşit | Medyan fark |
+|---|---|---|---|---|---|---|---|
+| **A** | 140.976₺ | 140.007₺ | **%0,7** | **56/60** | 4 | 0 | +1.025₺ |
+| **B** | 21.421₺ | 21.013₺ | %1,9 | 48/60 | 12 | 0 | +381₺ |
+| **B′** | 10.766₺ | 10.191₺ | %5,6 | 34/60 | 21 | 5 | +78₺ |
+| **C** | 4.041₺ | 3.885₺ | %4,0 | 32/60 | 17 | 11 | +5₺ |
+
+İtibar bilançosu ve geri ödeme (kariyer boyu):
+
+| Profil | Yardım: itibar **FİİLEN** | (nominal) | Geri ödeme (adet / ₺) | Reddet: itibar |
+|---|---|---|---|---|
+| **A** | **+22** | +353 | **34 / 4.467₺** | −466 |
+| B | +67 | +156 | 15 / 1.778₺ | −210 |
+| B′ | +45 | +87 | 6 / 568₺ | −110 |
+| C | +27 | +30 | 2 / 219₺ | −30 |
+
+**Yardımın net etkisi pozitif ve tutarlı**: A'da 56/60 eşleştirilmiş kazanç — gürültü değil, neredeyse kesin bir kazanç. Geri ödeme oranı 34/59 ziyaret = **%58**, `beggarReturnChance` 0,55 ile uyumlu.
+
+**Ama A için büyüklük küçük: skorun %0,7'si.** Geri ödeme "her iki yönde de anlamsız" sorununu çözdü (artık tavandan bağımsız 4.467₺ nakit var) ama kaldıraç 141k₺'lik bir skorun yanında ufak. Büyütmek için aritmetik hazır: `beggarReturnMul` 2,5 → ~5 getiriyi ~%3'e çıkarır, ya da `beggarChance` 0,30 → 0,60 ziyaret sayısını ikiye katlar. **İkisi de yapılmadı**: 5× geri ödeme "ilacı alamayan kişi" için anlatısal olarak zorlama, ziyaret sıklığını ikiye katlamak da oyunu bölen kesinti sayısını ikiye katlar. Karar bekliyor (bkz. 18).
+
+### 14.6 Geliştirme doyması (T4, A profili)
+Kariyer modelinde tüm geliştirmeler A profilinde medyan **11. günde** bitiyor. Kariyer modeli bunu **çözmedi ama önemini azalttı**: geliştirmeler 1. sezonda bitiyor, sonraki sezonlarda satın alınacak bir şey kalmıyor — ancak artık paranın gideceği bir yer var (**ruhsat bedeli**) ve o yer paranın tamamını düzenli olarak tüketiyor. Ayrıntı için bkz. 16.
+
+### 14.7 Oturum uzunluğu (T1, 10 sn/müşteri varsayımı — değişmedi)
 
 | Ölçü | Değer |
 |---|---|
@@ -653,30 +898,24 @@ Ortalama 15–20. günde tepe yapıp düşüyor. **Plato yok**, geç oyunda ger�
 | En uzun gece bloğu | 10 müşteri ≈ 1,7 dk |
 | En uzun tam gün (nöbet dahil, arada geçiş kartı var) | 36 müşteri ≈ 6,0 dk |
 
-Tavansız hâlde en uzun gün 87 müşteri ≈ **14,5 dk** idi.
+Dilenci ve borçlu bu bloklara **birer müşteri daha** ekleyebilir (günde en fazla ikisi birlikte +2), ama ikisi de tek dokunuşla kapanır.
 
-### 13.5 Tavan değeri seçimi (önceki tur, 60 runSeed)
-20, 26 ve 32 karşılaştırıldı:
+### 14.8 Zorluk eksenleri vs sezon uzunluğu (T1)
+Üç eksenin 30 günlük sezona uyumu ölçüldü:
 
-| Tavan | B′ hayatta | En uzun kesintisiz blok | Karar |
-|---|---|---|---|
-| yok (taban) | 14/60 (%23) | 66 müşteri ≈ 11,0 dk | ✗ |
-| 20 | 52/60 (%87) | 20 müşteri ≈ 3,3 dk | fazla güvenli |
-| **26** | **45/60 (%75)** | **26 müşteri ≈ 4,3 dk** | **seçildi** |
-| 32 | 43/60 (%72) | 32 müşteri ≈ 5,3 dk | bütçeyi aşıyor |
+| Eksen | Seyir | Sezon içinde doyuyor mu |
+|---|---|---|
+| İzinli hata (`missRate`) | 0,250 → 0,105 (g29) → **0,100 (g30)** | **tam son günde** ✓ |
+| Sahte oranı (gündüz) | 0,420 → 0,550 (g25) → **0,577 (g30)** | tavana (0,60) gün **35**'te varır → doymuyor ✓ |
+| Nöbet sıklığı | 4, 8, 12 → 18, 21, 24, 27, 30 | erken %20 → geç %33 ✓ |
 
-26 seçildi: kesintisiz blok 5 dakikalık bütçenin altında kalıyor, B′ profili tehlikeyi koruyor. 32, üstelik `missRate` tabana oturduktan **sonra** bağladığı için self-test uyarısı da veriyordu.
+`fakeChanceLateDay` (25) bir plato değil, **kalibrasyon noktası** — rampa aynı eğimle 30'a kadar sürer. Müşteri tavanı gün 10'da bağlanıyor, sonrasında hiçbir ekseni hareketsiz gün yok. **Gün 31 olsaydı `missRate` ilk kez düz kalacaktı** — 30 günlük sınır tam eğrilerin bittiği yerde duruyor.
 
-### 13.6 Geliştirme doyması (A profili)
-- Tüm geliştirmeler tamam: **60/60 koşuda, medyan gün 12** (min 9, max 13)
-- 30. gün kasası: medyan **41.872₺** (min 38.379 / max 48.117₺)
-- Son 5 günün kasa artışı: medyan **1.560₺/gün**
-
-Tavansız hâlde doyma gün 11'de ve 30. gün kasası 68.759₺ idi. Doyma **bir gün ötelendi ama kalkmadı**.
+Bir eksen ilerlemiyor: **gece sahte oranı 1. günden beri tavanda** (0,42 × 1,8 = 0,756 → `nightFakeRateCap` 0,60'a kırpılıyor), yani gecenin kompozisyonu 30 gün boyunca sabit. Bkz. 16.
 
 ---
 
-## 14. DENENİP REDDEDİLENLER
+## 15. DENENİP REDDEDİLENLER
 
 Bunlar tekrar denenmesin diye yazıldı. Her biri gerçekten uygulandı ve ölçüldü.
 
@@ -690,13 +929,25 @@ Bunlar tekrar denenmesin diye yazıldı. Her biri gerçekten uygulandı ve ölç
 
 **Vitrin'in reçeteli payını ham hâliyle artırması.** Vitrin'in yeni işlevi ilk hâlinde sadece `prescriptionChance`'ı yükseltiyordu. Reddedildi: reçetelilerin ~%51'i sahte ve sahtenin cirosu sıfır olduğu için bir reçeteli hastanın **beklenen** değeri semptomlunun 0,70 katı — Vitrin Lv3 R'yi **%4,2 düşürüyordu**, yani parası alınan ve ciroyu azaltan bir geliştirmeydi. Sahte seyreltmesi (`vitrinFakeDilution`) eklenerek düzeltildi; şimdi Lv3 R'yi **%5,9 artırıyor**.
 
+**Fiyat turunda payın ilaçlara serpilmesi.** Fiyat güncellemelerinin ilk hâlinde `priceUpdateShare` payı 39 ilaca **rastgele serpiliyordu**. Reddedildi: bir tur **8 kategoriye** dokunuyordu (ölçüldü) ve haber böyle olunca "her şey oynadı" demekle aynı şey oluyor — oyuncuya karar bırakmıyor, çünkü hazırlanacak bir hedef yok. Seçim **kategori kümeli** hâle getirildi (kota dolana kadar kategoriler bütün olarak eklenir); şimdi tur başına 2–3 kategori düşüyor ve "yarın Vitamin'e zam" haberi eyleme dönüştürülebilir bir bilgi. Bkz. 4.8.
+
+**Kariyer skorunu A profilinin CV'sini büyütmek için değiştirmek.** Kariyer skoru kümülatif olduğu için kusursuz oyuncular arasında dağılım daralıyor (%9 → %5, bkz. 16). Skoru "en iyi tek sezonun kazancı" ya da "peak × tamamlanan sezon" gibi toplamayan bir bileşime çevirmek düşünüldü. **Reddedildi**: optimize edilecek popülasyon gerçekte yok. %100 doğrulukla oynayan bot bir idealizasyon; ortalamanın en iyi çalıştığı ve dolayısıyla varyansın en çok söndüğü tek popülasyon da tam olarak o. Gerçek uzman oyuncuların bulunduğu bandın hemen altında, %85 oynayan B profilinde dağılım **zaten muazzam** (CV %44, en iyi/en kötü 8,71×, sezon 0–4). Skor tanımını olmayan bir popülasyon için bozmak, var olan popülasyonda çalışan bir ayrımı riske atmak olurdu.
+
 **Sabit yüzdeli konsantrasyon tavanı.** Tek hastanın günün cirosundaki payına sabit bir yüzde (ör. %15) tavanı denendi. Reddedildi: **az hastalı günlerde matematiksel olarak sağlanamıyor** — 6 geçerli hastalı bir günde kimsenin %15'in altında kalması imkânsızdır (en iyi ihtimalle herkes eşit olsa bile pay 1/6 = %16,7). Uygulama sonsuz döngüye giriyordu. Tavan **adil paya oranlı** hâle getirildi (`2.2 / validN`, [0.15, 0.40] arası) ve sağlanamayan günlerde (`validN ≤ 2`) hiç uygulanmıyor.
 
 ---
 
-## 15. BİLİNEN AÇIK KONULAR
+## 16. BİLİNEN AÇIK KONULAR
 
-**Geliştirme doyması.** Tüm geliştirmeler A profilinde medyan **12. günde** bitiyor (60/60 koşuda). Kalan 18 gün boyunca paranın harcanacağı yer yok; kasa 30. günde ~41.872₺'ye çıkıyor ve son 5 günde günde ~1.560₺ birikmeye devam ediyor. Tavan bu sorunu bir gün öteledi ama çözmedi. Yeni bir para gideri (personel, kira, ekipman bakımı, ceza/vergi) ya da geliştirme ağacının derinleştirilmesi gerekiyor.
+**(BÜYÜK ÖLÇÜDE ÇÖZÜLDÜ) Geliştirme doyması / paranın gideceği yer olmaması.** Tüm geliştirmeler A profilinde hâlâ medyan **11. günde** bitiyor, yani geliştirme ağacı 1. sezonda tükeniyor. Ama asıl şikâyet — "paranın harcanacağı yer yok, kasa sonsuza birikiyor" — **ruhsat yenileme bedeliyle çözüldü**: bedel geometrik büyüyor ve A profilinin 60/60 koşusunda kariyeri o bitiriyor (14.2). Para artık düzenli ve artan biçimde tüketiliyor.
+
+Kalan kısım: **geliştirme ağacının kendisi hâlâ sığ.** 2. sezondan itibaren satın alınacak hiçbir şey yok, geliştirme ekranı ölü bir menü hâline geliyor. Sezon başına yeni bir geliştirme katmanı (ya da sezonlar arası taşınan bir "eczane seviyesi") hâlâ eksik.
+
+**Kariyer skorunun kümülatif olması kusursuz oyuncular arasında ayrışmayı daraltıyor — yapısal, kabul edildi.** A profilinin kariyer skoru CV'si **%5** (en iyi/en kötü 1,27×); tek sezonluk modelde %9 / 1,58× idi. Sebep aritmetik: kariyer skoru ~7 sezonun toplamı ve toplama işlemi varyansı söndürüyor. Sezon başına CV %9 ise 7 sezonun toplamının CV'si ≈ %9/√7 = %3,4; gözlenen %5'in kalanı 6-vs-7 sezon eşiğinden geliyor.
+
+Taranan hiçbir bedel kombinasyonu ikisini birden vermedi: kariyeri kısaltmak CV'yi yükseltiyor (30.000/1,9 → A 3 sezon, CV %8) ama 6–10 hedefini deliyor; uzatmak CV'yi düşürüyor. **Kariyer uzunluğu ve skor genişliği bu skor tanımıyla aynı anda büyütülemiyor.** Kabul edildi çünkü (a) B profilinde dağılım zaten çok geniş (CV %44), (b) skor tanımını değiştirme fikri gerekçesiyle reddedildi (bkz. 15). Bir leaderboard'ın tepesinde kusursuz oyuncuların ±%13 bandında toplanacağı **bilinerek** kabul edilmiş bir maliyet.
+
+**Gecenin kompozisyon ekseni ilerlemiyor.** `nightFakeChance(day) = min(nightFakeRateCap 0.60, fakeChanceFor(day) × 1.8)` ve gün 1'de bile 0,42 × 1,8 = 0,756 tavanı aştığı için gece sahte oranı **1. günden 30. güne kadar sabit %60**. Gündüz tabanı %42 → %57,7 tırmanırken gece hiç kıpırdamıyor: nöbet geceleri geç oyunda daha sık geliyor (sıklık ekseni çalışıyor) ama **daha zor gelmiyor**. Düzeltmek için ya `nightFakeRateCap` yükseltilmeli ya `nightFakeRateBoost` düşürülüp rampaya alan açılmalı — ikisi de nöbetin zorluk profilini değiştirir, ölçülmeden yapılmamalı.
 
 **(ÇÖZÜLDÜ) Tezgahta 5+ ürün doktor defteriyle çakışıyordu.** Ürün tepsisi tamamen kaldırıldı; tezgah yüzeyinde yalnız defter ve PC kaldı. Ölçüldü (390×844): defter x[8–133], PC x[291–391] — kesişmiyorlar ve çakışacak üçüncü nesne yok.
 
@@ -708,30 +959,45 @@ Bunlar tekrar denenmesin diye yazıldı. Her biri gerçekten uygulandı ve ölç
 
 **Sepetin kalıcılığı test edilmedi.** Sepet hasta küsünce ve gün geçince temizleniyor (doğrulandı), ama oyuncu SATIŞ ekranını kapatıp DEVAM ET'e ya da menüye giderse sepetin ne olması gerektiği tasarım olarak kararlaştırılmadı. Şu an `startNewGame` temizliyor, menüye gidip DEVAM ET ile dönmek temizlemiyor — bilinçli bir karar değil, mevcut kodun yan etkisi.
 
-**Sabit %85 oynayan oyuncu hiç tehlikeye girmiyor.** B profili 60/60 çıkıyor ve 30 günün hiçbirinde itibar 25'in altına inmiyor. Kompozisyon eksenleri B′'yi (korelasyonlu kötü seriler) vuruyor ama i.i.d. %85'i vurmuyor: izinli hata gün 30'da bile hasta başına 0,10, yani 36 hastalık günde 3,6 hata hakkı var; %85 doğruluk beklenen 5,4 hataya karşılık geliyor, oyuncu hedefi **kaçırıyor** ama hedefi kaçırmanın cezası yok — sadece +3 itibardan mahrum kalıyor.
+**(KARİYER MODELİYLE DEĞİŞTİ) Sabit %85 oynayan oyuncu hiç tehlikeye girmiyor.** Tek sezonluk modelde B profili 60/60 çıkıyordu. Kariyer modelinde B **medyan 3 sezonda** bitiyor ve 60 koşunun 59'unda **bedelden** ölüyor — yani artık tehlikede, ama tehlike itibardan değil ekonomiden geliyor. Aşağıdaki teşhis itibar tarafı için hâlâ geçerli: Kompozisyon eksenleri B′'yi (korelasyonlu kötü seriler) vuruyor ama i.i.d. %85'i vurmuyor: izinli hata gün 30'da bile hasta başına 0,10, yani 36 hastalık günde 3,6 hata hakkı var; %85 doğruluk beklenen 5,4 hataya karşılık geliyor, oyuncu hedefi **kaçırıyor** ama hedefi kaçırmanın cezası yok — sadece +3 itibardan mahrum kalıyor.
 
 > Tek kaldıraç **hedefi kaçırmaya bir bedel koymaktır** ve bu **bilinçli olarak yapılmadı** (bkz. 5.2). Yapılırsa önce 4.2'deki miss-maliyeti harmanlaması yapılmalı: sahte hastanın "kaçırma maliyeti" gerçek hastanınkiyle aynı sayılmamalı, yoksa güvenlik bandına takılan %3,8'lik gün dilimi haksız yere cezalandırılır.
 
 ---
 
-## 16. Sıradaki İşler
+## 17. DÜZELTİLEN HATALAR
 
-1. **Geliştirme doymasına çözüm** — yeni para gideri ya da daha derin geliştirme ağacı. Açık konuların en somutu; ölçüm zaten hazır (13.6).
-2. **Yeni servis akışını cihazda görmek** — poşet animasyonu, karttan PC'ye uçuş ve PC sepet rozeti yalnız kodla doğrulandı; görünüş gerçek cihazda değerlendirilmeli. Aynı turda SATIŞ ekranının sığması için boot'a bir yerleşim denetimi eklenip eklenmeyeceğine karar verilmeli (bkz. 15).
-3. **Karar bekleyen: hedefe yaptırım.** Eklenecekse önce miss-maliyeti harmanlaması yapılmalı. Bu karar verilmeden sabit %85 oyuncusu tehlikeye girmez.
-4. **Capacitor ile iOS paketleme** — henüz hiç yapılmadı; gerçek cihazda oturum uzunluğu ve dokunma hedefi boyutları ölçülmeli (10 sn/müşteri varsayımı gerçek cihazda doğrulanmadı).
-5. **30 günden sonrası tanımsız.** Kampanya ufku 30 gün varsayımıyla dengelendi (`missRateFloorDay` 30, sahte rampası 25. günde doyuyor). 30. günden sonra hiçbir eksen ilerlemiyor — oyun orada bitiyor mu, döngüye mi giriyor, karar verilmedi.
+Bu turlarda bulunup düzeltilen, tekrar edilmemesi gereken üç hata. Üçü de **yeni bir sistem eklenirken var olan bir varsayımın sessizce bozulmasıyla** oluştu — hepsi ölçümle ya da self-test'le yakalandı, hiçbiri oyun sırasında görünür bir belirti vermiyordu.
+
+**`_dateDayOverride` penceresi R/C ölçümünden önce kapanıyordu.** `buildDaySchedule` günün hastalarını `_dateDayOverride = day` penceresi içinde üretiyor, sonra `finally` ile pencereyi kapatıyordu — ama R/C/`refRevenue` hesabı o `finally`'den **sonra** geliyordu. Fiyatlar sabitken bu fark görünmüyordu; fiyat güncellemeleri gelince konsantrasyon tavanı **o günün** fiyatıyla ölçülürken R/C **oynanan günün** fiyatıyla hesaplanmaya başladı ve ikisi birbirini tutmadı. Belirti: `verifyConcentrationCapAllTiers` gün 8'de "bir hasta R'nin %15,8'ini tutuyor, tavan %15,0" uyarısı verdi. Düzeltme: R/C döngüsü pencerenin içine alındı. **Ders:** `genDay()` okuyan her hesap aynı `_dateDayOverride` penceresinde olmak zorunda.
+
+**SGK alacaklarının vadesi sezona göreliydi.** `addReceivable` vadeyi `dueDay = game.dayNumber + medulaPayDelayDays` olarak yazıyor, `collectReceivables` ise `dueDay <= game.dayNumber` diye tahsil ediyor. Kariyer modelinde gün sayacı her sezon 1'e döndüğü için 31/32. güne yazılmış bir alacak bu koşulu **bir daha asla** sağlamıyor ve para sonsuza kadar askıda kalıyordu (defter denkliği bozulmuyordu, o yüzden sessizdi — oyuncu sadece hiç ödenmiyordu). Düzeltme: `beginSeason` her alacağın vadesini bir sezon geriye çekiyor (`max(1, dueDay − seasonDays)`) ve sezon başında `collectReceivables()` çağrılıyor. Aynı hata **dilenci geri ödeme defterinde** de olacaktı, aynı yerde aynı şekilde düzeltildi. Self-test 31. güne yazılı bir alacakla bunu denetliyor.
+
+**Medula defter sayaçları sezon başında sıfırlanınca denklik bozuluyordu.** `verifyMedulaLedger()` "yazılan = yatan + bekleyen" denkliğini kontrol ediyor. `medulaBooked`/`medulaCollected` sezon başında sıfırlanırsa, alacaklar sezonlar arası **devrettiği** için bekleyen tutar duruyor ama yazılan sıfırlanıyor ve denklik patlıyordu. Düzeltme: bu iki sayaç **kariyer ölçeğine** taşındı — yalnız `startNewCareer` sıfırlıyor. **Ders:** bir defterin sayaçları, defterin kendisiyle aynı ölçekte yaşamak zorunda.
 
 ---
 
-## 17. Çalışma Şekli
+## 18. Sıradaki İşler
+
+1. **Geliştirme ağacını derinleştirmek** — para gideri tarafı ruhsat bedeliyle çözüldü, ama 2. sezondan itibaren satın alınacak hiçbir şey kalmıyor ve geliştirme ekranı ölü bir menü oluyor (bkz. 16). Sezon başına yeni katman ya da sezonlar arası taşınan bir "eczane seviyesi".
+2. **Yeni servis akışını cihazda görmek** — poşet animasyonu, karttan PC'ye uçuş ve PC sepet rozeti yalnız kodla doğrulandı; görünüş gerçek cihazda değerlendirilmeli. Aynı turda SATIŞ ekranının sığması için boot'a bir yerleşim denetimi eklenip eklenmeyeceğine karar verilmeli (bkz. 16).
+3. **Karar bekleyen: hedefe yaptırım.** Eklenecekse önce miss-maliyeti harmanlaması yapılmalı. Bu karar verilmeden sabit %85 oyuncusu tehlikeye girmez.
+4. **Capacitor ile iOS paketleme** — henüz hiç yapılmadı; gerçek cihazda oturum uzunluğu ve dokunma hedefi boyutları ölçülmeli (10 sn/müşteri varsayımı gerçek cihazda doğrulanmadı).
+5. **(ÇÖZÜLDÜ) 30 günden sonrası tanımsızdı.** Sezon 30 günde biter, kariyer yeni bir sezonla devam eder (bkz. 2.1–2.3). Zorluk eğrileri tam 30. günde tamamlanıyor (14.8) ve sezon sınırı oraya oturtuldu.
+6. **Karar bekleyen: dilenci kaldıracının büyüklüğü.** Geri ödeme yardımı pozitif hâle getirdi ama A profilinde etki skorun yalnız %0,7'si. `beggarReturnMul` ya `beggarChance` büyütülecek mi — aritmetik ve gerekçeler 14.5'te.
+7. **Karar bekleyen: gecenin kompozisyon ekseni.** Gece sahte oranı 1. günden beri tavanda; nöbet geceleri geç oyunda sıklaşıyor ama zorlaşmıyor (bkz. 16). Düzeltme nöbetin zorluk profilini değiştirir, ölçülmeden yapılmamalı.
+8. **Leaderboard.** `seasonResult` (28 alan) ve `careerResult` (26 alan) hazır, JSON-serileşir, hiçbir yere gönderilmiyor. Gönderim, saklama ve gösterim tamamen yapılmadı.
+
+---
+
+## 19. Çalışma Şekli
 
 - Promptlar Claude Code'a (VS Code, Opus, high effort) verilir; sonu hep "Komple güncel index.html ver."
 - İterasyon döngüsü: prompt → test → ekran görüntüsü → geri bildirim
-- Denge değişiklikleri **ölçülerek** yapılır: headless harness + A/B/B′/C bot profilleri (bkz. 13.1). Değer oynatmadan önce ölç, oynattıktan sonra tekrar ölç.
+- Denge değişiklikleri **ölçülerek** yapılır: headless harness + A/B/B′/C bot profilleri (bkz. 14.1). Değer oynatmadan önce ölç, oynattıktan sonra tekrar ölç.
 - Git: her sağlam noktada `git add -A && git commit -m "..." && git push`
 
-## 18. Bilinen Teknik Riskler
+## 20. Bilinen Teknik Riskler
 
 - İlaç id'leri her zaman **string** olmalı — string/number uyumsuzluğu `sameMultiset`'i sessizce bozar.
 - Eşleşme her yerde **id/kategori string'i** üzerinden yapılır, asla nesne referansı üzerinden değil. `beginDaySchedule` sığ kopya verir (`request` paylaşılır); derin klona geçilirse "request oynanış sırasında değişmez" varsayımı gözden geçirilmeli.
