@@ -1,1 +1,7 @@
 .DS_Store
+node_modules/
+www/
+ios/App/Pods/
+ios/App/App/public/
+ios/App/Podfile.lock
+.claude/settings.local.json

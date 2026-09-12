@@ -16,7 +16,7 @@ Bu belge, projeyi hiç bilmeyen bir asistanın okuyup kaldığı yerden devam ed
 **Tek dosya**: `index.html` — 7.335 satır, HTML5 Canvas + vanilla JS, harici kütüphane yok, tüm CSS/JS inline. Yanında yalnız `assets/` klasörü (53 PNG) var.
 
 - 9:16 dikey mobil layout, `devicePixelRatio` retina desteği
-- Capacitor ile iOS paketleme planlı (henüz yapılmadı)
+- Capacitor ile iOS paketleme KURULDU — `ios/` Xcode projesi hazır (SPM, CocoaPods yok); ayrıntı: **IOS.md**. Gerçek cihazda çalıştırma henüz yapılmadı.
 - GitHub: `github.com/keremsakiz/eczaci`
 - State machine: `MENU / PLAYING / DAYEND / SEASONEND / CAREEREND` (eski `GAMEOVER` kaldırıldı — yerini bu iki bitiş ekranı aldı)
 - 60 FPS `requestAnimationFrame` döngüsü; `update(dt)` ve `render()` ayrı
@@ -982,7 +982,7 @@ Bu turlarda bulunup düzeltilen, tekrar edilmemesi gereken üç hata. Üçü de 
 1. **Geliştirme ağacını derinleştirmek** — para gideri tarafı ruhsat bedeliyle çözüldü, ama 2. sezondan itibaren satın alınacak hiçbir şey kalmıyor ve geliştirme ekranı ölü bir menü oluyor (bkz. 16). Sezon başına yeni katman ya da sezonlar arası taşınan bir "eczane seviyesi".
 2. **Yeni servis akışını cihazda görmek** — poşet animasyonu, karttan PC'ye uçuş ve PC sepet rozeti yalnız kodla doğrulandı; görünüş gerçek cihazda değerlendirilmeli. Aynı turda SATIŞ ekranının sığması için boot'a bir yerleşim denetimi eklenip eklenmeyeceğine karar verilmeli (bkz. 16).
 3. **Karar bekleyen: hedefe yaptırım.** Eklenecekse önce miss-maliyeti harmanlaması yapılmalı. Bu karar verilmeden sabit %85 oyuncusu tehlikeye girmez.
-4. **Capacitor ile iOS paketleme** — henüz hiç yapılmadı; gerçek cihazda oturum uzunluğu ve dokunma hedefi boyutları ölçülmeli (10 sn/müşteri varsayımı gerçek cihazda doğrulanmadı).
+4. **Capacitor ile iOS paketleme** — proje tarafı BİTTİ (bkz. IOS.md): `build.js` yayın derlemesi (ADMIN blok silinir, debugDecisions kapanır), güvenli alan desteği, Info.plist yaması, ikon + açılış ekranı, `ios/` Xcode projesi. KALAN: Mac'te `npm run ios` → imzalama → gerçek cihazda çalıştırma ve IOS.md §9'daki altı ölçüm (oturum uzunluğu ve dokunma hedefi boyutları dahil; 10 sn/müşteri varsayımı hâlâ doğrulanmadı).
 5. **(ÇÖZÜLDÜ) 30 günden sonrası tanımsızdı.** Sezon 30 günde biter, kariyer yeni bir sezonla devam eder (bkz. 2.1–2.3). Zorluk eğrileri tam 30. günde tamamlanıyor (14.8) ve sezon sınırı oraya oturtuldu.
 6. **Karar bekleyen: dilenci kaldıracının büyüklüğü.** Geri ödeme yardımı pozitif hâle getirdi ama A profilinde etki skorun yalnız %0,7'si. `beggarReturnMul` ya `beggarChance` büyütülecek mi — aritmetik ve gerekçeler 14.5'te.
 7. **Karar bekleyen: gecenin kompozisyon ekseni.** Gece sahte oranı 1. günden beri tavanda; nöbet geceleri geç oyunda sıklaşıyor ama zorlaşmıyor (bkz. 16). Düzeltme nöbetin zorluk profilini değiştirir, ölçülmeden yapılmamalı.

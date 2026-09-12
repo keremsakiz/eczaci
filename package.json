@@ -1,0 +1,32 @@
+{
+  "name": "eczaci",
+  "version": "0.1.0",
+  "description": "Eczacı — Türk eczane simülasyonu (HTML5 Canvas, iOS/Capacitor)",
+  "scripts": {
+    "build": "node build.js",
+    "build:dev": "node build.js --dev",
+    "test": "node build.js && node tools/boot-test.js index.html && node tools/boot-test.js www/index.html",
+    "sync": "node build.js && npx cap sync ios",
+    "ios": "node build.js && npx cap sync ios && npx cap open ios",
+    "ios:init": "node build.js && npx cap add ios && node tools/ios-prep.js && npx cap sync ios"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/keremsakiz/eczaci.git"
+  },
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/keremsakiz/eczaci/issues"
+  },
+  "homepage": "https://github.com/keremsakiz/eczaci#readme",
+  "devDependencies": {
+    "@capacitor/cli": "^8.5.2",
+    "jsdom": "^30.0.1"
+  },
+  "dependencies": {
+    "@capacitor/core": "^8.5.2",
+    "@capacitor/ios": "^8.5.2"
+  },
+  "private": true
+}
