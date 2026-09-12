@@ -285,13 +285,14 @@ function parseArgs(argv) {
     else if (a === "--no-news") o.news = false;
     else if (a === "--no-help") o.help = false;
     else if (a === "--json") o.json = argv[++i];
+    else if (a === "--compare") o.compare = argv[++i];      // "help" | "news"
     else if (a === "--file") o.file = argv[++i];
   }
   return o;
 }
 
 function run(opts) {
-  const { window: w, G, logs } = loadGame({ file: opts.file });
+  const { window: w, G, logs, dom } = loadGame({ file: opts.file });
   // CONFIG override — taban ekonomisi (avgPrice/avgCost, startMoney, geliştirme fiyatları)
   // MEDICINES'ten bir kez türetildiği ve dondurulduğu için buradaki değişiklikler
   // yalnız RUNTIME davranışını etkiler. Gün cache'i temizlenir.
@@ -311,6 +312,9 @@ function run(opts) {
     for (let i = 0; i < opts.seeds; i++) rows.push(runCareer(w, G, prof, 1000 + i * 7919, bot));
     out[key] = rows;
   }
+  // jsdom penceresi kapatılmazsa her run() bir DOM'u bellekte bırakır; tarama
+  // (tools/sweep.js) onlarca run() çağırdığı için bu sızıntı heap'i patlatıyordu.
+  try { dom.window.close(); } catch (e) { /* kapanmadıysa da ölçüm bitti */ }
   return { out, warnings: logs.warn, config: opts };
 }
 
@@ -339,13 +343,55 @@ function report(r) {
   }
 }
 
+/**
+ * EŞLEŞTİRİLMİŞ KARŞILAŞTIRMA — aynı tohumlar, tek fark bir politika anahtarı.
+ * Ortalama farkı değil, KOŞU BAŞINA farkı sayar: gürültüde kaybolan bir etkiyle
+ * küçük ama tutarlı bir etkiyi ayırt eden şey budur.
+ */
+function compare(opts, key) {
+  const onOpts  = Object.assign({}, opts, { [key]: true });
+  const offOpts = Object.assign({}, opts, { [key]: false });
+  const on = run(onOpts), off = run(offOpts);
+  const label = key === "help" ? ["yardım", "reddet"] : ["haber var", "haber yok"];
+  console.log(`\nEŞLEŞTİRİLMİŞ: ${label[0]} vs ${label[1]} — ${opts.seeds} tohum, aynı tohumlar`);
+  console.log("─".repeat(96));
+  console.log("prof │ " + label[0].padEnd(11) + "│ " + label[1].padEnd(11) +
+              "│ fark   │ kazandıran/kaybettiren/eşit │ medyan fark │ sezon");
+  console.log("─".repeat(96));
+  for (const k in on.out) {
+    const a = on.out[k], b = off.out[k];
+    const ma = stats(a.map(x => x.score)).mean, mb = stats(b.map(x => x.score)).mean;
+    let win = 0, lose = 0, tie = 0;
+    const diffs = [];
+    for (let i = 0; i < a.length; i++) {
+      const d = a[i].score - b[i].score;
+      diffs.push(d);
+      if (d > 0) win++; else if (d < 0) lose++; else tie++;
+    }
+    const md = stats(diffs).med;
+    const sa = stats(a.map(x => x.seasons)).med, sb = stats(b.map(x => x.seasons)).med;
+    console.log(`${k.padEnd(4)} │ ${TL(ma).padStart(10)} │ ${TL(mb).padStart(10)} │ ` +
+                `${(mb ? ((ma - mb) / mb * 100) : 0).toFixed(1).padStart(5)}% │ ` +
+                `${String(win).padStart(3)}/${String(lose).padStart(3)}/${String(tie).padStart(3)}`.padEnd(28) +
+                `│ ${TL(md).padStart(10)}  │ ${sa} / ${sb}`);
+  }
+  console.log("─".repeat(96));
+  return { on, off };
+}
+
 if (require.main === module) {
   const opts = parseArgs(process.argv);
   const t0 = Date.now();
+  if (opts.compare) {
+    const { on, off } = compare(opts, opts.compare);
+    if (opts.json) require("fs").writeFileSync(opts.json, JSON.stringify({ on: on.out, off: off.out }));
+    console.log(`\nsüre: ${((Date.now() - t0) / 1000).toFixed(1)} sn`);
+    process.exit(0);
+  }
   const r = run(opts);
   report(r);
   console.log(`\nsüre: ${((Date.now() - t0) / 1000).toFixed(1)} sn`);
   if (opts.json) require("fs").writeFileSync(opts.json, JSON.stringify(r.out, null, 1));
 }
 
-module.exports = { run, runCareer, stats, PROFILES, loadGame };
+module.exports = { run, runCareer, compare, stats, PROFILES, loadGame };

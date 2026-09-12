@@ -140,10 +140,19 @@ const CONFIG = {
   // tavanından BAĞIMSIZ, nakit bir karşılığı olsun. Yardım edilen dilenci birkaç gün sonra
   // BORCUNU ÖDEYEN bir müşteri olarak geri dönebilir. Garantili değil, ihtimalli.
   // REDDEDİLEN dilenci asla geri dönmez.
-  beggarReturnChance: 0.55,     // yardım edilen dilencinin geri dönme ihtimali
+  // KALDIRAÇ KALİBRASYONU (ölçüldü, 40 tohum, eşleştirilmiş yardım-vs-reddet):
+  // ilk hâlinde (0.55 / ×2.5) yardımın A profiline getirisi skorun yalnız %0,7'siydi —
+  // pozitif ama kaldıraçsız. Izgara taraması iki ucu da gösterdi: ×4.5'te getiri %4,7'ye
+  // çıkıyor ama "ilacı alamayan kişi" için dört buçuk kat geri ödeme anlatısal olarak
+  // zorlama; ihtimali 0.90 yapmak ise sistemin belkemiği olan BELİRSİZLİĞİ siliyor
+  // (garantili geri ödeme artık bir karar değil, gecikmeli bir gelir). Seçilen orta nokta
+  // 0.75 / ×3.5: getiri A %2,6 · B %6,5, dörtte bir borçlu hâlâ hiç dönmüyor.
+  // ZİYARET SIKLIĞINA (beggarChance) DOKUNULMADI: onu büyütmek oyunu bölen kesinti
+  // sayısını büyütür. Geri ödeme ziyareti tek butonluk bir ödül, en ucuz kesinti biçimi.
+  beggarReturnChance: 0.75,     // yardım edilen dilencinin geri dönme ihtimali
   beggarReturnDelayMin: 2,      // en erken kaç gün sonra
   beggarReturnDelayMax: 5,      // en geç kaç gün sonra
-  beggarReturnMul: 2.5,         // bıraktığı ödeme = verilenin değeri × bu (1'den büyük olmalı)
+  beggarReturnMul: 3.5,         // bıraktığı ödeme = verilenin değeri × bu (1'den büyük olmalı)
 
   // --- KARİYER ---
   // Oyun tek sezonluk bir koşu DEĞİL, sezonlardan oluşan bir KARİYERdir.
