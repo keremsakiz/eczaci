@@ -152,14 +152,23 @@ function morning(w, G, bot) {
   // 3) Geliştirme: yalnız rezervin ÜSTÜNDEKİ fazladan. Sezonun son 3 gününde rezerve
   //    sonraki sezonun ruhsat bedeli de eklenir (yoksa geliştirmeye harcanan para
   //    kariyeri bitirir).
-  let reserve = 20 * G.__avgCost;
-  if (day > C.seasonDays - 3) reserve += w.nextSeasonFee();
+  // REZERV = işletme yastığı + sezon boyunca ORANTILI biriken ruhsat bedeli payı.
+  // Eskiden bedel yalnız son 3 günde rezerve ediliyordu; İŞLETME katmanı gelince bu
+  // politika B profilini batırdı (sezon ortasında 12.700₺'lik kalemi alıp bedele
+  // parasız kalıyordu) ve "katman tuzak mı" sorusunu botun kendi hatası gölgeledi.
+  // Gerçek oyuncu bedelin geldiğini bilir ve sezon ilerledikçe daha çok tutar.
+  const feeShare = Math.min(1, day / C.seasonDays);
+  const reserve = 20 * G.__avgCost + w.nextSeasonFee() * feeShare;
   let guard = 0;
   while (guard++ < 50) {
     let best = null, bestCost = Infinity;
     for (const u of G.UPGRADES) {
       const cur = w.upgradeLevel(u.id);
       if (cur >= u.maxLevel) continue;
+      // İŞLETME katmanı sezonla açılır; kilitli kalemi atla (buyUpgrade zaten reddeder,
+      // ama en ucuz kalem kilitliyse döngü boşuna kırılırdı).
+      if (w.upgradeUnlocked && !w.upgradeUnlocked(u.id)) continue;
+      if (!bot.tier2 && (u.tier || 1) >= 2) continue;          // İŞLETME katmanını hiç alma
       const cost = w.upgradeCost(u.id, cur + 1);
       if (cost < bestCost) { bestCost = cost; best = u; }
     }
@@ -284,8 +293,8 @@ const PC = n => (n * 100).toFixed(0) + "%";
 
 // ---------------------------------------------------------------- ana akış
 function parseArgs(argv) {
-  const o = { seeds: 20, profiles: ["A", "B", "B'", "C"], set: {}, news: true, help: true, json: null,
-              file: "index.html" };
+  const o = { seeds: 20, profiles: ["A", "B", "B'", "C"], set: {}, news: true, help: true, tier2: true,
+              json: null, file: "index.html" };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--seeds") o.seeds = parseInt(argv[++i], 10);
@@ -293,6 +302,7 @@ function parseArgs(argv) {
     else if (a === "--set") { const [k, v] = argv[++i].split("="); o.set[k] = parseFloat(v); }
     else if (a === "--no-news") o.news = false;
     else if (a === "--no-help") o.help = false;
+    else if (a === "--no-tier2") o.tier2 = false;
     else if (a === "--json") o.json = argv[++i];
     else if (a === "--compare") o.compare = argv[++i];      // "help" | "news"
     else if (a === "--file") o.file = argv[++i];
@@ -312,7 +322,7 @@ function run(opts) {
   w.invalidateDaySchedules();
   G.__avgCost = G.MEDICINES.reduce((a, m) => a + m.cost, 0) / G.MEDICINES.length;
 
-  const bot = { help: opts.help, useNews: opts.news };
+  const bot = { help: opts.help, useNews: opts.news, tier2: opts.tier2 !== false };
   const out = {};
   for (const key of opts.profiles) {
     const prof = PROFILES[key];
@@ -361,7 +371,9 @@ function compare(opts, key) {
   const onOpts  = Object.assign({}, opts, { [key]: true });
   const offOpts = Object.assign({}, opts, { [key]: false });
   const on = run(onOpts), off = run(offOpts);
-  const label = key === "help" ? ["yardım", "reddet"] : ["haber var", "haber yok"];
+  const label = key === "help" ? ["yardım", "reddet"]
+              : key === "news" ? ["haber var", "haber yok"]
+              : key === "tier2" ? ["katman var", "katman yok"] : [key + " açık", key + " kapalı"];
   console.log(`\nEŞLEŞTİRİLMİŞ: ${label[0]} vs ${label[1]} — ${opts.seeds} tohum, aynı tohumlar`);
   console.log("─".repeat(96));
   console.log("prof │ " + label[0].padEnd(11) + "│ " + label[1].padEnd(11) +
