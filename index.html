@@ -70,8 +70,8 @@ const CONFIG = {
   // --- Sahte oranı GÜN NUMARASINA bağlı rampa ---
   // Sabit 0.42, gün 11'den sonra ilerlemeyen eksenlerden biriydi. Artık gün 1'de
   // fakeChance, fakeChanceLateDay'de fakeChanceLate; ikisinin arası doğrusal, üstü
-  // fakeChanceMax'ta durur. GECE yolu değişmedi: aynı çarpan (nightFakeRateBoost) ve
-  // aynı tavan (nightFakeRateCap), sadece çarptığı taban artık güne duyarlı.
+  // fakeChanceMax'ta durur. GECE bunun üstüne kendi rampasıyla eklenir — bkz.
+  // nightFakeBonusEarly / nightFakeBonusLate.
   fakeChance: 0.42,             // GÜN 1 sahte olma ihtimali (inceleme mekaniği devreye girsin)
   fakeChanceLate: 0.55,         // fakeChanceLateDay'de ulaşılan oran
   fakeChanceLateDay: 25,        // rampanın fakeChanceLate'e vardığı gün
@@ -232,8 +232,17 @@ const CONFIG = {
   nightDutyLateFromDay: 16,    // sıklığın arttığı gün
   nightPatientRatio: 0.4,      // gündüz müşteri sayısının oranı; taban 3
   nightPatientMin: 3,          // gece en az bu kadar hasta
-  nightFakeRateBoost: 1.8,     // gece sahte reçete oranı çarpanı
-  nightFakeRateCap: 0.60,      // …ama bu tavanı aşmaz (gecede bile ≥ %40 gerçek)
+  // GECE SAHTE ORANI — ÇARPAN DEĞİL, KENDİ RAMPASI.
+  // Eski hâl çarpandı (×1.8) ve gün 1'de bile 0.42×1.8 = 0.756 tavanı aştığı için gece
+  // oranı 30 gün boyunca tavanda sabit kalıyordu: nöbet geç oyunda daha SIK geliyor ama
+  // daha ZOR gelmiyordu. Şimdi gece, gündüz rampasının ÜSTÜNE eklenen bir farktır ve
+  // fark da sezon boyunca büyür; böylece gece hep gündüzden zor kalır (fark ≥ Early > 0)
+  // ve tavan ancak son günlerde yaklaşır.
+  nightFakeBonusEarly: 0.08,   // gün 1'de gece, gündüzün bu kadar üstünde
+  nightFakeBonusLate: 0.18,    // son günde bu kadar üstünde (arası doğrusal)
+  nightFakeRateCap: 0.78,      // mutlak tavan
+  nightMinRealRxShare: 0.20,   // gecede reçetelerin en az bu kadarı GERÇEK kalmalı
+                               // (self-test 1 − nightFakeRateCap ≥ bu şartını denetler)
   nightPriceMultiplier: 1.25,  // nöbet farkı — YALNIZ gece hastalarının satış fiyatına
   nightPatienceMultiplier: 1.2,// gece hastası daha sabırlı (gidecek başka yeri yok)
   nightIntroDuration: 2.2,     // "NÖBET BAŞLIYOR" kartının otomatik kapanma süresi (sn)
@@ -1144,9 +1153,17 @@ function fakeChanceFor(day) {
   const step = (CONFIG.fakeChanceLate - CONFIG.fakeChance) / d0;
   return Math.min(CONFIG.fakeChanceMax, CONFIG.fakeChance + (day - 1) * step);
 }
-// gece sahte reçete ihtimali — ÇARPAN VE TAVAN DEĞİŞMEDİ, yalnız çarptığı taban güne duyarlı
+// Gecenin gündüze göre FAZLASI — sezon boyunca doğrusal büyür (Early → Late).
+// Çarpan yerine fark kullanılmasının sebebi: çarpan taban rampasını ölçekleyip tavana
+// yapıştırıyordu, fark ise tabanın üstünde kendi eğrisini korur.
+function nightFakeBonusFor(day) {
+  const d0 = Math.max(1, CONFIG.seasonDays - 1);
+  const t = clamp((day - 1) / d0, 0, 1);
+  return lerp(CONFIG.nightFakeBonusEarly, CONFIG.nightFakeBonusLate, t);
+}
+// gece sahte reçete ihtimali = gündüz rampası + gece farkı, tavanla sınırlı
 function nightFakeChance(day) {
-  return Math.min(CONFIG.nightFakeRateCap, fakeChanceFor(day) * CONFIG.nightFakeRateBoost);
+  return Math.min(CONFIG.nightFakeRateCap, fakeChanceFor(day) + nightFakeBonusFor(day));
 }
 // günün TOPLAM hasta sayısı (gündüz + gece)
 function totalPatientsFor(day) { return patientLimitFor(day) + nightPatientsFor(day); }
@@ -6269,7 +6286,9 @@ window.cheats = {
       listed++;
     }
     console.log("Nöbet: her " + CONFIG.nightDutyEvery + ". gün | gece oranı " + CONFIG.nightPatientRatio +
-      " (taban " + CONFIG.nightPatientMin + ") | gece sahte ihtimali " + nightFakeChance().toFixed(3) +
+      " (taban " + CONFIG.nightPatientMin + ") | gece sahte: gün 1 " +
+      nightFakeChance(1).toFixed(3) + " → gün " + CONFIG.seasonDays + " " +
+      nightFakeChance(CONFIG.seasonDays).toFixed(3) +
       " (tavan " + CONFIG.nightFakeRateCap + ") | nöbet farkı ×" + CONFIG.nightPriceMultiplier);
     console.table(rows);
     return rows;
@@ -6883,6 +6902,19 @@ function selfTestPatientsInner(days) {
         warn.push("gün " + d + ": gece sahte oranı nightFakeRateCap'i aştı");
       if (nightFakeChance(d) < fakeChanceFor(d) - 1e-9)
         warn.push("gün " + d + ": gece sahte oranı gündüzün altına düştü");
+      if (d > 1 && nightFakeChance(d) < nightFakeChance(d - 1) - 1e-9)
+        warn.push("gün " + d + ": gece sahte oranı bir önceki günden AZALDI");
+    }
+    // GECE KOMPOZİSYON EKSENİ İLERLEMELİ. Eski çarpanlı hâlde gece oranı 1. günden
+    // beri tavandaydı ve bu kontrol olsaydı o hatayı yakalardı — o yüzden buraya kondu.
+    const nFirst = nightFakeChance(1), nLast = nightFakeChance(LAST);
+    if (!(nLast > nFirst + 1e-9))
+      warn.push("gece sahte oranı sezon boyunca ilerlemiyor (gün 1 " + nFirst.toFixed(3) +
+                " → gün " + LAST + " " + nLast.toFixed(3) + ") — nöbet sıklaşıyor ama zorlaşmıyor");
+    // Gece hep gündüzden zor olmalı (fark hiçbir gün kapanmamalı)
+    for (let d = 1; d <= LAST; d++) {
+      if (nightFakeChance(d) <= fakeChanceFor(d) + 1e-9)
+        warn.push("gün " + d + ": gece ile gündüz sahte oranı eşitlendi — nöbetin farkı kalmadı");
     }
 
     // (v) NÖBET SIKLIĞI geç oyunda artmalı (aynı uzunlukta pencerede daha çok nöbet)
@@ -7248,8 +7280,11 @@ function selfTestPatientsInner(days) {
   // 0e) NÖBET kuralları
   if (nightFakeChance() > CONFIG.nightFakeRateCap + 1e-9)
     warn.push("Gece sahte oranı tavanı aşıyor: " + nightFakeChance().toFixed(3) + " > " + CONFIG.nightFakeRateCap);
-  if (CONFIG.nightFakeRateCap > 0.6 + 1e-9)
-    warn.push("Gece sahte tavanı %60'ı aşıyor — gecede en az %40 gerçek reçete kalmalı");
+  // Gece pür "reddet" bloğuna dönüşmesin: tavan, gerçek reçete payı tabanını delmemeli.
+  if (1 - CONFIG.nightFakeRateCap < CONFIG.nightMinRealRxShare - 1e-9)
+    warn.push("Gece sahte tavanı çok yüksek: gerçek reçete payı %" +
+      Math.round((1 - CONFIG.nightFakeRateCap) * 100) + " < taban %" +
+      Math.round(CONFIG.nightMinRealRxShare * 100));
   for (let d = 1; d <= days; d++) {
     const sch = getDaySchedule(d);
     const nightPs = sch.patients.filter(p => p.night);
