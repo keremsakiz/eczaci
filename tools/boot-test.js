@@ -1,59 +1,16 @@
 /**
- * Headless boot testi — index.html'i jsdom içinde gerçekten çalıştırır.
- * Canvas 2D bağlamı stub'lanır (jsdom çizim yapamaz); amaç ÇİZİM değil,
- * boot self-test'lerinin uyarı basıp basmadığını görmek.
+ * Headless boot testi — index.html'i jsdom içinde gerçekten çalıştırır (tools/gamevm.js).
+ * Amaç ÇİZİM değil: boot self-test'lerinin uyarı basıp basmadığını görmek.
  *
  *   node tools/boot-test.js [dosya]     (varsayılan: index.html)
  */
 const fs = require("fs");
 const path = require("path");
-const { JSDOM, VirtualConsole } = require("jsdom");
+const { loadGame } = require("./gamevm.js");
 
 const file = process.argv[2] || "index.html";
-const html = fs.readFileSync(path.join(__dirname, "..", file), "utf8");
-
-// --- 2D bağlam stub'ı: her çağrıyı yutar, ölçüm çağrılarına makul değer döner
-function stubCtx() {
-  const target = {
-    canvas: null, measureText: (t) => ({
-      width: (t || "").length * 7,
-      actualBoundingBoxLeft: 0, actualBoundingBoxRight: (t || "").length * 7,
-      actualBoundingBoxAscent: 10, actualBoundingBoxDescent: 3
-    }),
-    createLinearGradient: () => ({ addColorStop() {} }),
-    createRadialGradient: () => ({ addColorStop() {} }),
-    createPattern: () => null,
-    getImageData: () => ({ data: new Uint8ClampedArray(4) }),
-    isPointInPath: () => false
-  };
-  return new Proxy(target, {
-    get(o, k) { return k in o ? o[k] : () => undefined; },
-    set(o, k, v) { o[k] = v; return true; }
-  });
-}
-
-const vc = new VirtualConsole();
-const logs = { warn: [], error: [], log: [] };
-vc.on("jsdomError", e => logs.error.push("[jsdomError] " + (e && e.message)));
-["warn", "error", "log"].forEach(lvl => vc.on(lvl, (...a) => logs[lvl].push(a.map(String).join(" "))));
-
-const dom = new JSDOM(html, {
-  runScripts: "dangerously", pretendToBeVisual: true, virtualConsole: vc,
-  beforeParse(w) {
-    w.HTMLCanvasElement.prototype.getContext = function () { const c = stubCtx(); c.canvas = this; return c; };
-    w.devicePixelRatio = 3;
-    Object.defineProperty(w, "innerWidth",  { value: 390, configurable: true });
-    Object.defineProperty(w, "innerHeight", { value: 844, configurable: true });
-    // Image: yükleme başarısız sayılır → oyun emoji fallback yoluna düşer (güvenlik ağı)
-    class FakeImage {
-      constructor() { this.complete = false; this.naturalWidth = 0; this.naturalHeight = 0; }
-      set src(v) { this._src = v; setTimeout(() => this.onerror && this.onerror(new Error("stub")), 0); }
-      get src() { return this._src; }
-      addEventListener(t, f) { if (t === "error") this.onerror = f; }
-    }
-    w.Image = FakeImage;
-  }
-});
+const { window: dw, logs, G } = loadGame({ file, animate: true });
+const dom = { window: dw };
 
 setTimeout(() => {
   const w = dom.window;
