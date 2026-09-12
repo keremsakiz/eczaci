@@ -85,7 +85,7 @@ function wrongList(G, ids) {
 
 // ---------------------------------------------------------------- sabah rutini
 /** Hedef stoğa kadar sipariş ver; para bittiğinde durur. Rezerv UYGULANMAZ. */
-function buyToTarget(w, G, need, factor, onlyIds) {
+function buyToTarget(w, G, need, factor, onlyIds, floor) {
   const g = G.game, maxS = w.effMaxStock();
   const ids = Object.keys(need).sort((a, b) => need[b] - need[a]);
   g.depotPending = {};
@@ -96,8 +96,9 @@ function buyToTarget(w, G, need, factor, onlyIds) {
     if (gap > 0) g.depotPending[id] = gap;
   }
   // Bütçeye sığdır: en pahalı kalemden kırparak sepeti küçült.
+  const budget = Math.max(0, g.money - (floor || 0));
   let guard = 0;
-  while (w.depotOrderTotal() > g.money && guard++ < 5000) {
+  while (w.depotOrderTotal() > budget && guard++ < 5000) {
     let worst = null, worstCost = -1;
     for (const id in g.depotPending) {
       if (!g.depotPending[id]) continue;
@@ -128,6 +129,9 @@ function morning(w, G, bot) {
   //    satılacak miktarın %20'si kadar fazladan al. Sezonun son 2 gününde HİÇ alma —
   //    devredilemeyen stok yakılmış nakittir… ama stok sezonlar arası DEVREDER, o yüzden
   //    yalnız kariyerin son sezonu bilinmediğinden sezon sonu kısıtı uygulanmaz.
+  // Fırsat alımı YALNIZ rezervin üstündeki nakitle yapılır (bedel önce gelir).
+  const feeShare0 = Math.min(1, day / C.seasonDays);
+  const aheadFloor = 20 * G.__avgCost + w.nextSeasonFee() * feeShare0;
   if (bot.useNews) {
     const round = w.priceRoundOn(day + 1);
     if (round) {
@@ -138,12 +142,16 @@ function morning(w, G, bot) {
         for (const id in need) {
           const m = w.getMedicine(id);
           if (!m || upCats.indexOf(m.category) < 0) continue;
-          ahead[id] = Math.ceil(need[id] * horizon * 0.20);
+          // Bir sonraki tura kadar satılacak miktarın bir payı. Tam ufuk denendi ve
+          // ÇOK DAHA KÖTÜ çıktı (B −%27): nakit stoğa bağlanınca ruhsat bedeli
+          // ödenemiyor ve skor = peak kasa olduğu için zirve de düşüyor. Ucuz stok
+          // ancak ARTAN nakitle alınır — aşağıdaki `reserve` tabanı bunu zorluyor.
+          ahead[id] = Math.ceil(need[id] * horizon * 0.5);
         }
         if (Object.keys(ahead).length) {
           const combined = {};
           for (const id in ahead) combined[id] = (g.stock[id] || 0) + ahead[id];
-          buyToTarget(w, G, combined, 1, Object.keys(ahead));
+          buyToTarget(w, G, combined, 1, Object.keys(ahead), aheadFloor);
         }
       }
     }
