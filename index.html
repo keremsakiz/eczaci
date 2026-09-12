@@ -1104,6 +1104,23 @@ const CONFIG = {
   // işliyordu: oyuncu iyi oynasa bile yastık biriktiremiyordu. Bu, gün ÖLÇEĞİNDE bir
   // tampon verir. Hedefi KAÇIRMAK hâlâ hiçbir ceza getirmez (bilinçli tasarım kararı).
   goalMetReputation: 3,     // hedef tutturulan günün sonunda itibar artışı
+  // HEDEFİ KAÇIRMANIN BEDELİ — ÜST ÜSTE kaçırmaya bağlı, tek güne değil.
+  // Uzun süre bedelsizdi ve DURUM.md'de açık konu olarak duruyordu: sabit %85 oynayan
+  // oyuncu hedefi kaçırıyor ama hiçbir şey olmuyordu, yani gün ölçeğinde tehlike yoktu.
+  // Tek güne ceza koymak yanlış olurdu — kötü gün oyunun parçası ve hedef zaten sahte
+  // ağırlıklı günlerde oynak. Cezalandırılan şey KRONİK düşük performans: ilk kaçırma
+  // bedava (grace), sonrakiler kademe kademe artar ve tavanda durur. Tutturan gün
+  // sayacı SIFIRLAR — yani ceza birikmez, seri kırılınca biter.
+  goalMissGraceDays: 1,     // ilk bu kadar ÜST ÜSTE kaçırma cezasız
+  goalMissRepStep: 3,       // sonraki her üst üste kaçırma bu kadar itibar götürür
+  goalMissRepMax: 9,        // ...ama tek günde bu kadarı aşmaz
+  // Aynı seri sayacına bağlı PARA kalemi: açığın bu oranı kasadan düşer (0 = kapalı).
+  // Ayrı bir para birimi olmasının sebebi ölçümle bulundu (bkz. DURUM.md): itibar
+  // ekonomisi yüksek doğruluklu oyuncuda DOYMUŞ durumda — günde ~22 doğru servis brüt
+  // +44 itibar getirirken tek günlük −9'luk ceza gürültüde kalıyor. İtibar cezası
+  // korelasyonlu kötü serileri (B′) ve zayıf oyuncuyu (C) vuruyor, ama sabit %85'i
+  // vuramıyor. Para, o oyuncunun gerçekten öldüğü eksen.
+  goalMissMoneyShare: 0,    // açığın kasadan düşülen oranı (0 = kapalı)
 
   // --- Yumuşak itibar tavanı ---
   // Sert 100 tavanı, tavana çarpan kazancı tamamen yok ediyordu; kayıplar ise her zaman
@@ -1119,8 +1136,8 @@ const CONFIG = {
   // --- Sahte oranı GÜN NUMARASINA bağlı rampa ---
   // Sabit 0.42, gün 11'den sonra ilerlemeyen eksenlerden biriydi. Artık gün 1'de
   // fakeChance, fakeChanceLateDay'de fakeChanceLate; ikisinin arası doğrusal, üstü
-  // fakeChanceMax'ta durur. GECE yolu değişmedi: aynı çarpan (nightFakeRateBoost) ve
-  // aynı tavan (nightFakeRateCap), sadece çarptığı taban artık güne duyarlı.
+  // fakeChanceMax'ta durur. GECE bunun üstüne kendi rampasıyla eklenir — bkz.
+  // nightFakeBonusEarly / nightFakeBonusLate.
   fakeChance: 0.42,             // GÜN 1 sahte olma ihtimali (inceleme mekaniği devreye girsin)
   fakeChanceLate: 0.55,         // fakeChanceLateDay'de ulaşılan oran
   fakeChanceLateDay: 25,        // rampanın fakeChanceLate'e vardığı gün
@@ -1189,10 +1206,19 @@ const CONFIG = {
   // tavanından BAĞIMSIZ, nakit bir karşılığı olsun. Yardım edilen dilenci birkaç gün sonra
   // BORCUNU ÖDEYEN bir müşteri olarak geri dönebilir. Garantili değil, ihtimalli.
   // REDDEDİLEN dilenci asla geri dönmez.
-  beggarReturnChance: 0.55,     // yardım edilen dilencinin geri dönme ihtimali
+  // KALDIRAÇ KALİBRASYONU (ölçüldü, 40 tohum, eşleştirilmiş yardım-vs-reddet):
+  // ilk hâlinde (0.55 / ×2.5) yardımın A profiline getirisi skorun yalnız %0,7'siydi —
+  // pozitif ama kaldıraçsız. Izgara taraması iki ucu da gösterdi: ×4.5'te getiri %4,7'ye
+  // çıkıyor ama "ilacı alamayan kişi" için dört buçuk kat geri ödeme anlatısal olarak
+  // zorlama; ihtimali 0.90 yapmak ise sistemin belkemiği olan BELİRSİZLİĞİ siliyor
+  // (garantili geri ödeme artık bir karar değil, gecikmeli bir gelir). Seçilen orta nokta
+  // 0.75 / ×3.5: getiri A %2,6 · B %6,5, dörtte bir borçlu hâlâ hiç dönmüyor.
+  // ZİYARET SIKLIĞINA (beggarChance) DOKUNULMADI: onu büyütmek oyunu bölen kesinti
+  // sayısını büyütür. Geri ödeme ziyareti tek butonluk bir ödül, en ucuz kesinti biçimi.
+  beggarReturnChance: 0.75,     // yardım edilen dilencinin geri dönme ihtimali
   beggarReturnDelayMin: 2,      // en erken kaç gün sonra
   beggarReturnDelayMax: 5,      // en geç kaç gün sonra
-  beggarReturnMul: 2.5,         // bıraktığı ödeme = verilenin değeri × bu (1'den büyük olmalı)
+  beggarReturnMul: 3.5,         // bıraktığı ödeme = verilenin değeri × bu (1'den büyük olmalı)
 
   // --- KARİYER ---
   // Oyun tek sezonluk bir koşu DEĞİL, sezonlardan oluşan bir KARİYERdir.
@@ -1281,8 +1307,17 @@ const CONFIG = {
   nightDutyLateFromDay: 16,    // sıklığın arttığı gün
   nightPatientRatio: 0.4,      // gündüz müşteri sayısının oranı; taban 3
   nightPatientMin: 3,          // gece en az bu kadar hasta
-  nightFakeRateBoost: 1.8,     // gece sahte reçete oranı çarpanı
-  nightFakeRateCap: 0.60,      // …ama bu tavanı aşmaz (gecede bile ≥ %40 gerçek)
+  // GECE SAHTE ORANI — ÇARPAN DEĞİL, KENDİ RAMPASI.
+  // Eski hâl çarpandı (×1.8) ve gün 1'de bile 0.42×1.8 = 0.756 tavanı aştığı için gece
+  // oranı 30 gün boyunca tavanda sabit kalıyordu: nöbet geç oyunda daha SIK geliyor ama
+  // daha ZOR gelmiyordu. Şimdi gece, gündüz rampasının ÜSTÜNE eklenen bir farktır ve
+  // fark da sezon boyunca büyür; böylece gece hep gündüzden zor kalır (fark ≥ Early > 0)
+  // ve tavan ancak son günlerde yaklaşır.
+  nightFakeBonusEarly: 0.08,   // gün 1'de gece, gündüzün bu kadar üstünde
+  nightFakeBonusLate: 0.18,    // son günde bu kadar üstünde (arası doğrusal)
+  nightFakeRateCap: 0.78,      // mutlak tavan
+  nightMinRealRxShare: 0.20,   // gecede reçetelerin en az bu kadarı GERÇEK kalmalı
+                               // (self-test 1 − nightFakeRateCap ≥ bu şartını denetler)
   nightPriceMultiplier: 1.25,  // nöbet farkı — YALNIZ gece hastalarının satış fiyatına
   nightPatienceMultiplier: 1.2,// gece hastası daha sabırlı (gidecek başka yeri yok)
   nightIntroDuration: 2.2,     // "NÖBET BAŞLIYOR" kartının otomatik kapanma süresi (sn)
@@ -1291,6 +1326,21 @@ const CONFIG = {
   // --- Medula / e-reçete (terminal Lv2 alınınca açılır) ---
   medulaPatientRatio: 0.30,    // terminal açıkken reçeteli hastaların ~%30'u Medula hastası
   medulaPayDelayDays: 2,       // SGK ödemesi hizmetten kaç gün sonra kasaya girer
+
+  // --- İŞLETME KATMANI (2. kuşak geliştirmeler) ---
+  // Birinci kuşak (tezgah/depo/vitrin/bekleme/medula) A profilinde medyan 11. günde
+  // bitiyordu: 2. sezondan itibaren satın alınacak hiçbir şey kalmıyor, geliştirme
+  // ekranı ölü bir menü oluyordu. İkinci kuşak SEZONLA açılır ve fiyatları ruhsat
+  // bedeliyle yarışacak ölçektedir — yani her biri "şimdi al" ile "bedeli biriktir"
+  // arasında gerçek bir seçimdir.
+  // Her kalemin adımı, GERİ DÖNÜŞÜ ölçülerek seçildi (bkz. DURUM.md): ilk denemede
+  // etkiler küçük, fiyatlar ruhsat bedeline göre belirlenmişti ve katman TUZAK çıktı —
+  // hiç almamak her profilde daha iyiydi (A 135k vs 77k). Şimdi fiyatlar sezon başına
+  // getirinin ~1,5 katı olacak şekilde kuruldu: alması doğru ama bedava değil.
+  tier2CostMul: 1.0,           // İŞLETME katmanı fiyat çarpanı (kalibrasyon knob'u)
+  musavirFeeStep: 0.10,        // seviye başına RUHSAT BEDELİ indirimi
+  toptanciDiscountStep: 0.12,  // seviye başına DEPO alış indirimi (yalnız sipariş ekranı)
+  nobetRuhsatStep: 0.25,       // seviye başına nöbet farkı artışı (gece SATIŞ fiyatı)
   medulaCodeLen: 6,            // kod uzunluğu (ilk karakter daima "2")
   medulaToastDuration: 3.2,    // "ödeme yattı" bilgi şeridi süresi (sn)
   debugDecisions: true,     // her servis/red kararında konsola teşhis bloğu bas
@@ -1487,6 +1537,29 @@ const UPGRADES = [
     id: "medula", name: "Medula Terminali", emoji: "🖥️", maxLevel: 2, costK: [30],
     desc: "E-reçete sistemi: kodla ilaç listesi sorgulama",
     valueAt: lv => lv >= 2 ? "açık — e-reçete hastaları gelir" : "kilitli"
+  },
+
+  // ---- İŞLETME KATMANI: sezonla açılır, üçü üç AYRI eksene dokunur ----
+  // Muhasebeci NAKİT AKIŞINA, Toptancı MARJA, Nöbet Ruhsatı CİROYA. Aynı ekseni iki kez
+  // büyütmemenin sebebi: kariyeri bitiren şey nakit, ve tek eksende yığılan bir ağaç
+  // "en pahalıyı al" kararına iner.
+  {
+    id: "musavir", name: "Mali Müşavir", emoji: "📒", maxLevel: 3, costK: [50, 100],
+    tier: 2, unlockSeason: 2,
+    desc: "Ruhsat yenileme bedelinde indirim",
+    valueAt: lv => lv === 1 ? "indirim yok" : "−%" + Math.round((lv - 1) * CONFIG.musavirFeeStep * 100)
+  },
+  {
+    id: "toptanci", name: "Toptancı Anlaşması", emoji: "🚚", maxLevel: 3, costK: [50, 100],
+    tier: 2, unlockSeason: 3,
+    desc: "Depo siparişlerinde alış indirimi",
+    valueAt: lv => lv === 1 ? "indirim yok" : "−%" + Math.round((lv - 1) * CONFIG.toptanciDiscountStep * 100)
+  },
+  {
+    id: "nobet", name: "Nöbet Ruhsatı", emoji: "🌙", maxLevel: 3, costK: [25, 50],
+    tier: 2, unlockSeason: 4,
+    desc: "Gece hastalarına uygulanan nöbet farkı",
+    valueAt: lv => "×" + (CONFIG.nightPriceMultiplier + (lv - 1) * CONFIG.nobetRuhsatStep).toFixed(2)
   }
 ];
 const UPGRADE_BY_ID = {};
@@ -1497,7 +1570,8 @@ for (const u of UPGRADES) UPGRADE_BY_ID[u.id] = u;
 function upgradeCost(id, targetLevel) {
   const u = UPGRADE_BY_ID[id];
   if (!u || targetLevel < 2 || targetLevel > u.maxLevel) return 0;
-  return Math.round(avgPrice * u.costK[targetLevel - 2] / 100) * 100;
+  const mul = (u.tier || 1) >= 2 ? CONFIG.tier2CostMul : 1;
+  return Math.round(avgPrice * u.costK[targetLevel - 2] * mul / 100) * 100;
 }
 function upgradeLevel(id) {
   const lv = game.upgrades ? game.upgrades[id] : 1;
@@ -1532,6 +1606,28 @@ function effPatience()    { return CONFIG.basePatience * (1 + (upgradeLevel("bek
 // Terminal Lv2'de açılır: PC'de MEDULA SİSTEMİ sekmesinin kilidi kalkar ve
 // Medula hastaları gelmeye başlar. Reçete sahteliğiyle HİÇBİR ilgisi yoktur.
 function medulaUnlocked() { return upgradeLevel("medula") >= 2; }
+
+// --- İŞLETME katmanı: kilit ve efektif değerler ---
+// Kilit KARİYER SEZONUNA bağlı. initUpgrades her kalemi Lv1'e kurar; kilitli kalem
+// yalnız SATIN ALINAMAZ, ekranda görünür — oyuncu ağacın devamı olduğunu bilsin.
+function upgradeUnlockSeason(id) { const u = UPGRADE_BY_ID[id]; return (u && u.unlockSeason) || 1; }
+function upgradeUnlocked(id) { return careerSeason() >= upgradeUnlockSeason(id); }
+
+// Ruhsat bedeli indirimi (Mali Müşavir). Kariyeri bitiren şey bedel olduğu için bu
+// kalem doğrudan ÖMÜR satın alır — katmanın en değerli ve en pahalı olması gereken yanı.
+function effFeeDiscount() {
+  return Math.min(0.60, Math.max(0, (upgradeLevel("musavir") - 1) * CONFIG.musavirFeeStep));
+}
+// Depo alış indirimi. YALNIZ sipariş ekranında geçerlidir: medCost()'a dokunmaz, yoksa
+// C ve hedef formülü kayardı (yanlış servis zararı da ucuzlardı — indirim oyuncuyu
+// hatadan korumamalı).
+function effDepotDiscount() {
+  return Math.min(0.60, Math.max(0, (upgradeLevel("toptanci") - 1) * CONFIG.toptanciDiscountStep));
+}
+// Nöbet farkı. R'ye giriyor => hedef kendiliğinden ölçeklenir (formüle dokunulmadı).
+function effNightPriceMul() {
+  return CONFIG.nightPriceMultiplier + (upgradeLevel("nobet") - 1) * CONFIG.nobetRuhsatStep;
+}
 
 // Kategori sekmeleri (ölçeklenebilir; boş gruplar otomatik gizlenir)
 const GROUPS = [
@@ -1790,7 +1886,8 @@ const game = {
   // sezon gün ORTASINDA da bitebilir (itibar 0) ve o yarım günün istatistiği de girmeli.
   seasonStats: null,      // { served, correct, wrong, angry, fakeCaught, fakeMissed, earned, daysGoalMet }
   dayFolded: false,       // bu günün istatistiği sezon toplamına eklendi mi
-  dayResult: null,        // { goal, met, repGain } — DAYEND kartı bunu okur
+  dayResult: null,        // { goal, met, repGain, repLoss, missStreak } — DAYEND kartı bunu okur
+  goalMissStreak: 0,      // üst üste kaçırılan gün sayısı — SEZON ölçeğinde (itibar gibi)
   seasonResult: null,     // sezon bittiyse özet nesne; leaderboard sonraki turda buradan beslenecek
 
   // --- KARİYER ---
@@ -1835,6 +1932,7 @@ const game = {
   medulaCollected: 0,     // bu oyunda kasaya giren TOPLAM SGK ödemesi (denetim için)
   infoToast: null,        // { text, until } — bilgi şeridi (stok uyarısından ayrı)
   depotGroup: null,       // depo panelinde seçili kategori (oyun sekmesinden bağımsız)
+  upgradeTier: 1,         // geliştirme ekranında seçili katman sekmesi (1 = Eczane, 2 = İşletme)
   depotPending: {},       // ilaç id -> sipariş sepetindeki adet (panel kapanınca sıfırlanır)
   stockToast: null,       // { text, until } — kısa "stok yok" uyarısı (game.feedback'i ezmez)
 
@@ -1850,7 +1948,7 @@ let layout = {
   nextDayBtn: { x: 0, y: 0, w: 0, h: 0 },
   // depo (PC ekranı) rect'leri (ilgili draw fonksiyonlarında hesaplanır — nextDayBtn kalıbı)
   pcBtn: null, depotFromDayEndBtn: null,
-  pcMenuBtns: null, pcBackBtn: null, upgradeRows: null,
+  pcMenuBtns: null, pcBackBtn: null, upgradeRows: null, upgradeTabs: null,
   medulaKeys: null, medulaOk: null, medulaDel: null,
   depotPanel: null, depotCloseBtn: null, depotTabs: [], depotRows: [],
   depotOrderBtn: null
@@ -2193,9 +2291,17 @@ function fakeChanceFor(day) {
   const step = (CONFIG.fakeChanceLate - CONFIG.fakeChance) / d0;
   return Math.min(CONFIG.fakeChanceMax, CONFIG.fakeChance + (day - 1) * step);
 }
-// gece sahte reçete ihtimali — ÇARPAN VE TAVAN DEĞİŞMEDİ, yalnız çarptığı taban güne duyarlı
+// Gecenin gündüze göre FAZLASI — sezon boyunca doğrusal büyür (Early → Late).
+// Çarpan yerine fark kullanılmasının sebebi: çarpan taban rampasını ölçekleyip tavana
+// yapıştırıyordu, fark ise tabanın üstünde kendi eğrisini korur.
+function nightFakeBonusFor(day) {
+  const d0 = Math.max(1, CONFIG.seasonDays - 1);
+  const t = clamp((day - 1) / d0, 0, 1);
+  return lerp(CONFIG.nightFakeBonusEarly, CONFIG.nightFakeBonusLate, t);
+}
+// gece sahte reçete ihtimali = gündüz rampası + gece farkı, tavanla sınırlı
 function nightFakeChance(day) {
-  return Math.min(CONFIG.nightFakeRateCap, fakeChanceFor(day) * CONFIG.nightFakeRateBoost);
+  return Math.min(CONFIG.nightFakeRateCap, fakeChanceFor(day) + nightFakeBonusFor(day));
 }
 // günün TOPLAM hasta sayısı (gündüz + gece)
 function totalPatientsFor(day) { return patientLimitFor(day) + nightPatientsFor(day); }
@@ -2209,9 +2315,22 @@ function missRateDecayPerDay() {
 function missRateFor(day) {
   return Math.max(CONFIG.missRateFloor, CONFIG.missRateBase - (day - 1) * missRateDecayPerDay());
 }
-// o gün kaç yanlış servise tolerans var — müşteri sayısıyla ÖLÇEKLENİR
-function allowedMissesFor(day) {
-  return totalPatientsFor(day) * missRateFor(day);
+// SAHTE HASTANIN "KAÇIRMA MALİYETİ" GERÇEK HASTANINKİ DEĞİLDİR (miss-maliyeti harmanlaması).
+//
+// Eski hâl: izinliHata = N × missRate ve her hata missCost = (R+C)/geçerli ile fiyatlanırdı.
+// İki kusuru vardı. (1) N sahteleri de sayar, ama sahtede hata etmek BAŞKA bir kalemdir:
+// kaçan ciro yoktur (sahte zaten R'ye 0 katkı yapıyor), yerine para cezası ödenir ve
+// yakalama ikramiyesi kaçar. (2) Gün sahte-ağırlıklı olunca geçerli hasta sayısı düşer,
+// missCost fırlar ve tolerans absürtleşirdi; alt güvenlik bandı bunu kesiyordu (ölçüldü:
+// günlerin %3,8'i). Yani bandın asıl işi bir formül kusurunu örtmekti.
+//
+// Şimdi tolerans SINIF BAŞINA ayrı fiyatlanıyor ve toplam bir ₺ tutarı olarak çıkıyor.
+function fakeMissCost() {
+  // Sahteyi onaylamanın bilançosu: ödenen ceza + kaçan yakalama ikramiyesi.
+  return CONFIG.fakeApproveMoneyPenalty + CONFIG.fakeCatchBonus;
+}
+function missAllowanceFor(day, validN, fakeN, missCost) {
+  return missRateFor(day) * (validN * missCost + fakeN * fakeMissCost());
 }
 
 // =====================================================================
@@ -2599,7 +2718,7 @@ function concScan(list) {
   let R = 0, validN = 0, wi = -1, wv = -1;
   for (let i = 0; i < list.length; i++) {
     const p = list[i];
-    const v = refValuesFor(p.request, p.night ? CONFIG.nightPriceMultiplier : 1);
+    const v = refValuesFor(p.request, p.night ? effNightPriceMul() : 1);
     if (!v.valid) continue;
     R += v.rev; validN++;
     if (v.rev > wv) { wv = v.rev; wi = i; }
@@ -2740,7 +2859,7 @@ function buildDaySchedule(day) {
     // gelmeden önce ikisi de sabit olduğu için bu fark görünmüyordu.
     for (const p of patients) {
       // nöbet farkı: gece hastalarının satış fiyatı çarpanlı olarak R'ye girer
-      const v = refValuesFor(p.request, p.night ? CONFIG.nightPriceMultiplier : 1);
+      const v = refValuesFor(p.request, p.night ? effNightPriceMul() : 1);
       p.refRevenue = v.rev;               // teşhis/doğrulama için hastada da dursun
       p.refCost = v.cost;
       p.refValid = v.valid;
@@ -2748,11 +2867,15 @@ function buildDaySchedule(day) {
     }
   } finally { _dateDayOverride = prevDateDay; }
 
-  const misses = allowedMissesFor(day);
   // o güne özel gerçek hata maliyeti: kaçan ciro + yazılan cost zararı, geçerli hasta başına
   const missCost = validCount > 0 ? (R + C) / validCount : 0;
+  const allowance = missAllowanceFor(day, validCount, N - validCount, missCost);
+  // `misses` artık EŞDEĞER GEÇERLİ-HATA SAYISI: allowance / missCost. Bu tanımla
+  // raw = R − misses × missCost eşitliği aynen korunur, yani verifyGoalBalance,
+  // simulateDayScenario ve neededCorrectFor tek satır değişmeden çalışmaya devam eder.
+  const misses = missCost > 0 ? allowance / missCost : 0;
   const lo = CONFIG.goalRatioClamp[0], hi = CONFIG.goalRatioClamp[1];
-  const raw = R - misses * missCost;
+  const raw = R - allowance;
   // 10'a AŞAĞI yuvarla: yukarı yuvarlamak formülün az önce verdiği toleransın bir kısmını
   // geri alır (gün 1'de hedefi 648.6 → 650 yapıp gereken doğruyu 6'dan 7'ye çıkarıyordu).
   const goal = Math.floor(clamp(raw, R * lo, R * hi) / 10) * 10;
@@ -2760,7 +2883,7 @@ function buildDaySchedule(day) {
   // Güvenlik bandı devreye girdi mi? (girdiyse hedef artık tolerans türevli DEĞİLDİR)
   const clampedAt = raw < R * lo ? "lo" : (raw > R * hi ? "hi" : null);
   return { day, patients, N, dayN, nightN, isNight: nightN > 0,
-           R, C, validCount, fakeCount: N - validCount, misses, missCost, raw, goal, clampedAt,
+           R, C, validCount, fakeCount: N - validCount, misses, missCost, allowance, raw, goal, clampedAt,
            // konsantrasyon tavanı teşhisi (cheats.concentration / verifyConcentrationCap)
            concCap: concentrationCapFor(validCount), concRegen, concForced };
 }
@@ -3308,13 +3431,19 @@ function changePending(id, delta) {
 }
 
 // sepet toplamı (₺) — ilaç bazında alış fiyatı (cost) üzerinden
+// Depo BİRİM fiyatı: güncel alış × Toptancı indirimi. Depo ekranı ve sipariş toplamı
+// bunu okur; oyunun geri kalanı (C, yanlış servis zararı, dilencinin ilaç değeri)
+// indirimsiz medCost'u okumaya devam eder.
+function depotUnitCost(m) {
+  return Math.max(1, Math.round(medCost(m) * (1 - effDepotDiscount())));
+}
 function depotOrderTotal() {
   let sum = 0;
   for (const id in game.depotPending) {
     const q = game.depotPending[id];
     if (!q) continue;
     const m = getMedicine(id);
-    if (m) sum += medCost(m) * q;
+    if (m) sum += depotUnitCost(m) * q;
   }
   return sum;
 }
@@ -3340,6 +3469,7 @@ function buyUpgrade(id) {
   if (!u) return false;
   const cur = upgradeLevel(id);
   if (cur >= u.maxLevel) return false;              // TAM — satın alınamaz
+  if (!upgradeUnlocked(id)) return false;           // sezon kilidi
   const cost = upgradeCost(id, cur + 1);
   if (game.money < cost) return false;              // yetersiz bakiye
   game.money -= cost;
@@ -3347,7 +3477,9 @@ function buyUpgrade(id) {
   // Vitrin hasta KARIŞIMINI (reçeteli payı), Medula ise reçeteli hastaların tipini
   // değiştirir => önden üretilmiş günler geçersizleşir. Oynanan gün snapshot'tan
   // okunduğu için etkilenmez.
-  if (id === "vitrin" || id === "medula") invalidateDaySchedules();
+  // Vitrin hasta karışımını, Medula hasta tipini, Nöbet Ruhsatı ise gece CİROSUNU
+  // (dolayısıyla R ve hedefi) değiştirir => önden üretilmiş günler geçersizleşir.
+  if (id === "vitrin" || id === "medula" || id === "nobet") invalidateDaySchedules();
   return true;
 }
 
@@ -3540,7 +3672,7 @@ function checkOrder() {
     // kazanç = servis edilen ilaçların satış fiyatı toplamı (adet dahil; given id tekrarlı liste)
     let earn = 0;
     for (const gid of given) { const gm = getMedicine(gid); if (gm) earn += medPrice(gm); }
-    if (p.night) earn = Math.round(earn * CONFIG.nightPriceMultiplier);   // nöbet farkı (Medula'ya da uygulanır)
+    if (p.night) earn = Math.round(earn * effNightPriceMul());   // nöbet farkı (Medula'ya da uygulanır)
     if (p.request.type === "medula") {
       // SGK ödemesi GECİKMELİ: günün kazancına BUGÜN yazılır (hedef ölçümü değişmez),
       // kasaya medulaPayDelayDays gün sonra girer.
@@ -3603,6 +3735,14 @@ function beginNightShift() {
   game.spawnTimer = CONFIG.spawnInterval;    // gece ilk hasta hemen dalmasın
 }
 
+// Üst üste `streak` gün hedef kaçtığında o günün itibar cezası.
+// grace kadarı bedava; sonrası adım adım artar, tavanda durur.
+function goalMissPenaltyFor(streak) {
+  const over = streak - CONFIG.goalMissGraceDays;
+  if (over <= 0) return 0;
+  return Math.min(CONFIG.goalMissRepMax, over * CONFIG.goalMissRepStep);
+}
+
 function endDay() {
   game.feedback = null;
   const goal = goalForDay();
@@ -3612,10 +3752,31 @@ function endDay() {
   // sağlar: skipDay da endDay üzerinden geçer.
   // yumuşak tavan yüzünden fiilen eklenen değer repGain'e yazılır (kart bunu gösterir)
   const repGain = met ? gainReputation(CONFIG.goalMetReputation) : 0;
-  game.dayResult = { goal: goal, met: met, repGain: repGain };
+  // Üst üste kaçırma sayacı: tutturan gün SIFIRLAR (ceza birikmez, seri kırılınca biter).
+  game.goalMissStreak = met ? 0 : (game.goalMissStreak || 0) + 1;
+  const repLoss = met ? 0 : goalMissPenaltyFor(game.goalMissStreak);
+  game.dayResult = { goal: goal, met: met, repGain: repGain,
+                     repLoss: repLoss, missStreak: game.goalMissStreak };
   foldDayIntoSeason(met);
   // KARİYER SKORU = ulaşılan EN YÜKSEK kasa. Her gün sonunda güncellenir (istenen kadans).
   updateCareerPeak();
+  // Ceza itibarı sıfırlayıp sezonu (ve kariyeri) KAPATABİLİR. O yüzden fold/peak'ten
+  // SONRA uygulanır ve hemen ardından state kontrol edilir: kapanmışsa DAYEND'e çekmek
+  // finishSeason'ın kurduğu bitiş state'ini sessizce ezerdi.
+  // Para kalemi: açığın oranı. İtibardan ÖNCE uygulanır ki kasa hareketi bitiş
+  // state'ini kuran çağrıdan sonra sessizce kalmasın.
+  let moneyLoss = 0;
+  if (!met && CONFIG.goalMissMoneyShare > 0 && game.goalMissStreak > CONFIG.goalMissGraceDays) {
+    const shortfall = Math.max(0, goal - game.dayStats.money);
+    moneyLoss = Math.round(shortfall * CONFIG.goalMissMoneyShare);
+    if (moneyLoss > 0) {
+      moneyLoss = Math.min(moneyLoss, game.money);
+      game.money -= moneyLoss;
+      game.dayResult.moneyLoss = moneyLoss;
+    }
+  }
+  if (repLoss > 0) loseReputation(repLoss);
+  if (game.state === STATE.SEASONEND || game.state === STATE.CAREEREND) return;
   // SEZON SONU: son gün bitince DAYEND kartı HİÇ gösterilmez, doğrudan sezon kartı gelir.
   // Sebep: "Sonraki Gün →" butonu 31. günü başlatmamalı; olmayan bir günün kapısı da olmaz.
   if (game.dayNumber >= CONFIG.seasonDays) { finishSeason("completed"); return; }
@@ -3727,7 +3888,16 @@ function seasonFeeFor(season) {
   return Math.round(raw / step) * step;
 }
 function careerSeason() { return game.career ? game.career.season : 1; }
-function nextSeasonFee() { return seasonFeeFor(careerSeason() + 1); }
+// ÖDENECEK bedel: taban × Mali Müşavir indirimi. seasonFeeFor SAF kalır (self-test
+// formülün kendisini — 1. sezon bedelsiz, kesin artan, yuvarlı — onun üzerinden denetler);
+// indirim yalnız ödeme anında ve kartlarda uygulanır.
+function effSeasonFeeFor(season) {
+  const base = seasonFeeFor(season);
+  if (base <= 0) return 0;
+  const step = Math.max(1, CONFIG.seasonFeeRound);
+  return Math.max(step, Math.round(base * (1 - effFeeDiscount()) / step) * step);
+}
+function nextSeasonFee() { return effSeasonFeeFor(careerSeason() + 1); }
 function canAffordNextSeason() { return game.money >= nextSeasonFee(); }
 
 // Her sezon KENDİ tohumunu alır; hepsi tek kariyer tohumundan türer. Böylece kariyer bir
@@ -3802,7 +3972,7 @@ function buildCareerResult(reason) {
     lastSeason: cr.season,
     score: Math.round(cr.peakMoney),         // KARİYER SKORU = peak kasa
     finalMoney: Math.round(game.money),
-    unpaidFee: seasonFeeFor(cr.season + 1),  // ödenemeyen bedel ("fee" bitişinde anlamlı)
+    unpaidFee: effSeasonFeeFor(cr.season + 1),  // ödenemeyen bedel ("fee" bitişinde anlamlı)
     totalFeePaid: Math.round(t.feePaid),
     daysPlayed: t.daysPlayed,
     served: t.served,
@@ -3918,7 +4088,7 @@ function beginSeason(n) {
   // RUHSAT YENİLEME BEDELİ — sezon BAŞLARKEN kasadan düşer. 1. sezon bedelsiz.
   // Ödenebilirlik burada DEĞİL, tryStartNextSeason'da kontrol edilir: bu fonksiyon
   // çağrıldığında bedelin karşılandığı garantidir (state bozulmasın diye tek kapı).
-  const fee = seasonFeeFor(n);
+  const fee = effSeasonFeeFor(n);
   game.seasonFeePaid = fee;
   if (fee > 0) {
     game.money = Math.max(0, game.money - fee);
@@ -3926,6 +4096,7 @@ function beginSeason(n) {
   }
 
   game.reputation = CONFIG.startReputation;   // bkz. yukarıdaki not
+  game.goalMissStreak = 0;                    // kaçırma serisi de itibarla aynı ölçekte
   game.dayNumber = 1;
   game.seasonStats = newSeasonStats();
   game.seasonResult = null;
@@ -5491,10 +5662,12 @@ function drawDayEnd() {
   const nextRound = priceRoundOn(game.dayNumber + 1);
   const priceH = nextRound ? fs * 2.5 : 0;         // iki satırlı şerit (başlık + kategoriler)
   const priceGap = nextRound ? gap * 0.7 : 0;
-  // hedef tutan günde itibar ödülü şeridi (kaçıran günde HİÇ gösterilmez — ceza mesajı yok)
-  const showRep = !!res.met;
-  const repH = showRep ? fs * 1.5 : 0;
-  const repGap = showRep ? gap * 0.7 : 0;
+  // Hedef şeridi: tutan günde ödül, kaçıran günde durum. Kaçıran gün de GÖSTERİLİR —
+  // ceza sessiz olursa oyuncu kuralı hiç öğrenemez; bedava olan ilk gün de yazılır ki
+  // "bir gün serbest, üst üstesi pahalı" kuralı kartın kendisinden okunsun.
+  const showRep = true;
+  const repH = fs * 1.5;
+  const repGap = gap * 0.7;
   const stackH = () => headerH + padTop + nRows * rowStep + gap + goalH + repGap + repH +
     warnGap + warnH + priceGap + priceH + gap + btnH + gap + pillH + padBottom;
   let cardH = stackH();
@@ -5574,11 +5747,22 @@ function drawDayEnd() {
   // Hedef ödülü şeridi — oyuncu kuralı buradan öğrenir, gizli kalmasın
   if (showRep) {
     const rY = goalY + goalH + repGap;
-    fillRoundRect(cardX + cardW * 0.08, rY, cardW * 0.84, repH, repH * 0.5, "rgba(94,196,138,0.18)");
-    strokeRoundRect(cardX + cardW * 0.08, rY, cardW * 0.84, repH, repH * 0.5, c.good, 1.5);
-    fitText(res.repGain > 0 ? "⭐ Hedef tutturuldu · +" + (Math.round(res.repGain * 10) / 10) + " itibar"
-                            : "⭐ Hedef tutturuldu · itibar tavanda",
-      cardX + cardW / 2, rY + repH / 2, cardW * 0.78, fs * 0.88, c.good, "center", "800");
+    const loss = Math.round(res.repLoss || 0);
+    const streak = res.missStreak || 0;
+    const okStrip = !!res.met;
+    const col = okStrip ? c.good : (loss > 0 ? c.bad : "#e0b062");
+    const bg = okStrip ? "rgba(94,196,138,0.18)"
+             : (loss > 0 ? "rgba(224,96,96,0.18)" : "rgba(224,176,98,0.16)");
+    const txt = okStrip
+      ? (res.repGain > 0 ? "⭐ Hedef tutturuldu · +" + (Math.round(res.repGain * 10) / 10) + " itibar"
+                         : "⭐ Hedef tutturuldu · itibar tavanda")
+      : (loss > 0 || res.moneyLoss ? "⚠️ Hedef kaçtı (üst üste " + streak + ". gün) · " +
+            [loss > 0 ? "−" + loss + " itibar" : null,
+             res.moneyLoss ? "−" + formatMoney(res.moneyLoss) : null].filter(Boolean).join(" · ")
+                  : "⚠️ Hedef kaçtı — bu gün cezasız, üst üstesi pahalı");
+    fillRoundRect(cardX + cardW * 0.08, rY, cardW * 0.84, repH, repH * 0.5, bg);
+    strokeRoundRect(cardX + cardW * 0.08, rY, cardW * 0.84, repH, repH * 0.5, col, 1.5);
+    fitText(txt, cardX + cardW / 2, rY + repH / 2, cardW * 0.78, fs * 0.88, col, "center", "800");
   }
 
   // "Yarın nöbetçisin" uyarısı — oyuncu depoya gidip hazırlanabilsin
@@ -6082,17 +6266,45 @@ function drawUpgrades() {
   strokeRoundRect(backX, backY, backW, backH, backH * 0.35, "rgba(245,170,70,0.55)", 1.5);
   text("‹ GERİ", backX + backW / 2, backY + backH / 2, backH * 0.46, c.neon, "center", "800");
 
-  const rowH = r.h * 0.132, rowGap = r.h * 0.018;
+  // --- KATMAN SEKMELERİ ---
+  // Sekme, ağaç 5 kalemden 8'e çıkınca kondu: tek listede satır yüksekliği okunamayacak
+  // kadar küçülüyordu (ölçüldü). Depo ekranının sekme diliyle aynı.
+  const TIERS = [{ id: 1, label: "🏪 ECZANE" }, { id: 2, label: "💼 İŞLETME" }];
+  const tabsX = r.x + r.w * 0.05, tabsW = r.w * 0.90;
+  const tabsY = r.y + r.h * 0.105, tabsH = r.h * 0.062;
+  const tGap = tabsW * 0.02;
+  const tW = (tabsW - tGap * (TIERS.length - 1)) / TIERS.length;
+  layout.upgradeTabs = [];
+  for (let i = 0; i < TIERS.length; i++) {
+    const t = TIERS[i];
+    const tx = tabsX + i * (tW + tGap);
+    const active = game.upgradeTier === t.id;
+    layout.upgradeTabs.push({ tier: t.id, x: tx, y: tabsY, w: tW, h: tabsH });
+    if (active) {
+      ctx.save(); ctx.shadowColor = c.neonGlow; ctx.shadowBlur = 8;
+      fillRoundRect(tx, tabsY, tW, tabsH, tabsH * 0.28, "rgba(58,40,20,0.95)"); ctx.restore();
+    } else {
+      fillRoundRect(tx, tabsY, tW, tabsH, tabsH * 0.28, "rgba(255,255,255,0.04)");
+    }
+    strokeRoundRect(tx, tabsY, tW, tabsH, tabsH * 0.28,
+      active ? c.neon : "rgba(245,170,70,0.22)", active ? 2 : 1);
+    fitText(t.label, tx + tW / 2, tabsY + tabsH / 2, tW * 0.86, tabsH * 0.42,
+      active ? c.neon : c.creamSoft, "center", "800");
+  }
+
+  const list = UPGRADES.filter(u => (u.tier || 1) === game.upgradeTier);
+  const rowH = r.h * 0.128, rowGap = r.h * 0.018;
   const rx0 = r.x + r.w * 0.05, rw = r.w * 0.90;
-  let ry = r.y + r.h * 0.115;
+  let ry = tabsY + tabsH + r.h * 0.025;
 
   layout.upgradeRows = [];
-  for (const u of UPGRADES) {
+  for (const u of list) {
     const lv = upgradeLevel(u.id);
     const maxed = lv >= u.maxLevel;
+    const locked = !upgradeUnlocked(u.id);
     const cost = maxed ? 0 : upgradeCost(u.id, lv + 1);
     const afford = game.money >= cost;
-    const enabled = !maxed && afford;
+    const enabled = !maxed && !locked && afford;
 
     fillRoundRect(rx0, ry, rw, rowH, rowH * 0.20, "rgba(255,255,255,0.05)");
     strokeRoundRect(rx0, ry, rw, rowH, rowH * 0.20, "rgba(245,170,70,0.28)", 1);
@@ -6119,8 +6331,23 @@ function drawUpgrades() {
     // sağ: satın alma butonu ya da TAM
     const bW = rw * 0.24, bH = rowH * 0.44;
     const bX = rx0 + rw - bW - rw * 0.02, bY = ry + (rowH - bH) / 2;
-    layout.upgradeRows.push({ id: u.id, enabled, maxed, btn: { x: bX, y: bY, w: bW, h: bH } });
-    if (maxed) {
+    // Dokunma kutusu ÇİZİLEN butondan büyük: buton satıra sığsın diye 29px'e kadar
+    // inebiliyor, oysa iOS asgarisi 44pt. Depo adımlayıcılarındaki kalıbın aynısı —
+    // görsel aynı kalır, hedef büyür (eşmerkezli, satır aralığını aşmaz).
+    const hitH = Math.max(bH, Math.min(rowH, 44));
+    const hitW = Math.max(bW, Math.min(rw * 0.34, 44));
+    const hit = { x: bX + (bW - hitW) / 2, y: bY + (bH - hitH) / 2, w: hitW, h: hitH };
+    layout.upgradeRows.push({ id: u.id, enabled, maxed, locked,
+                              btn: { x: bX, y: bY, w: bW, h: bH }, hit: hit });
+    if (locked) {
+      // Kilitli kalem GÖRÜNÜR kalır: oyuncu ağacın devamı olduğunu ve ne zaman
+      // açılacağını bilsin. Buton yerinde durur ama pasiftir.
+      fillRoundRect(bX, bY, bW, bH, bH * 0.30, "rgba(255,255,255,0.04)");
+      strokeRoundRect(bX, bY, bW, bH, bH * 0.30, "rgba(245,170,70,0.28)", 1.2);
+      fitText("🔒", bX + bW / 2, bY + bH * 0.32, bW * 0.6, bH * 0.30, c.creamSoft, "center", "800");
+      fitText("Sezon " + upgradeUnlockSeason(u.id), bX + bW / 2, bY + bH * 0.72, bW * 0.86, bH * 0.28,
+        c.creamSoft, "center", "800");
+    } else if (maxed) {
       fillRoundRect(bX, bY, bW, bH, bH * 0.30, "rgba(94,196,138,0.16)");
       strokeRoundRect(bX, bY, bW, bH, bH * 0.30, "rgba(94,196,138,0.65)", 1.5);
       text("TAM", bX + bW / 2, bY + bH / 2, bH * 0.40, c.good, "center", "800");
@@ -6139,8 +6366,8 @@ function drawUpgrades() {
     ry += rowH + rowGap;
   }
 
-  // kasa yetmeyen (ama TAM olmayan) kalem varsa depo ekranıyla AYNI biçimde uyarı
-  const short = layout.upgradeRows.some(x => !x.maxed && !x.enabled);
+  // kasa yetmeyen (ama TAM/kilitli olmayan) kalem varsa depo ekranıyla AYNI biçimde uyarı
+  const short = layout.upgradeRows.some(x => !x.maxed && !x.locked && !x.enabled);
   if (short) {
     text("⛔ Yetersiz bakiye — kasa: " + formatMoney(game.money),
       rx0 + rw / 2, ry + r.h * 0.022, r.h * 0.022, c.bad, "center", "700");
@@ -6300,7 +6527,7 @@ function drawDepot() {
 function drawPcPanel() {
   layout.pcMenuBtns = null;
   layout.pcBackBtn = null;
-  layout.upgradeRows = null;
+  layout.upgradeRows = null; layout.upgradeTabs = null;
   layout.depotTabs = null;
   layout.depotRows = null;
   layout.depotOrderBtn = null;
@@ -6360,9 +6587,14 @@ function handlePcTap(px, py) {
     return;
   }
   if (game.pcScreen === "upgrades") {
+    if (layout.upgradeTabs) {
+      for (const t of layout.upgradeTabs) {
+        if (pointInRect(px, py, t)) { game.upgradeTier = t.tier; return; }
+      }
+    }
     if (layout.upgradeRows) {
       for (const row of layout.upgradeRows) {
-        if (pointInRect(px, py, row.btn)) { if (row.enabled) buyUpgrade(row.id); return; }
+        if (pointInRect(px, py, row.hit || row.btn)) { if (row.enabled) buyUpgrade(row.id); return; }
       }
     }
     if (layout.depotPanel && !pointInRect(px, py, layout.depotPanel)) { closeDepot(); return; }
@@ -7129,8 +7361,9 @@ window.cheats = {
   fees(n) {
     const rows = [];
     for (let i = 1; i <= (n || 12); i++) {
-      rows.push({ sezon: i, bedel: seasonFeeFor(i) + "₺",
-                  "kümülatif": (function () { let t = 0; for (let k = 1; k <= i; k++) t += seasonFeeFor(k); return t + "₺"; })() });
+      rows.push({ sezon: i, "taban bedel": seasonFeeFor(i) + "₺",
+                  "ödenecek": effSeasonFeeFor(i) + "₺",
+                  "kümülatif": (function () { let t = 0; for (let k = 1; k <= i; k++) t += effSeasonFeeFor(k); return t + "₺"; })() });
     }
     console.table(rows);
     return rows;
@@ -7318,7 +7551,9 @@ window.cheats = {
       listed++;
     }
     console.log("Nöbet: her " + CONFIG.nightDutyEvery + ". gün | gece oranı " + CONFIG.nightPatientRatio +
-      " (taban " + CONFIG.nightPatientMin + ") | gece sahte ihtimali " + nightFakeChance().toFixed(3) +
+      " (taban " + CONFIG.nightPatientMin + ") | gece sahte: gün 1 " +
+      nightFakeChance(1).toFixed(3) + " → gün " + CONFIG.seasonDays + " " +
+      nightFakeChance(CONFIG.seasonDays).toFixed(3) +
       " (tavan " + CONFIG.nightFakeRateCap + ") | nöbet farkı ×" + CONFIG.nightPriceMultiplier);
     console.table(rows);
     return rows;
@@ -7364,7 +7599,7 @@ window.cheats = {
     const u = UPGRADE_BY_ID[id];
     if (!u) { console.log("Bilinmeyen geliştirme:", id, "— geçerli:", UPGRADES.map(x => x.id).join(", ")); return; }
     game.upgrades[id] = clamp(level | 0, 1, u.maxLevel);
-    if (id === "vitrin" || id === "medula") invalidateDaySchedules();
+    if (id === "vitrin" || id === "medula" || id === "nobet") invalidateDaySchedules();
     console.log(u.name + " → Lv " + game.upgrades[id] + " (" + u.valueAt(game.upgrades[id]) + ")");
     return game.upgrades[id];
   },
@@ -7932,6 +8167,19 @@ function selfTestPatientsInner(days) {
         warn.push("gün " + d + ": gece sahte oranı nightFakeRateCap'i aştı");
       if (nightFakeChance(d) < fakeChanceFor(d) - 1e-9)
         warn.push("gün " + d + ": gece sahte oranı gündüzün altına düştü");
+      if (d > 1 && nightFakeChance(d) < nightFakeChance(d - 1) - 1e-9)
+        warn.push("gün " + d + ": gece sahte oranı bir önceki günden AZALDI");
+    }
+    // GECE KOMPOZİSYON EKSENİ İLERLEMELİ. Eski çarpanlı hâlde gece oranı 1. günden
+    // beri tavandaydı ve bu kontrol olsaydı o hatayı yakalardı — o yüzden buraya kondu.
+    const nFirst = nightFakeChance(1), nLast = nightFakeChance(LAST);
+    if (!(nLast > nFirst + 1e-9))
+      warn.push("gece sahte oranı sezon boyunca ilerlemiyor (gün 1 " + nFirst.toFixed(3) +
+                " → gün " + LAST + " " + nLast.toFixed(3) + ") — nöbet sıklaşıyor ama zorlaşmıyor");
+    // Gece hep gündüzden zor olmalı (fark hiçbir gün kapanmamalı)
+    for (let d = 1; d <= LAST; d++) {
+      if (nightFakeChance(d) <= fakeChanceFor(d) + 1e-9)
+        warn.push("gün " + d + ": gece ile gündüz sahte oranı eşitlendi — nöbetin farkı kalmadı");
     }
 
     // (v) NÖBET SIKLIĞI geç oyunda artmalı (aynı uzunlukta pencerede daha çok nöbet)
@@ -8084,7 +8332,7 @@ function selfTestPatientsInner(days) {
       game.dayNumber = CONFIG.seasonDays;
       const beforeMoney = game.money, beforeSeed = game.runSeed;
       const beforeLedger = game.medulaBooked - (game.medulaCollected + pendingReceivables());
-      const fee2 = seasonFeeFor(2);
+      const fee2 = effSeasonFeeFor(2);   // fiilen ödenen (Mali Müşavir indirimi dahil)
       beginSeason(2);
       if (game.career.season !== 2) warn.push("beginSeason sezon numarasını ilerletmedi");
       if (game.dayNumber !== 1) warn.push("yeni sezon 1. günden başlamadı: " + game.dayNumber);
@@ -8138,6 +8386,94 @@ function selfTestPatientsInner(days) {
       game.medulaRevealed = bak.revealed; game.beggarDay = bak.beggarDay;
       invalidateDaySchedules(); invalidateBeggarPlans();
     }
+  }
+
+  // 0c6) İŞLETME KATMANI — sezon kilidi ve etkilerin SIZMAMASI
+  {
+    const t2 = UPGRADES.filter(u => (u.tier || 1) >= 2);
+    if (!t2.length) warn.push("İŞLETME katmanında hiç kalem yok — geliştirme ağacı 2. sezondan sonra ölü kalır");
+    const prevUp6 = Object.assign({}, game.upgrades);
+    const prevCareer = game.career;
+    const prevMoney6 = game.money;
+
+    for (const u of t2) {
+      if (!(u.unlockSeason >= 2))
+        warn.push(u.id + ": İŞLETME kalemi 1. sezonda açık — katmanın anlamı sezonla açılması");
+      if (u.costK.length !== u.maxLevel - 1)
+        warn.push(u.id + ": costK uzunluğu maxLevel-1 değil");
+      // sezon kilidi GERÇEKTEN satın almayı engelliyor mu
+      game.career = { seed: 1, season: 1, completed: 0, peakMoney: 0, totals: newCareerTotals(), seasons: [] };
+      game.money = 10000000;
+      game.upgrades[u.id] = 1;
+      if (buyUpgrade(u.id) !== false)
+        warn.push(u.id + ": 1. sezonda satın alınabildi — sezon kilidi çalışmıyor");
+      game.career.season = u.unlockSeason;
+      if (buyUpgrade(u.id) !== true)
+        warn.push(u.id + ": açılış sezonunda satın alınamadı");
+    }
+
+    // --- TOPTANCI: indirim YALNIZ depo sipariş ekranında geçerli olmalı ---
+    // Sızarsa C, hedef ve yanlış servis zararı birlikte kayar; indirim oyuncuyu kendi
+    // hatasından da korumaya başlar. Bu yüzden ayrı ve katı denetleniyor.
+    game.career.season = 9;
+    const m0 = MEDICINES[0];
+    game.upgrades.toptanci = 1;
+    const costPlain = medCost(m0), depotPlain = depotUnitCost(m0);
+    invalidateDaySchedules();
+    const goalPlain = getDaySchedule(5).goal, cPlain = getDaySchedule(5).C;
+    game.upgrades.toptanci = 3;
+    invalidateDaySchedules();
+    if (medCost(m0) !== costPlain)
+      warn.push("Toptancı indirimi medCost'a SIZDI: " + costPlain + " → " + medCost(m0));
+    if (!(depotUnitCost(m0) < depotPlain))
+      warn.push("Toptancı indirimi depo fiyatına yansımıyor");
+    if (getDaySchedule(5).goal !== goalPlain || Math.abs(getDaySchedule(5).C - cPlain) > 0.5)
+      warn.push("Toptancı indirimi hedef/C'yi değiştirdi — sipariş ekranıyla sınırlı kalmalı");
+    game.upgrades.toptanci = 1;
+
+    // --- NÖBET RUHSATI: gece cirosunu (dolayısıyla R ve hedefi) BÜYÜTMELİ ---
+    // DİKKAT — TEK GÜN ÖLÇÜLMEZ. Konsantrasyon tavanı, payı aşan hastanın siparişini
+    // yeniden üretir ve bu withSeed içinde RNG tüketir; çarpan değişince o günün
+    // TAMAMI farklı üretilebilir. Tek günde R'nin düşmesi bu yüzden anlamlı bir sinyal
+    // değildir (ölçüldü: bir günde 2160 → 1557, oysa toplamda gece cirosu +%34).
+    // Değişmez sezon toplamında tanımlıdır.
+    {
+      const nightDays = [];
+      for (let d = 2; d <= CONFIG.seasonDays; d++) if (isNightDutyDay(d)) nightDays.push(d);
+      if (nightDays.length) {
+        const sumNight = () => nightDays.reduce((a, d) => {
+          const sch = getDaySchedule(d);
+          return a + sch.patients.filter(p => p.night && p.refValid).reduce((x, p) => x + p.refRevenue, 0);
+        }, 0);
+        game.upgrades.nobet = 1; invalidateDaySchedules();
+        const nPlain = sumNight();
+        game.upgrades.nobet = 3; invalidateDaySchedules();
+        const nBoost = sumNight();
+        if (!(nBoost > nPlain))
+          warn.push("Nöbet Ruhsatı sezon boyu gece cirosunu artırmıyor (" +
+                    Math.round(nPlain) + "₺ → " + Math.round(nBoost) + "₺)");
+        if (effNightPriceMul() <= CONFIG.nightPriceMultiplier)
+          warn.push("effNightPriceMul seviyeyle artmıyor");
+        game.upgrades.nobet = 1;
+      }
+    }
+
+    // --- MALİ MÜŞAVİR: bedel indirimi TABAN formüle dokunmamalı ---
+    game.upgrades.musavir = 1;
+    const feeBase = seasonFeeFor(4), feePlain = effSeasonFeeFor(4);
+    game.upgrades.musavir = 3;
+    if (seasonFeeFor(4) !== feeBase)
+      warn.push("Mali Müşavir indirimi seasonFeeFor'a SIZDI — taban formül saf kalmalı");
+    if (!(effSeasonFeeFor(4) < feePlain))
+      warn.push("Mali Müşavir indirimi ödenen bedele yansımıyor");
+    if (effSeasonFeeFor(1) !== 0)
+      warn.push("indirimle birlikte 1. sezon bedelsizliği bozuldu");
+    game.upgrades.musavir = 1;
+
+    game.upgrades = prevUp6;
+    game.career = prevCareer;
+    game.money = prevMoney6;
+    invalidateDaySchedules();
   }
 
   // 0c4) DİLENCİ — günün programına SIZMAMALI
@@ -8297,8 +8633,11 @@ function selfTestPatientsInner(days) {
   // 0e) NÖBET kuralları
   if (nightFakeChance() > CONFIG.nightFakeRateCap + 1e-9)
     warn.push("Gece sahte oranı tavanı aşıyor: " + nightFakeChance().toFixed(3) + " > " + CONFIG.nightFakeRateCap);
-  if (CONFIG.nightFakeRateCap > 0.6 + 1e-9)
-    warn.push("Gece sahte tavanı %60'ı aşıyor — gecede en az %40 gerçek reçete kalmalı");
+  // Gece pür "reddet" bloğuna dönüşmesin: tavan, gerçek reçete payı tabanını delmemeli.
+  if (1 - CONFIG.nightFakeRateCap < CONFIG.nightMinRealRxShare - 1e-9)
+    warn.push("Gece sahte tavanı çok yüksek: gerçek reçete payı %" +
+      Math.round((1 - CONFIG.nightFakeRateCap) * 100) + " < taban %" +
+      Math.round(CONFIG.nightMinRealRxShare * 100));
   for (let d = 1; d <= days; d++) {
     const sch = getDaySchedule(d);
     const nightPs = sch.patients.filter(p => p.night);
