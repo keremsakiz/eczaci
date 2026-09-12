@@ -1,0 +1,14 @@
+{
+  "appId": "com.kerem.eczaci",
+  "appName": "Eczacı",
+  "webDir": "www",
+  "ios": {
+    "contentInset": "never",
+    "scrollEnabled": false,
+    "backgroundColor": "#2b2233",
+    "limitsNavigationsToAppBoundDomains": true
+  },
+  "server": {
+    "iosScheme": "capacitor"
+  }
+}
