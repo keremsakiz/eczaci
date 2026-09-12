@@ -232,14 +232,23 @@ function runCareer(w, G, profile, seed, bot) {
 
   const ctx = { rng: mulberry32((seed ^ 0x9E3779B9) >>> 0), acc: 1 };
   const seasonEarned = [];
+  // Gün bazında hedef tutturma oranı — yaptırım tasarımı buna bakacak.
+  const goalByDay = {};   // gün -> { played, met }
   let guard = 0;
   while (guard++ < MAX_SEASONS * G.CONFIG.seasonDays + 50) {
     if (g.state === S.PLAYING) {
       // Günün doğruluğu: B' korelasyonlu kötü seriler üretir (gün bazında çekilir).
       ctx.acc = profile.acc ? profile.acc()
               : (ctx.rng() < profile.badDayChance ? profile.badAcc : profile.goodAcc);
+      const dayNo = g.dayNumber;
       morning(w, G, bot);
       runDay(w, G, bot, ctx);
+      const gd = goalByDay[dayNo] || (goalByDay[dayNo] = { played: 0, met: 0, rep: 0, streak: 0, loss: 0 });
+      gd.played++;
+      if (g.dayResult && g.dayResult.met) gd.met++;
+      gd.rep += g.reputation;
+      gd.streak += (g.dayResult && g.dayResult.missStreak) || 0;
+      gd.loss += (g.dayResult && g.dayResult.repLoss) || 0;
       continue;
     }
     if (g.state === S.DAYEND) { w.startNextDay(); continue; }
@@ -256,7 +265,7 @@ function runCareer(w, G, profile, seed, bot) {
   return {
     seed, profile: profile.key,
     score: res.score, seasons: res.seasonsCompleted, reason: res.reason,
-    money: g.money, seasonEarned,
+    money: g.money, seasonEarned, goalByDay,
     totals: (g.career && g.career.totals) || {}
   };
 }

@@ -93,8 +93,10 @@ function main() {
       const j = runCell([...common, ...(o.help ? [] : ["--no-help"])]);
       for (const p of o.profiles) {
         const sc = stats(j[p].map(x => x.score)), se = stats(j[p].map(x => x.seasons));
-        rec.by[p] = { score: sc.mean, seasons: se.med, cv: sc.cv };
-        cellTxt.push((TL(sc.mean) + " · " + se.med + "sz").padEnd(22));
+        const repDeath = j[p].filter(x => x.reason === "reputation").length;
+        rec.by[p] = { score: sc.mean, seasons: se.med, cv: sc.cv, repDeath, n: j[p].length };
+        cellTxt.push((TL(sc.mean) + " " + se.med + "sz it%" +
+                      Math.round(repDeath / j[p].length * 100)).padEnd(22));
       }
     }
     rows.push(rec);

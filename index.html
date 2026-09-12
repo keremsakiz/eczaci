@@ -55,6 +55,23 @@ const CONFIG = {
   // işliyordu: oyuncu iyi oynasa bile yastık biriktiremiyordu. Bu, gün ÖLÇEĞİNDE bir
   // tampon verir. Hedefi KAÇIRMAK hâlâ hiçbir ceza getirmez (bilinçli tasarım kararı).
   goalMetReputation: 3,     // hedef tutturulan günün sonunda itibar artışı
+  // HEDEFİ KAÇIRMANIN BEDELİ — ÜST ÜSTE kaçırmaya bağlı, tek güne değil.
+  // Uzun süre bedelsizdi ve DURUM.md'de açık konu olarak duruyordu: sabit %85 oynayan
+  // oyuncu hedefi kaçırıyor ama hiçbir şey olmuyordu, yani gün ölçeğinde tehlike yoktu.
+  // Tek güne ceza koymak yanlış olurdu — kötü gün oyunun parçası ve hedef zaten sahte
+  // ağırlıklı günlerde oynak. Cezalandırılan şey KRONİK düşük performans: ilk kaçırma
+  // bedava (grace), sonrakiler kademe kademe artar ve tavanda durur. Tutturan gün
+  // sayacı SIFIRLAR — yani ceza birikmez, seri kırılınca biter.
+  goalMissGraceDays: 1,     // ilk bu kadar ÜST ÜSTE kaçırma cezasız
+  goalMissRepStep: 3,       // sonraki her üst üste kaçırma bu kadar itibar götürür
+  goalMissRepMax: 9,        // ...ama tek günde bu kadarı aşmaz
+  // Aynı seri sayacına bağlı PARA kalemi: açığın bu oranı kasadan düşer (0 = kapalı).
+  // Ayrı bir para birimi olmasının sebebi ölçümle bulundu (bkz. DURUM.md): itibar
+  // ekonomisi yüksek doğruluklu oyuncuda DOYMUŞ durumda — günde ~22 doğru servis brüt
+  // +44 itibar getirirken tek günlük −9'luk ceza gürültüde kalıyor. İtibar cezası
+  // korelasyonlu kötü serileri (B′) ve zayıf oyuncuyu (C) vuruyor, ama sabit %85'i
+  // vuramıyor. Para, o oyuncunun gerçekten öldüğü eksen.
+  goalMissMoneyShare: 0,    // açığın kasadan düşülen oranı (0 = kapalı)
 
   // --- Yumuşak itibar tavanı ---
   // Sert 100 tavanı, tavana çarpan kazancı tamamen yok ediyordu; kayıplar ise her zaman
@@ -759,7 +776,8 @@ const game = {
   // sezon gün ORTASINDA da bitebilir (itibar 0) ve o yarım günün istatistiği de girmeli.
   seasonStats: null,      // { served, correct, wrong, angry, fakeCaught, fakeMissed, earned, daysGoalMet }
   dayFolded: false,       // bu günün istatistiği sezon toplamına eklendi mi
-  dayResult: null,        // { goal, met, repGain } — DAYEND kartı bunu okur
+  dayResult: null,        // { goal, met, repGain, repLoss, missStreak } — DAYEND kartı bunu okur
+  goalMissStreak: 0,      // üst üste kaçırılan gün sayısı — SEZON ölçeğinde (itibar gibi)
   seasonResult: null,     // sezon bittiyse özet nesne; leaderboard sonraki turda buradan beslenecek
 
   // --- KARİYER ---
@@ -1186,9 +1204,22 @@ function missRateDecayPerDay() {
 function missRateFor(day) {
   return Math.max(CONFIG.missRateFloor, CONFIG.missRateBase - (day - 1) * missRateDecayPerDay());
 }
-// o gün kaç yanlış servise tolerans var — müşteri sayısıyla ÖLÇEKLENİR
-function allowedMissesFor(day) {
-  return totalPatientsFor(day) * missRateFor(day);
+// SAHTE HASTANIN "KAÇIRMA MALİYETİ" GERÇEK HASTANINKİ DEĞİLDİR (miss-maliyeti harmanlaması).
+//
+// Eski hâl: izinliHata = N × missRate ve her hata missCost = (R+C)/geçerli ile fiyatlanırdı.
+// İki kusuru vardı. (1) N sahteleri de sayar, ama sahtede hata etmek BAŞKA bir kalemdir:
+// kaçan ciro yoktur (sahte zaten R'ye 0 katkı yapıyor), yerine para cezası ödenir ve
+// yakalama ikramiyesi kaçar. (2) Gün sahte-ağırlıklı olunca geçerli hasta sayısı düşer,
+// missCost fırlar ve tolerans absürtleşirdi; alt güvenlik bandı bunu kesiyordu (ölçüldü:
+// günlerin %3,8'i). Yani bandın asıl işi bir formül kusurunu örtmekti.
+//
+// Şimdi tolerans SINIF BAŞINA ayrı fiyatlanıyor ve toplam bir ₺ tutarı olarak çıkıyor.
+function fakeMissCost() {
+  // Sahteyi onaylamanın bilançosu: ödenen ceza + kaçan yakalama ikramiyesi.
+  return CONFIG.fakeApproveMoneyPenalty + CONFIG.fakeCatchBonus;
+}
+function missAllowanceFor(day, validN, fakeN, missCost) {
+  return missRateFor(day) * (validN * missCost + fakeN * fakeMissCost());
 }
 
 // =====================================================================
@@ -1725,11 +1756,15 @@ function buildDaySchedule(day) {
     }
   } finally { _dateDayOverride = prevDateDay; }
 
-  const misses = allowedMissesFor(day);
   // o güne özel gerçek hata maliyeti: kaçan ciro + yazılan cost zararı, geçerli hasta başına
   const missCost = validCount > 0 ? (R + C) / validCount : 0;
+  const allowance = missAllowanceFor(day, validCount, N - validCount, missCost);
+  // `misses` artık EŞDEĞER GEÇERLİ-HATA SAYISI: allowance / missCost. Bu tanımla
+  // raw = R − misses × missCost eşitliği aynen korunur, yani verifyGoalBalance,
+  // simulateDayScenario ve neededCorrectFor tek satır değişmeden çalışmaya devam eder.
+  const misses = missCost > 0 ? allowance / missCost : 0;
   const lo = CONFIG.goalRatioClamp[0], hi = CONFIG.goalRatioClamp[1];
-  const raw = R - misses * missCost;
+  const raw = R - allowance;
   // 10'a AŞAĞI yuvarla: yukarı yuvarlamak formülün az önce verdiği toleransın bir kısmını
   // geri alır (gün 1'de hedefi 648.6 → 650 yapıp gereken doğruyu 6'dan 7'ye çıkarıyordu).
   const goal = Math.floor(clamp(raw, R * lo, R * hi) / 10) * 10;
@@ -1737,7 +1772,7 @@ function buildDaySchedule(day) {
   // Güvenlik bandı devreye girdi mi? (girdiyse hedef artık tolerans türevli DEĞİLDİR)
   const clampedAt = raw < R * lo ? "lo" : (raw > R * hi ? "hi" : null);
   return { day, patients, N, dayN, nightN, isNight: nightN > 0,
-           R, C, validCount, fakeCount: N - validCount, misses, missCost, raw, goal, clampedAt,
+           R, C, validCount, fakeCount: N - validCount, misses, missCost, allowance, raw, goal, clampedAt,
            // konsantrasyon tavanı teşhisi (cheats.concentration / verifyConcentrationCap)
            concCap: concentrationCapFor(validCount), concRegen, concForced };
 }
@@ -2580,6 +2615,14 @@ function beginNightShift() {
   game.spawnTimer = CONFIG.spawnInterval;    // gece ilk hasta hemen dalmasın
 }
 
+// Üst üste `streak` gün hedef kaçtığında o günün itibar cezası.
+// grace kadarı bedava; sonrası adım adım artar, tavanda durur.
+function goalMissPenaltyFor(streak) {
+  const over = streak - CONFIG.goalMissGraceDays;
+  if (over <= 0) return 0;
+  return Math.min(CONFIG.goalMissRepMax, over * CONFIG.goalMissRepStep);
+}
+
 function endDay() {
   game.feedback = null;
   const goal = goalForDay();
@@ -2589,10 +2632,31 @@ function endDay() {
   // sağlar: skipDay da endDay üzerinden geçer.
   // yumuşak tavan yüzünden fiilen eklenen değer repGain'e yazılır (kart bunu gösterir)
   const repGain = met ? gainReputation(CONFIG.goalMetReputation) : 0;
-  game.dayResult = { goal: goal, met: met, repGain: repGain };
+  // Üst üste kaçırma sayacı: tutturan gün SIFIRLAR (ceza birikmez, seri kırılınca biter).
+  game.goalMissStreak = met ? 0 : (game.goalMissStreak || 0) + 1;
+  const repLoss = met ? 0 : goalMissPenaltyFor(game.goalMissStreak);
+  game.dayResult = { goal: goal, met: met, repGain: repGain,
+                     repLoss: repLoss, missStreak: game.goalMissStreak };
   foldDayIntoSeason(met);
   // KARİYER SKORU = ulaşılan EN YÜKSEK kasa. Her gün sonunda güncellenir (istenen kadans).
   updateCareerPeak();
+  // Ceza itibarı sıfırlayıp sezonu (ve kariyeri) KAPATABİLİR. O yüzden fold/peak'ten
+  // SONRA uygulanır ve hemen ardından state kontrol edilir: kapanmışsa DAYEND'e çekmek
+  // finishSeason'ın kurduğu bitiş state'ini sessizce ezerdi.
+  // Para kalemi: açığın oranı. İtibardan ÖNCE uygulanır ki kasa hareketi bitiş
+  // state'ini kuran çağrıdan sonra sessizce kalmasın.
+  let moneyLoss = 0;
+  if (!met && CONFIG.goalMissMoneyShare > 0 && game.goalMissStreak > CONFIG.goalMissGraceDays) {
+    const shortfall = Math.max(0, goal - game.dayStats.money);
+    moneyLoss = Math.round(shortfall * CONFIG.goalMissMoneyShare);
+    if (moneyLoss > 0) {
+      moneyLoss = Math.min(moneyLoss, game.money);
+      game.money -= moneyLoss;
+      game.dayResult.moneyLoss = moneyLoss;
+    }
+  }
+  if (repLoss > 0) loseReputation(repLoss);
+  if (game.state === STATE.SEASONEND || game.state === STATE.CAREEREND) return;
   // SEZON SONU: son gün bitince DAYEND kartı HİÇ gösterilmez, doğrudan sezon kartı gelir.
   // Sebep: "Sonraki Gün →" butonu 31. günü başlatmamalı; olmayan bir günün kapısı da olmaz.
   if (game.dayNumber >= CONFIG.seasonDays) { finishSeason("completed"); return; }
@@ -2903,6 +2967,7 @@ function beginSeason(n) {
   }
 
   game.reputation = CONFIG.startReputation;   // bkz. yukarıdaki not
+  game.goalMissStreak = 0;                    // kaçırma serisi de itibarla aynı ölçekte
   game.dayNumber = 1;
   game.seasonStats = newSeasonStats();
   game.seasonResult = null;
@@ -4468,10 +4533,12 @@ function drawDayEnd() {
   const nextRound = priceRoundOn(game.dayNumber + 1);
   const priceH = nextRound ? fs * 2.5 : 0;         // iki satırlı şerit (başlık + kategoriler)
   const priceGap = nextRound ? gap * 0.7 : 0;
-  // hedef tutan günde itibar ödülü şeridi (kaçıran günde HİÇ gösterilmez — ceza mesajı yok)
-  const showRep = !!res.met;
-  const repH = showRep ? fs * 1.5 : 0;
-  const repGap = showRep ? gap * 0.7 : 0;
+  // Hedef şeridi: tutan günde ödül, kaçıran günde durum. Kaçıran gün de GÖSTERİLİR —
+  // ceza sessiz olursa oyuncu kuralı hiç öğrenemez; bedava olan ilk gün de yazılır ki
+  // "bir gün serbest, üst üstesi pahalı" kuralı kartın kendisinden okunsun.
+  const showRep = true;
+  const repH = fs * 1.5;
+  const repGap = gap * 0.7;
   const stackH = () => headerH + padTop + nRows * rowStep + gap + goalH + repGap + repH +
     warnGap + warnH + priceGap + priceH + gap + btnH + gap + pillH + padBottom;
   let cardH = stackH();
@@ -4551,11 +4618,22 @@ function drawDayEnd() {
   // Hedef ödülü şeridi — oyuncu kuralı buradan öğrenir, gizli kalmasın
   if (showRep) {
     const rY = goalY + goalH + repGap;
-    fillRoundRect(cardX + cardW * 0.08, rY, cardW * 0.84, repH, repH * 0.5, "rgba(94,196,138,0.18)");
-    strokeRoundRect(cardX + cardW * 0.08, rY, cardW * 0.84, repH, repH * 0.5, c.good, 1.5);
-    fitText(res.repGain > 0 ? "⭐ Hedef tutturuldu · +" + (Math.round(res.repGain * 10) / 10) + " itibar"
-                            : "⭐ Hedef tutturuldu · itibar tavanda",
-      cardX + cardW / 2, rY + repH / 2, cardW * 0.78, fs * 0.88, c.good, "center", "800");
+    const loss = Math.round(res.repLoss || 0);
+    const streak = res.missStreak || 0;
+    const okStrip = !!res.met;
+    const col = okStrip ? c.good : (loss > 0 ? c.bad : "#e0b062");
+    const bg = okStrip ? "rgba(94,196,138,0.18)"
+             : (loss > 0 ? "rgba(224,96,96,0.18)" : "rgba(224,176,98,0.16)");
+    const txt = okStrip
+      ? (res.repGain > 0 ? "⭐ Hedef tutturuldu · +" + (Math.round(res.repGain * 10) / 10) + " itibar"
+                         : "⭐ Hedef tutturuldu · itibar tavanda")
+      : (loss > 0 || res.moneyLoss ? "⚠️ Hedef kaçtı (üst üste " + streak + ". gün) · " +
+            [loss > 0 ? "−" + loss + " itibar" : null,
+             res.moneyLoss ? "−" + formatMoney(res.moneyLoss) : null].filter(Boolean).join(" · ")
+                  : "⚠️ Hedef kaçtı — bu gün cezasız, üst üstesi pahalı");
+    fillRoundRect(cardX + cardW * 0.08, rY, cardW * 0.84, repH, repH * 0.5, bg);
+    strokeRoundRect(cardX + cardW * 0.08, rY, cardW * 0.84, repH, repH * 0.5, col, 1.5);
+    fitText(txt, cardX + cardW / 2, rY + repH / 2, cardW * 0.78, fs * 0.88, col, "center", "800");
   }
 
   // "Yarın nöbetçisin" uyarısı — oyuncu depoya gidip hazırlanabilsin
