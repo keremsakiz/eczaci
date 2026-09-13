@@ -351,6 +351,18 @@ const CONFIG = {
 
     good: "#5ec48a",
     bad: "#e8736b",
+
+    // --- ANA EKRAN: gece sokağı + tabela ---
+    // Tabela GERÇEK eczane tabelasıdır: ışıklı beyaz kutu, kırmızı kabartma ECZANE,
+    // altında siyah ince harflerle eczanenin adı, iki yanda kırmızı kanat.
+    skyTop: "#0d0a22", skyMid: "#2c1c3e", skyWarm: "#45263a", skyLow: "#140e18",
+    bldDark: "#0e0a18", bldWin: "rgba(255,196,110,",
+    paveTop: "#2a1d26", paveLow: "#1a1219",
+    wallTop: "#4b2f20", wallMid: "#3a2318", wallLow: "#2a1810",
+    awningRed: "#9c2b26", awningCream: "#efe4d2",
+    rxRed: "#e01f26", rxRedDeep: "#7d0b11", rxRedMid: "#9c0f16",
+    signFace: "#ffffff", signFace2: "#fbfaf6", signFace3: "#e6e5df",
+    signEdge: "#c9c9c1", signInk: "#15151a",
     repBar: "#f6c453",
     timeBar: "#79c0e8",
     repTrack: "rgba(255,255,255,0.16)",
@@ -806,12 +818,22 @@ const Sprite = {
 //              ya da ruhsat yenileme bedeli ödenemedi ("fee").
 // İtibar çöküşü artık SEZONU değil KARİYERİ bitirir; bu yüzden SEASONEND'e yalnız
 // "completed" yolundan gelinir.
-const STATE = { MENU: "MENU", PLAYING: "PLAYING", DAYEND: "DAYEND",
-                SEASONEND: "SEASONEND", CAREEREND: "CAREEREND" };
+const STATE = { MENU: "MENU", NAMING: "NAMING", HOWTO: "HOWTO", PLAYING: "PLAYING",
+                DAYEND: "DAYEND", SEASONEND: "SEASONEND", CAREEREND: "CAREEREND" };
 
 const game = {
-  state: STATE.MENU,      // açılışta menü; BAŞLA'ya basınca PLAYING
+  state: STATE.MENU,      // açılışta menü; ad yoksa boot NAMING'e çeker
   hasRun: false,          // SÜREN bir sezon var mı (menüde DEVAM ET için; sezon bitince false)
+
+  // --- ECZANENİN ADI ---
+  // Yalnız ANA EKRAN tabelasında görünür; oyun içi HUD'a ve kartlara GİRMEZ (bilinçli:
+  // tezgahta oyuncunun okuyacağı yer HUD'dur, orası zaten dolu). Kalıcı depolama HENÜZ
+  // YOK — sayfa yenilenince ad sorulur.
+  pharmacyName: "",
+  nameInput: "",          // NAMING ekranında yazılmakta olan ad
+  howtoBack: "MENU",      // NASIL OYNANIR'dan dönülecek state
+  // Yerel rekorlar (sunucu yok). finishCareer günceller, ana ekran gösterir.
+  records: { peak: 0, seasons: 0, bestSeason: 0 },
   money: CONFIG.startMoney,
   reputation: CONFIG.startReputation,
 
@@ -900,6 +922,8 @@ let layout = {
   // depo (PC ekranı) rect'leri (ilgili draw fonksiyonlarında hesaplanır — nextDayBtn kalıbı)
   pcBtn: null, depotFromDayEndBtn: null,
   pcMenuBtns: null, pcBackBtn: null, upgradeRows: null, upgradeTabs: null,
+  menuHowBtn: null, menuNameBtn: null, howBackBtn: null,
+  kbKeys: null, kbDel: null, kbSpace: null, kbOk: null,
   medulaKeys: null, medulaOk: null, medulaDel: null,
   depotPanel: null, depotCloseBtn: null, depotTabs: [], depotRows: [],
   depotOrderBtn: null
@@ -2952,6 +2976,7 @@ function buildCareerResult(reason) {
 function finishCareer(reason) {
   if (game.state === STATE.CAREEREND) return;
   game.careerResult = buildCareerResult(reason);
+  updateRecords(game.careerResult);
   game.state = STATE.CAREEREND;
   game.hasRun = false;
   game.feedback = null;
@@ -2959,6 +2984,22 @@ function finishCareer(reason) {
   game.pcScreen = "home";
   game.nightIntro = null;
   resetTransientAnims();
+}
+
+// YEREL rekorlar. Sunucu yok, kalıcı depolama da HENÜZ yok — sayfa yenilenince sıfırlanır.
+// Ana ekrandaki panel bunu okur; rekor yoksa panel "henüz kariyer tamamlamadın" der.
+// Boot self-test'leri SAHTE kariyerler kapatıyor (bedel ödenemeyince kariyerin
+// bittiğini denetlemek için) ve o uydurma kasa rekor defterine yazılıyordu: oyuncu
+// hiç oynamadan ana ekranda 493.234₺ "rekor" görüyordu. Defter OYUNCUNUN
+// kariyerlerini tutar; denetimler boyunca bayrak kapalı kalır.
+let _noRecords = false;
+function updateRecords(res) {
+  if (_noRecords || !res) return;
+  const r = game.records;
+  if (res.score > r.peak) r.peak = res.score;
+  if (res.seasonsCompleted > r.seasons) r.seasons = res.seasonsCompleted;
+  const best = (res.bestSeason && res.bestSeason.earned) || 0;
+  if (best > r.bestSeason) r.bestSeason = best;
 }
 
 // SEZON SONU ekranındaki "YENİ SEZON" buradan geçer. Bedel karşılanmıyorsa kariyer biter.
@@ -5579,8 +5620,15 @@ function handleDepotTap(px, py) {
 function render() {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.clearRect(0, 0, layout.w, layout.h);
+
+  // MENÜ AİLESİ kendi sahnesini baştan sona çizer; oyun dünyasının arka planı
+  // altlarına konmaz (letterbox bandında iki sahne birden görünürdü).
+  if (game.state === STATE.MENU)   { drawMenu();   return; }
+  if (game.state === STATE.NAMING) { drawNaming(); return; }
+  if (game.state === STATE.HOWTO)  { drawHowTo();  return; }
+
   drawBackground();
-  if (game.state !== STATE.MENU) drawNightOverlay();   // nöbet gecesi tonlaması
+  drawNightOverlay();   // nöbet gecesi tonlaması
 
   if (game.state === STATE.PLAYING) {
     drawHUD();
@@ -5609,9 +5657,6 @@ function render() {
     if (activeBeggar() && !game.feedback) drawBeggarButtons();
     if (activeBeggarPay() && !game.feedback) drawBeggarPayButton(activeBeggarPay());
     drawDayEnd();
-  } else if (game.state === STATE.MENU) {
-    // oyun dünyası çizilmesin; arka plan + menü kartı
-    drawMenu();
   } else if (game.state === STATE.CAREEREND) {
     // arka planda son PLAYING karesini koru + üstüne kariyer sonu kartı
     drawHUD();
@@ -5640,74 +5685,593 @@ function render() {
   drawBookOverlay();   // defter açılma animasyonu + açık panel (en üstte)
 }
 
-// ---- Açılış menüsü (drawDayEnd kart diliyle aynı) ----
-function drawMenu() {
-  const w = layout.w, h = layout.h, c = CONFIG.colors;
-  const S = layout.stage;
+// =====================================================================
+//  ANA EKRAN — gece sokağı, tabela, ad girişi, nasıl oynanır
+// =====================================================================
+// TASARIM NOTU: bu ekranların tamamı KODLA çizilir, yeni PNG yok. Sebep ikili —
+// (a) asset turu gerektirmiyor, (b) tabela oyuncunun yazdığı ada göre değiştiği için
+// zaten bir görselle karşılanamaz.
 
-  // tüm ekranı hafifçe karart (kart öne çıksın)
-  ctx.fillStyle = "rgba(10, 8, 16, 0.55)";
-  ctx.fillRect(0, 0, w, h);
+// Sokak her açılışta AYNI görünmeli ve oyunun rastgelelik akışını KAYDIRMAMALI:
+// bu yüzden rng() değil, indeksten türeyen saf bir karıştırıcı kullanılıyor.
+function streetRand(i) {
+  let h = Math.imul((i | 0) + 1, 0x9E3779B1);
+  h = Math.imul(h ^ (h >>> 15), 0x85EBCA6B);
+  h = Math.imul(h ^ (h >>> 13), 0xC2B2AE35);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
 
-  const cardW = S.w * 0.82;
-  const cardH = S.h * 0.56;
-  const cardX = S.x + (S.w - cardW) / 2;
-  const cardY = S.y + (S.h - cardH) / 2;
+// Harf aralıklı metin. Canvas'ta letterSpacing her yerde yok (eski iOS Safari),
+// o yüzden harf harf çizilir. Toplam genişliği döndürür.
+function spacedText(str, cx, cy, size, color, spacing, weight, align) {
+  ctx.font = (weight || "600") + " " + size + "px " + RX_FONT;
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  ctx.fillStyle = color;
+  const chars = Array.from(str);
+  let total = 0;
+  for (const ch of chars) total += ctx.measureText(ch).width + spacing;
+  total = Math.max(0, total - spacing);
+  let x = align === "center" ? cx - total / 2 : cx;
+  for (const ch of chars) { ctx.fillText(ch, x, cy); x += ctx.measureText(ch).width + spacing; }
+  return total;
+}
 
-  // koyu kart + amber kenarlık
-  drawPanel(cardX, cardY, cardW, cardH, cardW * 0.08, c.panelBgSolid);
+// Gece sokağı: gökyüzü → apartmanlar → kaldırım → cephe → tente → fenerler → vitrin.
+// Tüm ölçüler sahne dikdörtgenine (9:16 kolon) oranlıdır.
+// DİKEY YERLEŞİM (sahne oranı). İlk denemede apartmanların tabanı cephe duvarının
+// ALTINDA kalıyordu ve skyline hiç görünmüyordu — ölçüm değil, ekran görüntüsü yakaladı.
+const ST = { roof: 0.33, wallTop: 0.33, wallBot: 0.905, awning: 0.335,
+             lamp: 0.378, vitrin: 0.400, vitrinH: 0.105,
+             tabela: 0.095, tabelaH: 0.12, tabelaW: 0.80 };
+const STREET_BLD = [
+  { x: -0.06, w: 0.18, h: 0.070, lit: 0.16 },
+  { x:  0.10, w: 0.13, h: 0.122, lit: 0.34 },
+  { x:  0.21, w: 0.16, h: 0.052, lit: 0.16 },
+  { x:  0.35, w: 0.12, h: 0.146, lit: 0.34 },
+  { x:  0.45, w: 0.18, h: 0.080, lit: 0.16 },
+  { x:  0.61, w: 0.14, h: 0.130, lit: 0.34 },
+  { x:  0.73, w: 0.17, h: 0.058, lit: 0.16 },
+  { x:  0.88, w: 0.20, h: 0.104, lit: 0.34 }
+];
+function drawStreet() {
+  const S = layout.stage, c = CONFIG.colors;
+  const X = f => S.x + S.w * f, Y = f => S.y + S.h * f;
 
-  // büyük başlık + alt başlık
-  text("ECZACI", cardX + cardW / 2, cardY + cardH * 0.20, cardH * 0.13, c.neon, "center", "800");
-  text("Eczane Simülasyonu", cardX + cardW / 2, cardY + cardH * 0.32, cardH * 0.05, c.creamSoft, "center", "600");
+  // --- gökyüzü ---
+  // Kolonun DIŞI da boyanır: 9:19,5 telefonda üstte/altta letterbox bandı var ve orada
+  // oyun arka planı (bg_pharmacy) görünürse menü iki ayrı sahneye bölünmüş gibi durur.
+  const sky = ctx.createLinearGradient(0, S.y, 0, S.y + S.h);
+  sky.addColorStop(0.00, c.skyTop);
+  sky.addColorStop(0.30, "#191233");
+  sky.addColorStop(0.52, c.skyMid);
+  sky.addColorStop(0.68, c.skyWarm);
+  sky.addColorStop(0.80, "#201422");
+  sky.addColorStop(1.00, c.skyLow);
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, layout.w, layout.h);
+  // şehrin üstündeki mor hava
+  const haze = ctx.createRadialGradient(X(0.5), Y(0.40), 0, X(0.5), Y(0.40), S.w * 0.85);
+  haze.addColorStop(0, "rgba(120,70,140,0.34)");
+  haze.addColorStop(1, "rgba(120,70,140,0)");
+  ctx.fillStyle = haze;
+  ctx.fillRect(S.x, S.y, S.w, S.h);
 
-  // YENİ KARİYER butonu (drawDayEnd'deki Sonraki Gün ile aynı nabız) — TAM RESET:
-  // kasa, geliştirme, stok, alacaklar, sezon sayacı, peak, hepsi başa döner.
-  const bW = cardW * 0.7, bH = cardH * 0.12;
-  const bX = cardX + (cardW - bW) / 2;
-  const bY = cardY + cardH * 0.46 - bH / 2;
-  layout.menuStartBtn = { x: bX, y: bY, w: bW, h: bH };
-  fillRoundRect(bX, bY, bW, bH, bH * 0.34, c.btnDark);
-  ctx.save();
-  const pulse = 0.6 + 0.4 * (0.5 + 0.5 * Math.sin(game.clock * 4));
-  ctx.shadowColor = c.neonGlow;
-  ctx.shadowBlur = 20 * pulse;
-  strokeRoundRect(bX, bY, bW, bH, bH * 0.34, c.neon, Math.max(2, bW * 0.008));
-  ctx.restore();
-  ctx.save();
-  ctx.shadowColor = c.neonGlow;
-  ctx.shadowBlur = 14;
-  text("YENİ KARİYER", bX + bW / 2, bY + bH / 2, bH * 0.40, c.neon, "center", "800");
-  ctx.restore();
+  // Ufuk parıltısı — şehrin ışığı. Siluetler ANCAK arkaları aydınlıksa okunur;
+  // ilk denemede apartmanlar gökyüzüyle aynı koyulukta kaybolmuştu.
+  const hz = ctx.createRadialGradient(X(0.5), Y(ST.roof), 0, X(0.5), Y(ST.roof), S.w * 0.95);
+  hz.addColorStop(0, "rgba(122,82,150,0.42)");
+  hz.addColorStop(0.55, "rgba(96,58,116,0.16)");
+  hz.addColorStop(1, "rgba(96,58,116,0)");
+  ctx.fillStyle = hz;
+  ctx.fillRect(0, 0, layout.w, Y(ST.roof));
 
-  // DEVAM ET — yalnız SÜREN bir sezon sürdürülebilir (ev butonuyla menüye dönüldüyse).
-  // Sezon/kariyer bittiyse satır PASİF çizilir: görünür ama layout rect verilmez, yani
-  // tıklanamaz. Gizlemek yerine soluk göstermek oyuncuya neden geçemediğini anlatır.
-  const rH = cardH * 0.095;
-  const rW = cardW * 0.58;
-  const rX = cardX + (cardW - rW) / 2;
-  const rY = cardY + cardH * 0.62 - rH / 2;
-  if (game.hasRun) {
-    layout.menuResumeBtn = { x: rX, y: rY, w: rW, h: rH };
-    fillRoundRect(rX, rY, rW, rH, rH * 0.34, c.btnDark);
-    strokeRoundRect(rX, rY, rW, rH, rH * 0.34, "rgba(245,170,70,0.6)", Math.max(1.5, rW * 0.008));
-    fitText("DEVAM ET  (S" + careerSeason() + " · Gün " + game.dayNumber + " / " + CONFIG.seasonDays + ")",
-      rX + rW / 2, rY + rH / 2, rW * 0.90, rH * 0.38, c.cream, "center", "800");
-  } else if (game.careerResult || game.seasonResult) {
-    layout.menuResumeBtn = null;   // PASİF: rect yok => dokunuş hiçbir şey yapmaz
-    fillRoundRect(rX, rY, rW, rH, rH * 0.34, "rgba(18, 14, 22, 0.55)");
-    strokeRoundRect(rX, rY, rW, rH, rH * 0.34, "rgba(245,170,70,0.22)", Math.max(1.5, rW * 0.008));
-    fitText(game.careerResult ? "DEVAM ET  (kariyer bitti)" : "DEVAM ET  (sezon bitti)",
-      rX + rW / 2, rY + rH / 2, rW * 0.90, rH * 0.38,
-      "rgba(205, 188, 174, 0.45)", "center", "800");
-  } else {
-    layout.menuResumeBtn = null;   // bayat rect kalmasın (ilk açılış)
+  // --- yıldızlar (sabit) ---
+  for (let i = 0; i < 14; i++) {
+    const sx = X(0.04 + streetRand(i) * 0.92), sy = Y(0.02 + streetRand(i + 40) * 0.10);
+    ctx.fillStyle = "rgba(255,245,225," + (0.35 + streetRand(i + 80) * 0.45).toFixed(2) + ")";
+    ctx.fillRect(sx, sy, 1.6, 1.6);
   }
 
-  // kilitli, soluk, dokunulamaz placeholder satırlar (layout rect verilmez)
-  text("⚙️ Ayarlar 🔒", cardX + cardW / 2, cardY + cardH * 0.78, cardH * 0.05, c.creamSoft, "center", "600");
-  text("🏆 En Yüksek Skor 🔒", cardX + cardW / 2, cardY + cardH * 0.88, cardH * 0.05, c.creamSoft, "center", "600");
+  // --- ay ---
+  const mr = S.w * 0.034, mx = X(0.845), my = Y(0.048);
+  const glow = ctx.createRadialGradient(mx, my, mr * 0.6, mx, my, mr * 5);
+  glow.addColorStop(0, "rgba(255,236,190,0.22)");
+  glow.addColorStop(1, "rgba(255,236,190,0)");
+  ctx.fillStyle = glow;
+  ctx.beginPath(); ctx.arc(mx, my, mr * 5, 0, Math.PI * 2); ctx.fill();
+  const mg = ctx.createRadialGradient(mx - mr * 0.3, my - mr * 0.3, 0, mx, my, mr);
+  mg.addColorStop(0, "#fff6df"); mg.addColorStop(0.62, "#e8d3a8"); mg.addColorStop(1, "#cdb282");
+  ctx.fillStyle = mg;
+  ctx.beginPath(); ctx.arc(mx, my, mr, 0, Math.PI * 2); ctx.fill();
+
+  // --- apartmanlar + pencereler ---
+  const base = Y(ST.roof);
+  let wi = 0;
+  for (let b = 0; b < STREET_BLD.length; b++) {
+    const B = STREET_BLD[b];
+    const bx = X(B.x), bw = S.w * B.w, bh = S.h * B.h;
+    ctx.fillStyle = "#080513";                       // neredeyse siyah siluet
+    ctx.fillRect(bx, base - bh, bw, bh);
+    ctx.fillStyle = "rgba(150,110,180,0.20)";        // çatı kenarı (gökyüzünden ayırır)
+    ctx.fillRect(bx, base - bh, bw, 1.2);
+    ctx.fillStyle = "rgba(0,0,0,0.35)";              // yan gölge
+    ctx.fillRect(bx + bw - 1.5, base - bh, 1.5, bh);
+    // pencere ızgarası
+    const pad = S.w * 0.016, cw = S.w * 0.0105, ch = S.h * 0.0058;
+    const colGap = cw * 2.6, rowGap = ch * 3.0;
+    for (let y = base - bh + pad; y < base - pad; y += rowGap) {
+      for (let x = bx + pad; x < bx + bw - pad - cw; x += colGap) {
+        const r = streetRand(wi++);
+        if (r > B.lit) continue;
+        ctx.fillStyle = c.bldWin + (0.28 + r * 0.5).toFixed(2) + ")";
+        ctx.fillRect(x, y, cw, ch);
+      }
+    }
+    // çatıda su deposu / çanak anten
+    if (b === 1 || b === 3) {
+      const tw = S.w * 0.034, th = S.h * 0.012, tx = bx + bw * 0.35, ty = base - bh - th;
+      ctx.fillStyle = c.bldDark;
+      ctx.fillRect(tx, ty, tw, th);
+      ctx.fillRect(tx + tw * 0.2, ty - th * 0.7, 1.5, th * 0.7);
+    }
+  }
+
+  // --- kaldırım + ışık havuzu ---
+  const pave = ctx.createLinearGradient(0, Y(ST.wallBot), 0, S.y + S.h);
+  pave.addColorStop(0, c.paveTop); pave.addColorStop(1, c.paveLow);
+  const pb = Y(ST.wallBot);
+  ctx.fillStyle = pave;
+  ctx.fillRect(0, pb, layout.w, S.y + S.h - pb + (layout.h - (S.y + S.h)));
+  const pool = ctx.createRadialGradient(X(0.5), pb, 0, X(0.5), pb, S.w * 0.7);
+  pool.addColorStop(0, "rgba(255,180,90,0.17)");
+  pool.addColorStop(1, "rgba(255,180,90,0)");
+  ctx.fillStyle = pool;
+  ctx.fillRect(0, pb, layout.w, layout.h - pb);
+
+  // --- dükkân cephesi: dikey ahşap kaplama ---
+  const wy = Y(ST.wallTop), wh = S.h * (ST.wallBot - ST.wallTop);
+  const wall = ctx.createLinearGradient(0, wy, 0, wy + wh);
+  wall.addColorStop(0, c.wallTop); wall.addColorStop(0.55, c.wallMid); wall.addColorStop(1, c.wallLow);
+  ctx.fillStyle = wall;
+  ctx.fillRect(0, wy, layout.w, wh);
+  const plank = S.w * 0.085;
+  for (let x = 0; x < layout.w; x += plank) {
+    ctx.fillStyle = "rgba(0,0,0,0.22)"; ctx.fillRect(x, wy, 1.5, wh);
+    ctx.fillStyle = "rgba(255,210,150,0.045)"; ctx.fillRect(x + 1.5, wy, 1, wh);
+  }
+  ctx.fillStyle = "rgba(0,0,0,0.16)";           // alt gölge (kaldırıma geçiş)
+  ctx.fillRect(0, wy + wh - S.h * 0.012, layout.w, S.h * 0.012);
+
+  // --- tente (şeritli + saçaklı) ---
+  const ay = Y(ST.awning), ah = S.h * 0.026, stripe = S.w * 0.038;
+  for (let x = 0, i = 0; x < layout.w; x += stripe, i++) {
+    ctx.fillStyle = i % 2 ? c.awningCream : c.awningRed;
+    ctx.fillRect(x, ay, Math.min(stripe, layout.w - x), ah);
+  }
+  ctx.fillStyle = "rgba(0,0,0,0.26)";
+  ctx.fillRect(0, ay + ah * 0.72, layout.w, ah * 0.28);
+  const sc = stripe * 0.5;                           // saçak
+  for (let x = sc * 0.5, i = 0; x < layout.w + sc; x += sc * 2, i++) {
+    ctx.fillStyle = i % 2 ? c.awningRed : "#7d211d";
+    ctx.beginPath(); ctx.arc(x, ay + ah, sc, 0, Math.PI); ctx.fill();
+  }
+  ctx.fillStyle = "rgba(255,255,255,0.12)";          // üst kenar parlaması
+  ctx.fillRect(0, ay, layout.w, 1.5);
+
+  // --- duvar fenerleri: tenteden sarkan iki fener ---
+  for (const side of [0.075, 0.925]) {
+    const lx = X(side), ly = Y(ST.lamp), lw = S.w * 0.052, lh = S.h * 0.034;
+    const lg = ctx.createRadialGradient(lx, ly + lh * 0.55, 0, lx, ly + lh * 0.55, S.w * 0.26);
+    lg.addColorStop(0, "rgba(255,178,80,0.40)");
+    lg.addColorStop(0.45, "rgba(255,168,70,0.14)");
+    lg.addColorStop(1, "rgba(255,178,80,0)");
+    ctx.fillStyle = lg;
+    ctx.fillRect(lx - S.w * 0.26, ly - S.w * 0.26, S.w * 0.52, S.w * 0.52);
+    ctx.fillStyle = "#6b4b22";                                    // askı
+    ctx.fillRect(lx - 1, ly - S.h * 0.012, 2, S.h * 0.012);
+    ctx.fillStyle = "#8a6430";                                    // şapka
+    ctx.beginPath(); ctx.moveTo(lx - lw * 0.6, ly + lh * 0.2);
+    ctx.lineTo(lx + lw * 0.6, ly + lh * 0.2); ctx.lineTo(lx, ly); ctx.closePath(); ctx.fill();
+    const body = ctx.createLinearGradient(0, ly + lh * 0.2, 0, ly + lh);
+    body.addColorStop(0, "#ffe6a8"); body.addColorStop(0.5, "#ffb347"); body.addColorStop(1, "#c9772a");
+    fillRoundRect(lx - lw * 0.36, ly + lh * 0.2, lw * 0.72, lh * 0.72, lw * 0.2, body);
+  }
+
+  // --- vitrin: iki raf dolusu ilaç kutusu ---
+  const vx = X(0.055), vw = S.w * 0.89, vy = Y(ST.vitrin), vh = S.h * ST.vitrinH;
+  const vg = ctx.createLinearGradient(0, vy, 0, vy + vh);
+  vg.addColorStop(0, "rgba(255,206,132,0.26)"); vg.addColorStop(1, "rgba(20,12,8,0.55)");
+  fillRoundRect(vx, vy, vw, vh, S.w * 0.01, vg);
+  strokeRoundRect(vx, vy, vw, vh, S.w * 0.01, "rgba(255,196,120,0.26)", 1);
+  // Kutular ilk denemede ince ve eşit aralıklıydı, ekolayzer gibi duruyordu:
+  // genişlikleri de değişken, aralar daha büyük.
+  const BOXC = ["#dce8ee", "#eccca6", "#cfe2cd", "#ead3d9", "#d7d1e7", "#e6ddc4", "#cee5e7", "#e9d7b9"];
+  for (let r = 0; r < 2; r++) {
+    const shelfY = vy + vh * (r === 0 ? 0.46 : 0.93);
+    ctx.fillStyle = "rgba(90,58,30,0.75)";                 // raf tahtası
+    ctx.fillRect(vx + S.w * 0.014, shelfY, vw - S.w * 0.028, S.h * 0.0045);
+    ctx.fillStyle = "rgba(255,210,150,0.25)";
+    ctx.fillRect(vx + S.w * 0.014, shelfY, vw - S.w * 0.028, 1);
+    let x = vx + S.w * 0.028;
+    for (let i = 0; i < 40; i++) {
+      const rw2 = streetRand(r * 61 + i);
+      const bw2 = S.w * (0.020 + rw2 * 0.016);
+      if (x + bw2 > vx + vw - S.w * 0.028) break;
+      const hh = vh * (0.20 + streetRand(r * 97 + i) * 0.20);
+      ctx.fillStyle = BOXC[(r * 3 + i) % BOXC.length];
+      ctx.fillRect(x, shelfY - hh, bw2, hh);
+      ctx.fillStyle = "rgba(0,0,0,0.18)";                  // kutu gölgesi
+      ctx.fillRect(x + bw2 - 1.5, shelfY - hh, 1.5, hh);
+      x += bw2 + S.w * (0.006 + streetRand(r * 13 + i) * 0.008);
+    }
+  }
+  fillRoundRect(vx, vy, vw, vh * 0.30, S.w * 0.01, "rgba(255,214,150,0.07)");   // cam yansıması
 }
+
+// TABELA — ışıklı beyaz kutu + kırmızı kabartma ECZANE + siyah ad + kırmızı kanatlar.
+// Tek fonksiyon; ana ekran da ad girişi de bunu çağırır (iki yerde iki ayrı çizim
+// tutmak, adın nasıl duracağını yazarken göstermeyi imkânsız kılardı).
+function drawTabela(x, y, w, h, name, caret) {
+  const c = CONFIG.colors;
+  const r = h * 0.07;
+
+  // yan kanatlar: montaj bandı. İlk denemede geniş ve parlak kırmızı levhalardı,
+  // tabelanın önüne geçiyordu — daraldı ve koyulaştı.
+  const ww = w * 0.055, wy = y + h * 0.30, wh2 = h * 0.40;
+  for (const wx of [x - ww * 0.9, x + w - ww * 0.1]) {
+    const g = ctx.createLinearGradient(0, wy, 0, wy + wh2);
+    g.addColorStop(0, "#c2191f"); g.addColorStop(0.5, "#9c0f16"); g.addColorStop(1, "#6f0a10");
+    fillRoundRect(wx, wy, ww, wh2, ww * 0.22, g);
+  }
+
+  // ışık taşması (arkadan aydınlatmalı kutu)
+  ctx.save();
+  ctx.shadowColor = "rgba(255,246,225,0.55)";
+  ctx.shadowBlur = h * 0.55;
+  const face = ctx.createLinearGradient(0, y, 0, y + h);
+  face.addColorStop(0, c.signFace); face.addColorStop(0.55, c.signFace2); face.addColorStop(1, c.signFace3);
+  fillRoundRect(x, y, w, h, r, face);
+  ctx.restore();
+  strokeRoundRect(x, y, w, h, r, c.signEdge, 1.2);
+  ctx.fillStyle = "rgba(255,255,255,0.9)";           // üst kenar parlaması
+  ctx.fillRect(x + r, y + 1, w - r * 2, 1.2);
+
+  // ECZANE — kabartma: koyu kırmızı katmanlar sağa-aşağı kaydırılıp üstüne parlak kırmızı
+  const cx = x + w / 2, ey = y + h * 0.40;
+  let fs = h * 0.42;
+  ctx.font = "900 " + fs + "px " + RX_FONT;
+  while (fs > 8 && ctx.measureText("ECZANE").width > w * 0.82) { fs -= 0.5; ctx.font = "900 " + fs + "px " + RX_FONT; }
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  // KABARTMA: üç kalın katman merdiven gibi duruyordu. Aynı derinlik, çok sayıda
+  // küçük adımla — kenar pürüzsüz çıkıyor.
+  const depth = Math.max(1.5, fs * 0.075), steps = Math.max(6, Math.round(depth * 2.2));
+  for (let i = steps; i >= 1; i--) {
+    const t = i / steps;
+    ctx.fillStyle = t > 0.55 ? c.rxRedDeep : c.rxRedMid;
+    ctx.fillText("ECZANE", cx + depth * t, ey + depth * t);
+  }
+  ctx.fillStyle = c.rxRed;
+  ctx.fillText("ECZANE", cx, ey);
+  ctx.fillStyle = "rgba(255,255,255,0.22)";        // üst yüzey parlaması
+  ctx.fillText("ECZANE", cx, ey - fs * 0.028);
+  ctx.fillStyle = c.rxRed;
+  ctx.fillText("ECZANE", cx, ey);
+
+  // ad — ince, harf aralıklı, siyaha yakın. Uzun adda punto küçülür, kutu taşmaz.
+  const shown = (name || "") + (caret ? "|" : "");
+  let ns = h * 0.165, sp = ns * 0.24;
+  const fits = () => {
+    ctx.font = "600 " + ns + "px " + RX_FONT;
+    let t = 0; for (const ch of Array.from(shown)) t += ctx.measureText(ch).width + sp;
+    return t - sp;
+  };
+  while (ns > 6 && fits() > w * 0.86) { ns -= 0.5; sp = ns * 0.24; }
+  spacedText(shown, cx, y + h * 0.755, ns, c.signInk, sp, "600", "center");
+}
+
+// ---- Ana ekran butonu (menü dilinin tek kaynağı) ----
+function menuButton(b, label, kind, pulse) {
+  const c = CONFIG.colors;
+  const strong = kind === "primary";
+  fillRoundRect(b.x, b.y, b.w, b.h, b.h * 0.26, "rgba(16,12,20,0.93)");
+  ctx.save();
+  if (strong) {
+    const p = 0.6 + 0.4 * (0.5 + 0.5 * Math.sin(game.clock * 4));
+    ctx.shadowColor = c.neonGlow; ctx.shadowBlur = 20 * (pulse === false ? 1 : p);
+  }
+  strokeRoundRect(b.x, b.y, b.w, b.h, b.h * 0.26,
+    strong ? c.neon : (kind === "tertiary" ? "rgba(245,170,70,0.22)" : "rgba(245,170,70,0.5)"),
+    strong ? Math.max(2, b.w * 0.006) : 1.5);
+  ctx.restore();
+  // Üçüncül butonun punto oranı daha küçük: dokunma yüksekliği diğerleriyle aynı
+  // olduğu için, hiyerarşiyi ancak TİPOGRAFİ taşıyabilir.
+  fitText(label, b.x + b.w / 2, b.y + b.h / 2, b.w * 0.88,
+    b.h * (kind === "tertiary" ? 0.26 : 0.40),
+    strong ? c.neon : (kind === "tertiary" ? c.creamSoft : c.cream), "center", strong ? "800" : "700");
+}
+
+// =====================================================================
+//  ANA EKRAN
+// =====================================================================
+// Tabela ekranın kalıcı üstbilgisi. Altında dükkân cephesi, sonra buton yığını,
+// en altta YEREL rekor paneli (sunucu yok — uydurma bir dünya sıralaması konmadı).
+function drawMenu() {
+  const c = CONFIG.colors, S = layout.stage;
+  const X = f => S.x + S.w * f, Y = f => S.y + S.h * f;
+
+  drawStreet();
+
+  // --- tabela ---
+  const tw = S.w * ST.tabelaW, tx = X(0.5) - tw / 2, ty = Y(ST.tabela), th = S.h * ST.tabelaH;
+  drawTabela(tx, ty, tw, th, game.pharmacyName || NAME_FALLBACK, false);
+
+  // --- yarın nöbetçiysen asılı levha (menüden bile hazırlanmayı hatırlatır) ---
+  if (game.hasRun && isNightDutyDay(game.dayNumber + 1)) {
+    const nw = S.w * 0.26, nh = S.h * 0.026, nx = X(0.94) - nw, ny = Y(0.365);
+    fillRoundRect(nx, ny, nw, nh, nh * 0.25, "rgba(10,8,14,0.9)");
+    strokeRoundRect(nx, ny, nw, nh, nh * 0.25, c.neon, 1.2);
+    fitText("🌙 NÖBETÇİ", nx + nw / 2, ny + nh / 2, nw * 0.86, nh * 0.5, c.neon, "center", "800");
+  }
+
+  // --- buton yığını ---
+  const bx = X(0.09), bw = S.w * 0.82;
+  // Buton yükseklikleri 44 pt dokunma hedefini karşılar (boot denetimi kontrol eder).
+  // Üçüncül buton GÖRSEL olarak daha hafif (ince kenar, küçük punto) ama dokunma
+  // yüksekliği diğerleriyle aynı: göze küçük, parmağa küçük değil.
+  let by = Y(0.520);
+  const gap = S.h * 0.010;
+  const h1 = S.h * 0.066, h2 = S.h * 0.064, h3 = S.h * 0.064;
+
+  layout.menuStartBtn = { x: bx, y: by, w: bw, h: h1 };
+  menuButton(layout.menuStartBtn, "YENİ KARİYER", "primary");
+  by += h1 + gap;
+
+  // DEVAM ET — yalnız SÜREN bir sezon sürdürülebilir. Bitmişse PASİF çizilir:
+  // görünür ama rect verilmez, yani tıklanamaz. Gizlemek yerine soluk göstermek
+  // oyuncuya neden geçemediğini anlatır.
+  const resume = { x: bx, y: by, w: bw, h: h2 };
+  if (game.hasRun) {
+    layout.menuResumeBtn = resume;
+    menuButton(resume, "DEVAM ET  ·  S" + careerSeason() + " · Gün " + game.dayNumber + "/" + CONFIG.seasonDays, "secondary");
+  } else {
+    layout.menuResumeBtn = null;
+    fillRoundRect(resume.x, resume.y, resume.w, resume.h, resume.h * 0.26, "rgba(16,12,20,0.55)");
+    strokeRoundRect(resume.x, resume.y, resume.w, resume.h, resume.h * 0.26, "rgba(245,170,70,0.18)", 1.5);
+    fitText("DEVAM ET", resume.x + resume.w / 2, resume.y + resume.h / 2, resume.w * 0.8,
+      resume.h * 0.40, "rgba(205,188,174,0.45)", "center", "700");
+  }
+  by += h2 + gap;
+
+  layout.menuHowBtn = { x: bx, y: by, w: bw, h: h2 };
+  menuButton(layout.menuHowBtn, "NASIL OYNANIR", "secondary");
+  by += h2 + gap;
+
+  layout.menuNameBtn = { x: bx, y: by, w: bw, h: h3 };
+  menuButton(layout.menuNameBtn, "✎ ECZANE ADINI DEĞİŞTİR", "tertiary");
+
+  // --- yerel rekorlar ---
+  const rc = game.records, has = rc.peak > 0;
+  const rw = S.w * 0.86, rx = X(0.07);
+  const rowH = S.h * 0.026, titleH = S.h * 0.028;
+  const rh = titleH + (has ? rowH * 3 : rowH * 1.4) + S.h * 0.020;
+  const ry = Y(0.965) - rh;
+  fillRoundRect(rx, ry, rw, rh, S.w * 0.028, "rgba(16,12,20,0.94)");
+  strokeRoundRect(rx, ry, rw, rh, S.w * 0.028, "rgba(245,170,70,0.3)", 1);
+  fitText("🏆 EN İYİ KARİYERİN", rx + rw / 2, ry + titleH * 0.62, rw * 0.8, titleH * 0.48, c.neon, "center", "800");
+  if (has) {
+    const rows = [
+      ["En yüksek kasa", formatMoney(rc.peak)],
+      ["En uzun kariyer", rc.seasons + " sezon"],
+      ["En iyi sezon kazancı", formatMoney(rc.bestSeason)]
+    ];
+    let yy = ry + titleH + rowH * 0.5;
+    for (let i = 0; i < rows.length; i++) {
+      if (i > 0) { ctx.fillStyle = "rgba(255,255,255,0.07)"; ctx.fillRect(rx + rw * 0.05, yy - rowH * 0.5, rw * 0.9, 1); }
+      fitText(rows[i][0], rx + rw * 0.06, yy, rw * 0.55, rowH * 0.46, c.creamSoft, "left", "600");
+      fitText(rows[i][1], rx + rw * 0.94, yy, rw * 0.36, rowH * 0.5, c.cream, "right", "700");
+      yy += rowH;
+    }
+  } else {
+    fitText("Henüz kariyer tamamlamadın", rx + rw / 2, ry + titleH + rowH * 0.5,
+      rw * 0.86, rowH * 0.46, c.creamSoft, "center", "600");
+  }
+}
+
+// =====================================================================
+//  ECZANE ADI — aynı sokak, üstüne karartma, tabela canlı önizleme
+// =====================================================================
+// Klavye TÜRKÇE Q düzenindedir. İlk tasarım 6×5 alfabe ızgarasıydı ve kimse harfini
+// bulamıyordu; telefon klavyesinin yerleşimi zaten herkesin ezberinde.
+const KB_ROWS = ["QWERTYUIOPĞÜ", "ASDFGHJKLŞİ", "ZXCVBNMÖÇ"];
+const NAME_MAX = 14;
+const NAME_FALLBACK = "MERKEZ";
+
+function openNaming() {
+  game.nameInput = game.pharmacyName || "";
+  game.state = STATE.NAMING;
+}
+function setPharmacyName(v) {
+  const s = String(v || "").trim().slice(0, NAME_MAX);
+  game.pharmacyName = s || NAME_FALLBACK;
+}
+function confirmName() {
+  setPharmacyName(game.nameInput);
+  game.state = STATE.MENU;
+}
+
+function drawNaming() {
+  const c = CONFIG.colors, S = layout.stage;
+  const X = f => S.x + S.w * f, Y = f => S.y + S.h * f;
+
+  drawStreet();
+  // Karartma TÜM tuvale: yalnız sahneye uygulanınca letterbox bandı aydınlık kalıyor
+  // ve ekranın tepesinde görünür bir dikiş çizgisi oluşuyordu.
+  ctx.fillStyle = "rgba(8,6,14,0.72)";
+  ctx.fillRect(0, 0, layout.w, layout.h);
+
+  // tabela: yazılan ad CANLI görünür — oyuncu onaylamadan önce sonucu görür
+  const blink = (game.clock % 1) < 0.55;
+  const tw = S.w * ST.tabelaW;
+  drawTabela(X(0.5) - tw / 2, Y(ST.tabela), tw, S.h * ST.tabelaH, game.nameInput, blink);
+
+  fitText("ECZANENİN ADINI YAZ", X(0.5), Y(0.60), S.w * 0.8, S.h * 0.026, c.neon, "center", "800");
+  fitText("En fazla " + NAME_MAX + " harf · boş bırakırsan “" + NAME_FALLBACK + "” olur",
+    X(0.5), Y(0.645), S.w * 0.86, S.h * 0.020, c.creamSoft, "center", "600");
+
+  // --- klavye ---
+  const kb = S.w * 0.95, kx0 = X(0.025);
+  const gap = S.w * 0.008;
+  const kw = (kb - gap * 11) / 12;               // en uzun sıra 12 tuş
+  const kh = S.h * 0.052, vgap = S.h * 0.012;
+  const top = Y(0.705);
+  layout.kbKeys = [];
+
+  for (let r = 0; r < KB_ROWS.length; r++) {
+    const chars = Array.from(KB_ROWS[r]);
+    const rowW = chars.length * kw + (chars.length - 1) * gap;
+    const rx = kx0 + (kb - rowW) / 2;
+    const ry = top + r * (kh + vgap);
+    for (let i = 0; i < chars.length; i++) {
+      const x = rx + i * (kw + gap);
+      fillRoundRect(x, ry, kw, kh, kw * 0.2, "rgba(30,24,38,0.96)");
+      strokeRoundRect(x, ry, kw, kh, kw * 0.2, "rgba(245,170,70,0.34)", 1);
+      fitText(chars[i], x + kw / 2, ry + kh / 2, kw * 0.78, kh * 0.46, c.cream, "center", "600");
+      // DOKUNMA KUTUSU çizilen tuştan büyük: tuş 390px'te ~28px kalıyor, satır
+      // aralığının tamamı hedefe verilir (telefon klavyelerinin yaptığının aynısı).
+      layout.kbKeys.push({ ch: chars[i], x: x - gap / 2, y: ry - vgap / 2, w: kw + gap, h: kh + vgap });
+    }
+  }
+
+  // aksiyon sırası: ⌫ · BOŞLUK · ✓ TAMAM
+  const ay = top + 3 * (kh + vgap);
+  const delW = kb * 0.20, okW = kb * 0.30, spW = kb - delW - okW - gap * 2;
+  const hitY = ay - vgap / 2, hitH = kh + vgap;   // çizim kh, HEDEF satır adımı kadar
+  layout.kbDel = { x: kx0, y: hitY, w: delW, h: hitH };
+  fillRoundRect(kx0, ay, delW, kh, kw * 0.2, "rgba(30,24,38,0.96)");
+  strokeRoundRect(kx0, ay, delW, kh, kw * 0.2, "rgba(232,115,107,0.5)", 1.2);
+  fitText("⌫", kx0 + delW / 2, ay + kh / 2, delW * 0.6, kh * 0.5, c.bad, "center", "700");
+
+  layout.kbSpace = { x: kx0 + delW + gap, y: hitY, w: spW, h: hitH };
+  fillRoundRect(layout.kbSpace.x, ay, spW, kh, kw * 0.2, "rgba(30,24,38,0.96)");
+  strokeRoundRect(layout.kbSpace.x, ay, spW, kh, kw * 0.2, "rgba(245,170,70,0.34)", 1);
+  fitText("BOŞLUK", layout.kbSpace.x + spW / 2, ay + kh / 2, spW * 0.7, kh * 0.36, c.creamSoft, "center", "600");
+
+  layout.kbOk = { x: kx0 + kb - okW, y: hitY, w: okW, h: hitH };
+  fillRoundRect(layout.kbOk.x, ay, okW, kh, kw * 0.2, "rgba(30,24,38,0.96)");
+  ctx.save(); ctx.shadowColor = c.neonGlow; ctx.shadowBlur = 14;
+  strokeRoundRect(layout.kbOk.x, ay, okW, kh, kw * 0.2, c.neon, 1.6);
+  ctx.restore();
+  fitText("✓ TAMAM", layout.kbOk.x + okW / 2, ay + kh / 2, okW * 0.8, kh * 0.38, c.neon, "center", "800");
+}
+
+// =====================================================================
+//  NASIL OYNANIR — tek ekran, kaydırma yok
+// =====================================================================
+// Sayılar METNE GÖMÜLMEZ, CONFIG'ten okunur: denge değişince açıklama da değişir.
+// Medula, dilenci ve geliştirme ağacı KASTEN yok — oyun onları kendi zamanında açıyor,
+// başlangıçta anlatmak gürültü olur.
+function howToRules() {
+  return [
+    ["💊", "DOĞRU İLACI VER",
+     "Hasta reçete uzatır, derdini anlatır ya da e-reçete kodu verir. Alttaki raftan seç, tezgahtaki PC'den servis et."],
+    ["🔍", "REÇETEYİ İNCELE",
+     "Onaylamadan önce dört şeye bak: doktor defterde mi, tarih bugün mü, kaşe var mı, imza düzgün mü. Sahtenin en az biri bozuktur."],
+    ["🎯", "GÜNLÜK HEDEFİ TUTTUR",
+     "Tutturursan +" + CONFIG.goalMetReputation + " itibar. Bir gün kaçırmak serbest — üst üste kaçırmak " +
+     CONFIG.goalMissRepStep + " itibardan başlayıp artar."],
+    ["⭐", "İTİBARI KORU",
+     CONFIG.startReputation + "'de başlar, sıfıra inerse KARİYER BİTER. Her sezon başında yeniden " + CONFIG.startReputation + "."],
+    ["🌙", "NÖBET GECESİ",
+     "Günün ikinci bölümü. Fiyatlar %" + Math.round((CONFIG.nightPriceMultiplier - 1) * 100) +
+     " yüksek ama sahte reçete de çok daha fazla."]
+  ];
+}
+function howToTally() {
+  return [
+    ["Doğru servis", "+" + CONFIG.repGainCorrect + " itibar", true],
+    ["Sahteyi reddettin", "+" + CONFIG.fakeCatchBonus + "₺ · +" + CONFIG.fakeCatchRepGain + " itibar", true],
+    ["Yanlış ilaç", "−" + CONFIG.repLossWrong + " itibar", false],
+    ["Sahteye ilaç verdin", "−" + CONFIG.fakeApproveMoneyPenalty + "₺ · −" + CONFIG.fakeApproveRepLoss + " itibar", false],
+    ["Hastayı beklettin", "−" + CONFIG.angryRepLoss + " itibar", false]
+  ];
+}
+function openHowTo() { game.howtoBack = game.state; game.state = STATE.HOWTO; }
+
+function drawHowTo() {
+  const c = CONFIG.colors, S = layout.stage;
+  const X = f => S.x + S.w * f, Y = f => S.y + S.h * f;
+
+  const bg = ctx.createLinearGradient(0, S.y, 0, S.y + S.h);
+  bg.addColorStop(0, "#1a1226"); bg.addColorStop(0.55, "#241626"); bg.addColorStop(1, "#160f1a");
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, layout.w, layout.h);
+
+  fitText("NASIL OYNANIR", X(0.5), Y(0.048), S.w * 0.8, S.h * 0.034, c.neon, "center", "900");
+  fitText(CONFIG.seasonDays + " günlük sezonlar. Her sezon başında ruhsat bedeli ödenir —",
+    X(0.5), Y(0.086), S.w * 0.9, S.h * 0.019, c.creamSoft, "center", "600");
+  fitText("ödeyemediğin gün kariyer biter.",
+    X(0.5), Y(0.111), S.w * 0.9, S.h * 0.019, c.creamSoft, "center", "600");
+
+  // KART YÜKSEKLİĞİ İÇERİKTEN gelir. Sabit yükseklikte üç satıra taşan gövde bir
+  // sonraki kartın üstüne biniyordu (ekran görüntüsü yakaladı). Önce satırlara bölünür,
+  // yükseklikler toplanır, sığmazsa punto topluca küçültülür — aralıklar bozulmaz.
+  const rules = howToRules();
+  const cx0 = X(0.07), cw = S.w * 0.86;
+  let cg = S.h * 0.011;
+  const padY = S.h * 0.016;
+  const top = Y(0.145), bottom = Y(0.645);
+  let fs = S.h * 0.0158, titleFs = S.h * 0.019, lineH, cards;
+  for (let pass = 0; pass < 12; pass++) {
+    lineH = fs * 1.42;
+    cards = rules.map(([ic, title, body]) => ({
+      ic, title, lines: wrapToLines(body, cw * 0.83, fs, 4)
+    }));
+    let tot = 0;
+    for (const cd of cards) tot += padY * 2 + titleFs * 1.25 + cd.lines.length * lineH;
+    tot += cg * (cards.length - 1);
+    if (tot <= bottom - top) {
+      // Artan boşluk kart ARALARINA eşit dağıtılır: kartlar yukarıda toplanıp altta
+      // koca bir delik bırakmasın (ilk denemede öyle oluyordu).
+      const slack = (bottom - top) - tot;
+      if (cards.length > 1) cg += slack / (cards.length - 1);
+      break;
+    }
+    fs *= 0.94; titleFs *= 0.94;
+  }
+  let cy = top;
+  for (const cd of cards) {
+    const ch = padY * 2 + titleFs * 1.25 + cd.lines.length * lineH;
+    fillRoundRect(cx0, cy, cw, ch, S.w * 0.022, "rgba(255,255,255,0.035)");
+    ctx.fillStyle = c.neon;
+    ctx.fillRect(cx0, cy + ch * 0.12, 2, ch * 0.76);
+    drawEmoji(cd.ic, cx0 + cw * 0.065, cy + padY + titleFs * 0.5, titleFs * 1.5, c.cream);
+    const tx2 = cx0 + cw * 0.125;
+    fitText(cd.title, tx2, cy + padY + titleFs * 0.5, cw * 0.84, titleFs, c.cream, "left", "800");
+    let ly = cy + padY + titleFs * 1.25 + lineH * 0.5;
+    for (const ln of cd.lines) { fitText(ln, tx2, ly, cw * 0.85, fs, c.creamSoft, "left", "600"); ly += lineH; }
+    cy += ch + cg;
+  }
+
+  // --- puan cetveli ---
+  const tally = howToTally();
+  const tH = S.h * 0.028 + tally.length * S.h * 0.0265 + S.h * 0.018;
+  const tY = Y(0.895) - tH;
+  fillRoundRect(cx0, tY, cw, tH, S.w * 0.025, "rgba(16,12,20,0.9)");
+  strokeRoundRect(cx0, tY, cw, tH, S.w * 0.025, "rgba(245,170,70,0.26)", 1);
+  fitText("PUAN CETVELİ", cx0 + cw / 2, tY + S.h * 0.017, cw * 0.6, S.h * 0.017, c.neon, "center", "800");
+  let ty2 = tY + S.h * 0.040;
+  for (let i = 0; i < tally.length; i++) {
+    if (i > 0) { ctx.fillStyle = "rgba(255,255,255,0.07)"; ctx.fillRect(cx0 + cw * 0.04, ty2 - S.h * 0.0133, cw * 0.92, 1); }
+    fitText(tally[i][0], cx0 + cw * 0.05, ty2, cw * 0.5, S.h * 0.0172, c.creamSoft, "left", "600");
+    fitText(tally[i][1], cx0 + cw * 0.95, ty2, cw * 0.44, S.h * 0.0172, tally[i][2] ? c.good : c.bad, "right", "700");
+    ty2 += S.h * 0.0265;
+  }
+
+  layout.howBackBtn = { x: X(0.09), y: Y(0.908), w: S.w * 0.82, h: S.h * 0.066 };
+  menuButton(layout.howBackBtn, "ANLADIM", "primary", false);
+}
+
 
 // ---- SEZON SONU ekranı ----
 // Kart dili DAYEND'den gelir (koyu kart + başlık şeridi + emoji'li istatistik satırları +
@@ -6086,9 +6650,35 @@ function handleTap(px, py) {
   if (game.nightIntro !== null) { game.nightIntro = null; return; }   // geçiş kartı: tek dokunuş
   if (game.depotOpen) { handlePcTap(px, py); return; }
 
+  if (game.state === STATE.NAMING) {
+    if (layout.kbOk && pointInRect(px, py, layout.kbOk)) { confirmName(); return; }
+    if (layout.kbDel && pointInRect(px, py, layout.kbDel)) { game.nameInput = game.nameInput.slice(0, -1); return; }
+    if (layout.kbSpace && pointInRect(px, py, layout.kbSpace)) {
+      // Baştaki boşluk ve üst üste boşluk yok: ad tabelada tek satır duracak.
+      if (game.nameInput.length && game.nameInput.length < NAME_MAX && game.nameInput.slice(-1) !== " ")
+        game.nameInput += " ";
+      return;
+    }
+    if (layout.kbKeys) {
+      for (const k of layout.kbKeys) {
+        if (pointInRect(px, py, k)) {
+          if (game.nameInput.length < NAME_MAX) game.nameInput += k.ch;
+          return;
+        }
+      }
+    }
+    return;   // başka dokunuş yutulur
+  }
+  if (game.state === STATE.HOWTO) {
+    if (layout.howBackBtn && pointInRect(px, py, layout.howBackBtn))
+      game.state = (game.howtoBack === STATE.PLAYING) ? STATE.MENU : (game.howtoBack || STATE.MENU);
+    return;
+  }
   if (game.state === STATE.MENU) {
     if (layout.menuStartBtn && pointInRect(px, py, layout.menuStartBtn)) startNewCareer();
     else if (game.hasRun && layout.menuResumeBtn && pointInRect(px, py, layout.menuResumeBtn)) game.state = STATE.PLAYING;  // reset YOK
+    else if (layout.menuHowBtn && pointInRect(px, py, layout.menuHowBtn)) openHowTo();
+    else if (layout.menuNameBtn && pointInRect(px, py, layout.menuNameBtn)) openNaming();
     return;   // başka dokunuş yutulur
   }
   if (game.state === STATE.SEASONEND) {
@@ -6264,6 +6854,91 @@ function loop(now) {
   update(dt);
   render();
   requestAnimationFrame(loop);
+}
+
+// =====================================================================
+//  ANA EKRAN YERLEŞİM DENETİMİ
+// =====================================================================
+// SATIŞ ve geliştirme ekranlarının sığması yalnız dışarıdan ölçülebiliyordu (DURUM.md §16).
+// Menü ailesi için o hata tekrarlanmasın: dokunulabilir her dikdörtgen sahnenin içinde mi,
+// üst üste biniyor mu, dokunma hedefi yeterli mi — boot'ta denetlenir.
+// Çizim fonksiyonları burada BİR KEZ çağrılır (rect'leri onlar kuruyor); ilk kare zaten
+// hemen üstüne yazılacağı için görsel bir yan etkisi yoktur.
+function verifyMenuLayout() {
+  if (!layout.stage || !layout.stage.w) return;
+  const warn = [];
+  const S = layout.stage;
+  // Apple asgarisi 44 pt. KLAVYEDE yalnız YÜKSEKLİK denetlenir: 12 harflik sıra 390 pt'ye
+  // ancak ~28 pt'lik tuşlarla sığar ve telefon klavyelerinin tamamı böyledir — genişliği
+  // zorlamak Türkçe Q düzenini bozardı, oysa asıl ıskalama ekseni dikeydir.
+  const TAP = 44, EPS = 0.5;
+  const inside = (r, tag, heightOnly) => {
+    if (!r) { warn.push(tag + ": rect yok"); return; }
+    if (r.x < S.x - 1 || r.x + r.w > S.x + S.w + 1 || r.y < S.y - 1 || r.y + r.h > S.y + S.h + 1)
+      warn.push(tag + ": sahnenin dışına taşıyor");
+    if (r.h < TAP - EPS) warn.push(tag + ": dokunma yüksekliği " + r.h.toFixed(1) + " pt (< " + TAP + ")");
+    if (!heightOnly && r.w < TAP - EPS) warn.push(tag + ": dokunma genişliği " + r.w.toFixed(1) + " pt (< " + TAP + ")");
+  };
+  const prev = { state: game.state, name: game.pharmacyName, input: game.nameInput, run: game.hasRun };
+
+  try {
+    // --- ANA EKRAN: en uzun adla ---
+    game.pharmacyName = "ŞĞÜİÖÇŞĞÜİÖÇŞĞ".slice(0, NAME_MAX);
+    game.hasRun = true;
+    game.state = STATE.MENU;
+    drawMenu();
+    const btns = [["YENİ KARİYER", layout.menuStartBtn], ["DEVAM ET", layout.menuResumeBtn],
+                  ["NASIL OYNANIR", layout.menuHowBtn], ["ADI DEĞİŞTİR", layout.menuNameBtn]];
+    for (const [tag, r] of btns) inside(r, "menü/" + tag);
+    for (let i = 1; i < btns.length; i++) {
+      const a = btns[i - 1][1], b = btns[i][1];
+      if (a && b && b.y < a.y + a.h) warn.push("menü butonları çakışıyor: " + btns[i - 1][0] + " ↔ " + btns[i][0]);
+    }
+
+    // Tabeladaki ad KUTUYA SIĞMALI: punto küçültme döngüsü gerçekten devreye giriyor mu
+    {
+      const tw = S.w * ST.tabelaW, th = S.h * ST.tabelaH;
+      let ns = th * 0.165, sp = ns * 0.24, wdt = 0, guard = 0;
+      const measure = () => {
+        ctx.font = "600 " + ns + "px " + RX_FONT;
+        let t = 0; for (const ch of Array.from(game.pharmacyName)) t += ctx.measureText(ch).width + sp;
+        return t - sp;
+      };
+      while (ns > 6 && (wdt = measure()) > tw * 0.86 && guard++ < 200) { ns -= 0.5; sp = ns * 0.24; }
+      if (wdt > tw * 0.87) warn.push(NAME_MAX + " harflik ad tabelaya sığmıyor (" + Math.round(wdt) + " > " + Math.round(tw * 0.86) + ")");
+    }
+
+    // --- AD GİRİŞİ: klavye ---
+    game.nameInput = "DENEME";
+    game.state = STATE.NAMING;
+    drawNaming();
+    if (!layout.kbKeys || layout.kbKeys.length !== 32)
+      warn.push("klavye tuş sayısı beklenenden farklı: " + (layout.kbKeys ? layout.kbKeys.length : 0) + " (12+11+9=32)");
+    let lo = Infinity, hi = -Infinity;
+    for (const k of (layout.kbKeys || [])) {
+      if (k.x < S.x - 1 || k.x + k.w > S.x + S.w + 1) warn.push("klavye tuşu '" + k.ch + "' sahne dışında");
+      if (k.h < TAP - EPS) warn.push("klavye tuşu '" + k.ch + "' dokunma yüksekliği " + k.h.toFixed(1) + " pt (< " + TAP + ")");
+      lo = Math.min(lo, k.y); hi = Math.max(hi, k.y + k.h);
+    }
+    for (const [tag, r] of [["⌫", layout.kbDel], ["BOŞLUK", layout.kbSpace], ["TAMAM", layout.kbOk]]) inside(r, "klavye/" + tag, true);
+    if (layout.kbOk && hi > layout.kbOk.y + 1.5) warn.push("harf sırası aksiyon sırasının üstüne biniyor");
+    if (layout.kbOk && layout.kbOk.y + layout.kbOk.h > S.y + S.h) warn.push("klavye sahnenin altından taşıyor");
+    // Türkçe alfabenin tamamı klavyede mi
+    for (const ch of "ÇĞİÖŞÜ") if (!(layout.kbKeys || []).some(k => k.ch === ch)) warn.push("klavyede Türkçe harf eksik: " + ch);
+
+    // --- NASIL OYNANIR ---
+    game.state = STATE.HOWTO;
+    drawHowTo();
+    inside(layout.howBackBtn, "nasıl-oynanır/ANLADIM");
+  } catch (e) {
+    warn.push("yerleşim denetimi hata verdi: " + e.message);
+  } finally {
+    game.state = prev.state; game.pharmacyName = prev.name;
+    game.nameInput = prev.input; game.hasRun = prev.run;
+  }
+
+  for (const w of warn) console.warn("[yerleşim] " + w);
+  return warn.length === 0;
 }
 
 // =====================================================================
@@ -7680,6 +8355,7 @@ function selfTestPatientsInner(days) {
   for (const w of warn) console.warn("[self-test] " + w);
   return warn.length === 0;
 }
+_noRecords = true;      // denetimlerin sahte kariyerleri rekor defterine yazılmasın
 selfTestPatients();
 selfTestEmoji();
 
@@ -7695,10 +8371,15 @@ function checkDataHealth() {
   }
 }
 checkDataHealth();
+_noRecords = false;
 
 loadAssets();
 resize();
+verifyMenuLayout();   // yerleşim denetimi: layout ancak resize()'dan SONRA vardır
 game.spawnTimer = CONFIG.spawnInterval;
+// İlk açılış: eczanenin adı yoksa doğrudan ad ekranı. (Kalıcı depolama gelince bu
+// koşul localStorage'dan okunacak; şimdilik her yenilemede sorulur.)
+if (!game.pharmacyName) game.state = STATE.NAMING;
 requestAnimationFrame(loop);
 
 </script>
