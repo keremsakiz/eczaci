@@ -35,6 +35,1055 @@
 <script>
 "use strict";
 
+// ═════════════════════════════════════════════════════════════════════════════
+//  ADMIN BLOK BAŞLANGIÇ — YAYINDAN ÖNCE SİL
+// ═════════════════════════════════════════════════════════════════════════════
+//  GEÇİCİ GELİŞTİRME ARACI. Yayına ÇIKMAZ. Bu blok (bu satırdan, dosyanın aşağısındaki
+//  BİTİŞ şeridine kadar) OLDUĞU GİBİ SİLİNEBİLİR — oyun kodunun hiçbir yeri
+//  buradaki hiçbir isme referans vermez. Silme testi yapıldı: blok çıkarılınca
+//  dosya sözdizimi geçerli kalır, boot self-test'leri geçer, oyun açılır.
+//
+//  NE YAPAR
+//  Elle test etmek için 15. güne ya da 3. sezona ulaşmak gerektiğinde, oyunu O NOKTAYA
+//  GERÇEKTEN OYNAYARAK gelmiş bir oyuncunun durumuyla bırakır. Hiçbir sayı UYDURULMAZ:
+//  "gün 15'te şu kadar para olur" diye elle yazılmış bir tablo YOKTUR. Bunun yerine
+//  oyunun kendi gün döngüsü çizim yapılmadan hızlıca oynatılır — hasta üretimi, servis
+//  kararları, stok tamamlama, geliştirme satın alma, itibar, SGK alacakları, fiyat
+//  turları, dilenci ve ruhsat bedelleri hepsi NORMAL YOLDAN, gerçek fonksiyonlarla
+//  işler (buildDaySchedule, checkOrder, rejectPrescription, placeDepotOrder,
+//  buyUpgrade, beginSeason, tryStartNextSeason, startNextDay...). Sonuçta ortaya çıkan
+//  kasa / stok / itibar / geliştirme / alacak / fiyat geçmişi TANIM GEREĞİ tutarlıdır.
+//
+//  BOT POLİTİKASI, DURUM.md 14.1'deki headless ölçüm harness'ının politikasıdır —
+//  böylece buradan çıkan durum, belgede yayımlanmış A/B profili ölçümleriyle
+//  karşılaştırılabilir kalır:
+//    1. Sabah o günün gerçek listesinden ihtiyaç çıkarılıp stok tamamlanır
+//       (ihtiyaç × 1,5, effMaxStock'a kırpık). Bedel rezervinden ETKİLENMEZ.
+//    2. Yarın zam haberi varsa, o kategorilerde bir sonraki tura kadar gerçekten
+//       satılacak miktarın %20'si bugünden alınır. Sezonun son 2 gününde alınmaz.
+//    3. Geliştirme ancak 20 × avgCost rezervin üstündeki fazladan alınır; sezonun
+//       son 3 gününde rezerve sonraki sezonun ruhsat bedeli de eklenir.
+//    4. Dilenci: stok bolsa (≥3) ilaç, değilse para, ikisi de yoksa reddet.
+//       Borcunu ödemeye gelenden ödeme her zaman alınır.
+//    5. skill = HASTA BAŞINA doğru karar ihtimali (i.i.d.). Tek zar hem inceleme
+//       kararını (sahteyi yakalama) hem ilaç seçimini belirler — DURUM.md'deki
+//       "B profili %85" tam olarak budur. skill:1 = kusursuz oyuncu (A profili).
+//
+//  MODELLEME KARARLARI (bilinçli, ölçümü okurken bilinmesi gereken)
+//   • Bot sabah stoğunu O GÜNÜN listesine bakarak tamamlar; gerçek oyuncu bunu
+//     deneyimle tahmin eder. Yani stok tarafında bot İDEALİZE bir oyuncudur ve
+//     buradan çıkan kasa gerçek oyuncunun ulaşacağının üst bandına yakındır.
+//   • Rafta hiçbir uygun ilaç kalmadıysa hasta bekletilir ve sabrı biter (küser).
+//     Ceza mantığı KOPYALANMAZ, gerçek update() yolundan geçirilir.
+//   • Dilencinin kuyrukta yer tutma maliyeti modellenmez (sim'de zaman yok).
+//
+//  DETERMİNİZM
+//  Botun kendi zarı OYUNUN rastgelelik akışına HİÇ dokunmaz: _rngSource'a el
+//  sürülmez, ayrı bir mulberry32 akışı kullanılır ve HER GÜN BAŞINDA (runSeed, gün,
+//  skill) üçlüsünden yeniden tohumlanır. Sonuçları:
+//    • aynı runSeed + aynı hedef + aynı skill → her zaman aynı durum
+//    • sim(10) sonra sim(15) === doğrudan sim(15)  (gün tohumu yola bağlı değil)
+//    • hedef günden sonrası, oraya elle oynanarak gelinmiş gibi devam eder
+//
+//  KULLANIM — EKRANDAN (telefonda asıl yol)
+//  Sol alt köşedeki kırmızı ADMIN rozetine dokun → panel açılır. Panelde GÜN ve
+//  SEZON seçicileri (− / + / GİT), üç hazır SKILL seviyesi, o anki durum özeti ve
+//  KAPAT var. Panel açıkken oyun DONAR (depo panelinin kalıbı). GİT'e basınca önce
+//  "hesaplanıyor" karesi boyanır, sonra simülasyon koşar; biterken sonuç ve değişmez
+//  denetimi panelde tek satır olarak görünür. Sebep: iPhone Safari'de konsol yok.
+//
+//  KULLANIM (konsol)
+//    cheats.panel(true) / cheats.panel(false) → paneli aç / kapat
+//    cheats.panel()                     → panelin durumu + dokunma alanları (okur, değiştirmez)
+//    cheats.sim(15)                     → aynı sezonda 15. günün BAŞINA, skill 0,85
+//    cheats.sim(15, { skill: 1 })       → kusursuz oyuncunun 15. gün durumu
+//    cheats.sim(15, { seed: 42 })       → kariyeri 42 tohumuyla kurup oynat
+//    cheats.simSeason(3)                → 3. sezonun 1. gününe (bedeller ödenmiş)
+//    cheats.simSeason(3, { gün: 12 })   → 3. sezonun 12. gününe   (day: 12 de olur)
+//    cheats.simVerify()                 → denge/tavan/self-test/kariyer değişmezleri
+//    cheats.simLog()                    → son simülasyonun gün gün dökümü
+//    cheats.simState()                  → özet nesne (konsola basmaz)
+//  Her sim SONUNDA değişmez denetimi kendiliğinden koşar ve tek satır basar
+//  (~30 ms). Kapatmak için: cheats.sim(15, { verify: false }).
+//
+//  MALİYET (ölçüldü, headless Node, 20 tohum ortalaması). Simülasyonun kendisi:
+//  sim(15) ≈ 11 ms · sim(30) ≈ 23 ms · simSeason(3) ≈ 46 ms · simSeason(6) ≈ 100 ms.
+//  Otomatik değişmez denetimi bunlara ~31 ms ekler → en pahalı çağrı bile ~130 ms.
+//  Çizim ve animasyon HİÇ çalıştırılmaz; render/requestAnimationFrame'e girilmez.
+// ═════════════════════════════════════════════════════════════════════════════
+const ADMIN_MODE = true;
+
+if (ADMIN_MODE) {
+
+  // --- Bot politikası sayıları (DURUM.md 14.1 ile birebir) ---
+  const ADM = {
+    defaultSkill: 0.85,        // "iyi oyuncu" (B profili)
+    restockBufferK: 1.5,       // sabah stoğu: ihtiyaç × bu
+    upgradeReserveK: 20,       // geliştirme rezervi = bu × avgCost
+    priceBuyShare: 0.20,       // zam haberinde alınacak pay
+    priceBuyStopBefore: 2,     // sezonun son bu kadar gününde zam avı yok
+    feeReserveLastDays: 3,     // son bu kadar günde rezerve sonraki bedel eklenir
+    beggarStockMin: 3,         // "stok bol" eşiği (ilaç vermek için)
+    upgradeOrder: ["tezgah", "depo", "vitrin", "bekleme", "medula"],
+    guard: 4000,               // gün içi kilitlenme koruması
+    maxSeason: 20              // panelin sezon seçicisinin üst sınırı
+  };
+
+  // --- Botun kendi rastgeleliği: oyunun akışına DOKUNMAZ ---
+  let _admRnd = mulberry32(1);
+  let _admLastCheck = null;     // son değişmez denetimi sonucu (panel gösterir)
+  let _admOrigUpdate = null;    // sarmalanmadan önceki update (bkz. admLetGo)
+  function admSeedFor(day, skill) {
+    let h = ((game.runSeed >>> 0) ^ 0xAD31FEED) >>> 0;
+    h = (h ^ Math.imul(day, 0x9E3779B1)) >>> 0;
+    h = (h ^ Math.imul(Math.round(skill * 10000) | 0, 0x85EBCA77)) >>> 0;
+    h = Math.imul(h ^ (h >>> 16), 0x2545F491);
+    h = Math.imul(h ^ (h >>> 13), 0xC2B2AE35);
+    return ((h ^ (h >>> 16)) >>> 0) || 1;
+  }
+  function admReseed(day, skill) { _admRnd = mulberry32(admSeedFor(day, skill)); }
+  function admNow() {
+    return (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+  }
+  function admSkillOf(v) { return clamp(typeof v === "number" ? v : ADM.defaultSkill, 0, 1); }
+
+  // ---------------------------------------------------------------------------
+  //  TALEP MODELİ — bir günün gerçek listesinden ilaç ihtiyacı (id -> adet)
+  //  Sahte reçeteler reddedilecekleri için sayılmaz. Semptomlu hastada oyuncu
+  //  kategoriden istediğini verebildiği için ihtiyaç kategoriye EŞİT DAĞITILIR
+  //  (toplam adet aynı kalır) — servis fonksiyonu da stoğu bol olanı seçiyor.
+  // ---------------------------------------------------------------------------
+  function admNeedOf(sch) {
+    const need = {};
+    if (!sch || !sch.patients) return need;
+    for (const p of sch.patients) {
+      const r = p.request;
+      if (!r || r.fake || isBeggarType(r.type)) continue;
+      if (r.type === "prescription" || r.type === "medula") {
+        for (const it of r.items) need[it.id] = (need[it.id] || 0) + it.qty;
+      } else {
+        for (const it of (r.items || [{ symptom: r.symptom, qty: 1 }])) {
+          const cands = MEDICINES.filter(m => m.category === it.symptom.category);
+          if (!cands.length) continue;
+          const share = it.qty / cands.length;
+          for (const m of cands) need[m.id] = (need[m.id] || 0) + share;
+        }
+      }
+    }
+    return need;
+  }
+
+  // Sepeti gerçek depo fonksiyonlarıyla doldur ve siparişi ver. Bütçe aşılmaz.
+  // Dönüş: harcanan ₺.
+  function admOrder(want, budget) {
+    const rows = [];
+    for (const id in want) {
+      const q = Math.floor(want[id]);
+      if (q > 0) rows.push({ id: id, q: q, w: want[id] });
+    }
+    if (!rows.length) return 0;
+    rows.sort((a, b) => (b.w - a.w) || (a.id < b.id ? -1 : 1));   // en çok gerekenden başla
+    openDepot();                                   // gerçek yol: PC → ECZA DEPOSU
+    let left = Math.max(0, Math.min(budget, game.money));
+    for (const r of rows) {
+      const m = getMedicine(r.id);
+      if (!m) continue;
+      const unit = Math.max(1, medCost(m));
+      const maxAdd = Math.max(0, effMaxStock() - (game.stock[r.id] || 0));
+      const q = Math.min(r.q, maxAdd, Math.floor(left / unit));
+      if (q <= 0) continue;
+      changePending(r.id, q);
+      left -= unit * q;
+    }
+    const total = depotOrderTotal();
+    placeDepotOrder();
+    closeDepot();
+    return total;
+  }
+
+  // 1) Sabah stok tamamlama — o günün ihtiyacı × restockBufferK
+  function admRestock() {
+    const need = admNeedOf(game.daySchedule);
+    const want = {};
+    for (const id in need) {
+      const target = Math.min(effMaxStock(), Math.ceil(need[id] * ADM.restockBufferK));
+      const q = target - (game.stock[id] || 0);
+      if (q > 0) want[id] = q;
+    }
+    return admOrder(want, game.money);
+  }
+
+  // 2) Zam avı — yarın ALIŞI artacak kategorilerde, bir sonraki tura kadar gerçekten
+  //    satılacak miktarın priceBuyShare'i bugünden alınır (bugün hâlâ ucuz).
+  function admPreBuy() {
+    if (game.dayNumber > CONFIG.seasonDays - ADM.priceBuyStopBefore) return 0;
+    const r = priceRoundOn(game.dayNumber + 1);
+    if (!r) return 0;
+    const upCat = {};
+    let any = false;
+    for (const c of r.cats) if (c.up) { upCat[c.category] = true; any = true; }
+    if (!any) return 0;
+    // yarından, BİR SONRAKİ tur gününün bir öncesine kadar
+    let end = game.dayNumber + 1;
+    while (end < CONFIG.seasonDays && !isPriceUpdateDay(end + 1)) end++;
+    const need = {};
+    for (let d = game.dayNumber + 1; d <= Math.min(end, CONFIG.seasonDays); d++) {
+      const n = admNeedOf(getDaySchedule(d));
+      for (const id in n) need[id] = (need[id] || 0) + n[id];
+    }
+    const want = {};
+    for (const id in need) {
+      const m = getMedicine(id);
+      if (!m || !upCat[m.category]) continue;
+      const q = Math.ceil(need[id] * ADM.priceBuyShare);
+      if (q > 0) want[id] = q;
+    }
+    return admOrder(want, Math.max(0, game.money - ADM.upgradeReserveK * avgCost));
+  }
+
+  // 3) Geliştirme — rezervin üstündeki fazladan, öncelik sırasıyla
+  function admBuyUpgrades(bought) {
+    let reserve = ADM.upgradeReserveK * avgCost;
+    if (game.dayNumber > CONFIG.seasonDays - ADM.feeReserveLastDays) reserve += nextSeasonFee();
+    for (let pass = 0; pass < 16; pass++) {
+      let did = false;
+      for (const id of ADM.upgradeOrder) {
+        const u = UPGRADE_BY_ID[id];
+        if (!u) continue;
+        const lv = upgradeLevel(id);
+        if (lv >= u.maxLevel) continue;
+        const cost = upgradeCost(id, lv + 1);
+        if (game.money - cost < reserve) continue;
+        if (buyUpgrade(id)) { bought.push(u.name + " Lv" + (lv + 1)); did = true; }
+      }
+      if (!did) break;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  //  SERVİS — sepet gerçek tapMedicine() ile kurulur, karar gerçek checkOrder()
+  // ---------------------------------------------------------------------------
+  // Doğru cevap. Reçete/Medula: kalemlerin kendisi. Semptom: kategoriden STOĞU EN BOL
+  // olan ilaç (gerçek oyuncu da rafta ne varsa onu verir).
+  function admCorrectIds(p) {
+    const r = p.request;
+    const out = [];
+    if (r.type === "prescription" || r.type === "medula") {
+      for (const it of r.items) for (let i = 0; i < it.qty; i++) out.push(it.id);
+      return out;
+    }
+    for (const it of (r.items || [{ symptom: r.symptom, qty: 1 }])) {
+      const cands = MEDICINES.filter(m => m.category === it.symptom.category);
+      for (let i = 0; i < it.qty; i++) {
+        let best = null, bestN = -Infinity;
+        for (const m of cands) {
+          let used = 0;
+          for (const x of out) if (x === m.id) used++;
+          const n = (game.stock[m.id] || 0) - used;
+          if (n > bestN) { bestN = n; best = m; }
+        }
+        if (best) out.push(best.id);
+      }
+    }
+    return out;
+  }
+  // Yanlış cevap: bir kalem BAŞKA KATEGORİDEN bir ilaçla değiştirilir (hem reçete
+  // hem semptom eşleşmesini kesin bozar). Değiştirecek stok yoksa kalem eksiltilir /
+  // adet fazlalaştırılır — her hâlde sepet boş kalmaz.
+  function admWrongIds(correct) {
+    const out = correct.slice();
+    if (!out.length) return out;
+    const m0 = getMedicine(out[0]);
+    const cat = m0 ? m0.category : null;
+    for (const m of MEDICINES) {
+      if (m.category === cat) continue;
+      if ((game.stock[m.id] || 0) > 0 && out.indexOf(m.id) < 0) { out[0] = m.id; return out; }
+    }
+    if (out.length > 1) out.pop(); else out.push(out[0]);
+    return out;
+  }
+  // Rafta hiçbir şey kalmadı: hasta bekletilir, sabrı biter. Ceza/sayaç mantığı
+  // kopyalanmaz — gerçek update() yolundan geçer.
+  function admLetGo(p) {
+    p.patience = 0;
+    const open = game.depotOpen, scr = game.pcScreen, intro = game.nightIntro;
+    game.depotOpen = false; game.nightIntro = null;
+    // DİKKAT: SARMALANMAMIŞ update çağrılır. Sarmalanmış olan, ekran içi panel
+    // açıkken oyunu dondurup hemen dönüyor; panelden başlatılan simülasyonda bu
+    // hastanın küsme yolunu hiç çalıştırmaz ve gün döngüsü ilerlemezdi.
+    (_admOrigUpdate || update)(0);
+    game.depotOpen = open; game.pcScreen = scr; game.nightIntro = intro;
+  }
+  function admServe(p, ids) {
+    game.counter = [];
+    let placed = 0;
+    for (const id of ids) if (tapMedicine(id)) placed++;
+    if (!placed) { admLetGo(p); return; }
+    checkOrder();                       // gerçek karar/ekonomi/itibar yolu
+  }
+
+  // Bir hastayı baştan sona işle. Tek zar (skill) hem inceleme hem servis kararını verir.
+  function admHandle(p, skill) {
+    const t = p.request.type;
+    if (t === "beggarpay") { beggarPayCollect(); return; }
+    if (t === "beggar") {
+      // stok bolsa ilaç · değilse para · ikisi de yoksa reddet (DURUM.md 14.1 politikası)
+      const gift = beggarGiftMedicine();
+      if (gift && (game.stock[gift.id] || 0) >= ADM.beggarStockMin) beggarGiveMedicine();
+      else if (game.money > 0) beggarGiveMoney();
+      // Yakalayıcı: yukarıdaki iki yol da sessizce dönebilir (raf boş / kasa boş).
+      // O durumda karar VERİLMEMİŞ olur ve gün döngüsü ilerlemez — reddetmek hem
+      // politikanın son maddesi hem kilitlenmeye karşı garanti.
+      if (!game.feedback) beggarRefuse(false);
+      return;
+    }
+    const right = _admRnd() < skill;
+    if (t === "medula") {
+      openMedulaScreen();                       // gerçek yol: kodu terminale gir
+      game.medulaInput = p.request.code;
+      medulaSubmit();
+      closeDepot();
+    }
+    if (t === "prescription") {
+      const approve = right ? !p.request.fake : p.request.fake;
+      if (!approve) { rejectPrescription(); return; }
+      approvePrescription();
+    }
+    const correct = admCorrectIds(p);
+    admServe(p, right ? correct : admWrongIds(correct));
+  }
+
+  // ---------------------------------------------------------------------------
+  //  GÜN DÖNGÜSÜ — çizim/animasyon yok, oyunun kendi fonksiyonları
+  // ---------------------------------------------------------------------------
+  let _admLog = [];
+  // Simülasyon sırasında karar teşhis bloğu (CONFIG.debugDecisions) SUSTURULUR: 14 günde
+  // ~300 blok basıyor ve özeti konsolda görünmez hâle getiriyor. Değer sim bitince
+  // aynen geri konur — oyunun normal oynanışında teşhis açık kalır.
+  let _admQuietDepth = 0, _admDebugBak = null;
+  function admQuietOn() {
+    if (_admQuietDepth++ === 0) { _admDebugBak = CONFIG.debugDecisions; CONFIG.debugDecisions = false; }
+  }
+  function admQuietOff() {
+    if (--_admQuietDepth <= 0) { _admQuietDepth = 0; CONFIG.debugDecisions = _admDebugBak; }
+  }
+  function admPlayDay(skill) {
+    const day = game.dayNumber;
+    const money0 = game.money, rep0 = game.reputation;
+    admReseed(day, skill);
+    const bought = [];
+    const spentStock = admRestock() + admPreBuy();
+    admBuyUpgrades(bought);
+
+    let guard = 0;
+    while (game.state === STATE.PLAYING && game.dayNumber === day && guard++ < ADM.guard) {
+      if (game.nightIntro !== null) game.nightIntro = null;    // "NÖBET BAŞLIYOR" kartına dokun
+      maybeSpawnBeggar();                                      // program DIŞI hastalar önce
+      maybeSpawnBeggarPay();
+      while (game.queue.length < effMaxQueue() && game.daySpawned < patientsForDay()) {
+        if (!spawnPatient()) break;
+      }
+      const p = activePatient();
+      if (!p) break;
+      admHandle(p, skill);
+      if (game.feedback) onFeedbackEnd();
+      else if (activePatient() === p) break;                   // ilerleme yok: kilitlenme
+    }
+    const st = game.dayStats;
+    _admLog.push({
+      sezon: careerSeason(), gün: day, N: game.daySchedule ? game.daySchedule.N : 0,
+      hedef: (game.dayResult ? game.dayResult.goal : 0) + "₺",
+      "gün kazancı": Math.round(st.money) + "₺",
+      "hedef tuttu": game.dayResult && game.dayResult.met ? "✓" : "✗",
+      doğru: st.correct, yanlış: st.wrong, küsen: st.angry,
+      "sahte yakalanan": st.fakeCaught, "sahte KAÇAN": st.fakeMissed,
+      "stok siparişi": Math.round(spentStock) + "₺",
+      geliştirme: bought.length ? bought.join(" · ") : "—",
+      kasa: Math.round(game.money) + "₺",
+      "kasa Δ": (game.money - money0 >= 0 ? "+" : "") + Math.round(game.money - money0) + "₺",
+      itibar: Math.round(game.reputation * 10) / 10,
+      "itibar Δ": Math.round((game.reputation - rep0) * 10) / 10
+    });
+  }
+
+  // Oynanabilir mi (gün ilerletilebilir mi)?
+  function admAlive() { return game.state === STATE.PLAYING || game.state === STATE.DAYEND; }
+
+  // Sezonu sonuna kadar oynat (SEASONEND ya da CAREEREND'e kadar).
+  function admPlaySeasonOut(skill) {
+    // Tur başına ya bir gün oynanır ya da bir gün ilerletilir => sezon başına en fazla
+    // 2 × seasonDays tur. Sınır bunun üstünde tutulur, yoksa sezon yarıda kesilir.
+    let guard = 0;
+    while (admAlive() && guard++ < CONFIG.seasonDays * 2 + 8) {
+      if (game.state === STATE.DAYEND) { startNextDay(); continue; }
+      admPlayDay(skill);
+    }
+  }
+
+  // Hedef günün BAŞINA kadar oynat (aynı sezon içinde).
+  function admPlayToDay(targetDay, skill) {
+    let guard = 0;
+    while (game.dayNumber < targetDay && admAlive() && guard++ < CONFIG.seasonDays * 2 + 8) {
+      if (game.state === STATE.DAYEND) { startNextDay(); continue; }
+      admPlayDay(skill);
+      if (game.state === STATE.DAYEND && game.dayNumber < targetDay) startNextDay();
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  //  HAZIRLIK — hedef, bulunduğumuz noktanın gerisindeyse kariyer TOHUM KORUNARAK
+  //  baştan kurulur; böylece sim(15) sonra sim(5) yine aynı koşunun 5. gününü verir.
+  // ---------------------------------------------------------------------------
+  function admPos() {
+    if (!game.career) return Infinity;
+    if (game.state === STATE.SEASONEND) return careerSeason() * 1000 + 999;
+    if (!admAlive()) return Infinity;
+    return careerSeason() * 1000 + game.dayNumber;
+  }
+  function admPrepare(opts, wantSeason, wantDay) {
+    const want = wantSeason * 1000 + wantDay;
+    const restart = (opts.seed != null) || admPos() > want;
+    if (!restart) {
+      if (game.state === STATE.DAYEND && game.dayNumber < wantDay) startNextDay();
+      return false;
+    }
+    const seed = ((opts.seed != null) ? (opts.seed >>> 0)
+                 : (game.career ? game.career.seed : newRunSeed())) || 1;
+    startNewCareer();
+    game.career.seed = seed;      // tohum sabitlensin: aynı çağrı aynı kariyeri kursun
+    beginSeason(1);               // 1. sezon bedelsiz — kasa/stok/geliştirme startNewCareer'dan
+    return true;
+  }
+
+  // ---------------------------------------------------------------------------
+  //  RAPOR
+  // ---------------------------------------------------------------------------
+  function admTotals() {
+    const t = (game.career && game.career.totals) || {};
+    const s = game.seasonStats || {};
+    const d = game.dayStats || {};
+    const add = k => (t[k] || 0) + (s[k] || 0) + (d[k] || 0);
+    return { fakeCaught: add("fakeCaught"), fakeMissed: add("fakeMissed"),
+             served: add("served"), correct: add("correct"), wrong: add("wrong"),
+             angry: add("angry") };
+  }
+  function admStockTotal() {
+    let n = 0, kinds = 0;
+    for (const m of MEDICINES) { const q = game.stock[m.id] || 0; n += q; if (q > 0) kinds++; }
+    return { n: n, kinds: kinds };
+  }
+  function admPriceHistory() {
+    const out = [];
+    for (let d = 1; d <= game.dayNumber; d++) {
+      const r = priceRoundOn(d);
+      if (r) out.push("gün " + d + " (" + priceRoundLabel(r) + ")");
+    }
+    return out;
+  }
+  function admReport(title, skill, days, ms) {
+    const st = admStockTotal(), tot = admTotals();
+    const ph = admPriceHistory();
+    const stateNote = game.state === STATE.CAREEREND
+        ? "  ⛔ KARİYER BİTTİ (" + (game.careerResult && game.careerResult.reason) + ")"
+      : game.state === STATE.SEASONEND ? "  ⏸ SEZON SONU ekranı" : "";
+    console.log("%c[ADMIN] " + title + stateNote, "color:#ff9d2f;font-weight:bold");
+    console.log("  konum ............ Sezon " + careerSeason() + " · Gün " + game.dayNumber +
+                " / " + CONFIG.seasonDays + " (gün başı)");
+    console.log("  skill ............ " + skill + "  ·  oynanan gün: " + days +
+                "  ·  süre: " + Math.round(ms) + " ms");
+    console.log("  kasa ............. " + formatMoney(Math.round(game.money)) +
+                "   (kariyer peak " + formatMoney(Math.round(game.career ? game.career.peakMoney : 0)) + ")");
+    console.log("  itibar ........... " + (Math.round(game.reputation * 10) / 10) +
+                " / " + CONFIG.repMax);
+    console.log("  geliştirmeler .... " + UPGRADES.map(u =>
+                u.name + " Lv" + upgradeLevel(u.id) + "/" + u.maxLevel).join(" · "));
+    console.log("  toplam stok ...... " + st.n + " kutu (" + st.kinds + "/" + MEDICINES.length +
+                " ilaçta stok var, tavan " + effMaxStock() + ")");
+    console.log("  bekleyen SGK ..... " + formatMoney(pendingReceivables()) +
+                "   (yazılan " + formatMoney(Math.round(game.medulaBooked)) +
+                " · yatan " + formatMoney(Math.round(game.medulaCollected)) + ")");
+    console.log("  sahte reçete ..... yakalanan " + tot.fakeCaught + " · KAÇAN " + tot.fakeMissed +
+                "  (servis " + tot.served + " · doğru " + tot.correct + " · yanlış " + tot.wrong +
+                " · küsen " + tot.angry + ")");
+    console.log("  ödenen bedel ..... " + formatMoney(Math.round((game.career && game.career.totals.feePaid) || 0)) +
+                "   (bu sezon " + formatMoney(Math.round(game.seasonFeePaid || 0)) +
+                " · sonraki " + formatMoney(nextSeasonFee()) + ")");
+    console.log("  dilenci defteri .. bekleyen geri ödeme " + formatMoney(pendingBeggarReturns()) +
+                " (" + game.beggarReturns.length + " borçlu)");
+    console.log("  fiyat turları .... " + (ph.length ? ph.join(" · ") : "(henüz yok)"));
+    console.log("  tohum ............ kariyer " + (game.career ? game.career.seed : "-") +
+                " · sezon(runSeed) " + game.runSeed);
+    console.log("  → cheats.simLog() gün dökümü · cheats.simVerify() değişmez denetimi");
+  }
+
+  // ---------------------------------------------------------------------------
+  //  DEĞİŞMEZ DENETİMİ — testler oyun state'ini kirletir, o yüzden tam yedek/geri yükleme
+  // ---------------------------------------------------------------------------
+  // structuredClone TERCİH EDİLİR: game içindeki PAYLAŞILAN REFERANSLARI korur.
+  // Kritik olan şu paylaşım: game.queue[i] ile game.daySchedule.patients[k] AYNI hasta
+  // nesnesidir (spawnPatient listeden itip kuyruğa koyar). JSON turu bu bağı koparır ve
+  // kuyruktaki hasta ile programdaki hasta iki ayrı nesneye bölünür. Zararsız olduğu
+  // ölçüldü ama denetim aracının oyun durumunu HİÇ değiştirmemesi gerekir; bu yüzden
+  // JSON yalnız structuredClone bulunmayan ortamlarda yedek yoldur.
+  const _admClone = (typeof structuredClone === "function")
+    ? structuredClone
+    : (o => JSON.parse(JSON.stringify(o)));
+  function admSnapshot() {
+    const s = {};
+    for (const k in game) s[k] = game[k];
+    return _admClone(s);
+  }
+  function admRestoreSnap(s) {
+    for (const k in s) game[k] = s[k];
+    invalidateDaySchedules();
+  }
+  function admVerify(verbose) {
+    const res = admRunChecks(verbose);
+    console.log("%c[ADMIN] Değişmez denetimi: " + (res.ok ? "TÜMÜ GEÇTİ ✓" : "BAŞARISIZ ✗"),
+                "color:" + (res.ok ? "#5ec48a" : "#e8736b") + ";font-weight:bold");
+    admPrintChecks(res);
+    return res;
+  }
+  // Sim sonunda basılan TEK satır; bir şey düşerse ayrıntı da basılır.
+  function admVerifyLine(res) {
+    console.log("  değişmezler ...... " + (res.ok
+      ? "denge ✓ · konsantrasyon ✓ · selfTestPatients ✓ · SGK defteri ✓ · kariyer ✓"
+      : "BAŞARISIZ ✗ — ayrıntı aşağıda"));
+    if (!res.ok) admPrintChecks(res);
+  }
+  function admPrintChecks(res) {
+    console.log("  verifyGoalBalanceAllTiers ....... " + (res.denge ? "✓" : "✗"));
+    console.log("  verifyConcentrationCapAllTiers .. " + (res.konsantrasyon ? "✓" : "✗"));
+    console.log("  selfTestPatients ................ " + (res.selfTestPatients ? "✓" : "✗"));
+    console.log("  verifyMedulaLedger .............. " + (res.medulaDefteri ? "✓" : "✗"));
+    console.log("  kariyer değişmezleri ............ " +
+                (res.kariyerDeğişmezleri ? "✓" : "✗ — " + res.ihlaller.join(" | ")));
+  }
+  function admRunChecks(verbose) {
+    const snap = admSnapshot();
+    const res = {};
+    try {
+      res.denge = verifyGoalBalanceAllTiers(!!verbose);
+      res.konsantrasyon = verifyConcentrationCapAllTiers(!!verbose);
+      res.selfTestPatients = selfTestPatients();
+      res.medulaDefteri = verifyMedulaLedger();
+    } finally { admRestoreSnap(snap); }
+    // kariyer değişmezleri — simülasyon SONRASI canlı state üzerinde
+    const cr = game.career;
+    const inv = [];
+    if (cr) {
+      // NOT: peak gün SONUNDA güncellenir; gün başında yatan SGK alacağı kasayı
+      // geçici olarak peak'in üstüne çıkarabilir — bu bir hata DEĞİL. Denetlenebilir
+      // olan şey peak'in kapanmış sezon skorlarının hepsini kapsaması.
+      for (const sx of cr.seasons) if (cr.peakMoney < sx.score) inv.push("peak kasa sezon " + sx.season + " skorunun altında");
+      if (cr.season < 1) inv.push("sezon numarası < 1");
+      if (cr.totals.feePaid < 0) inv.push("ödenen bedel negatif");
+      let sumFee = 0;
+      for (let n = 2; n <= cr.season; n++) sumFee += seasonFeeFor(n);
+      if (Math.abs(cr.totals.feePaid - sumFee) > 0.5)
+        inv.push("ödenen bedel toplamı formülle tutmuyor: " + Math.round(cr.totals.feePaid) + " ≠ " + sumFee);
+      if (cr.seasons.length !== cr.totals.seasonsPlayed)
+        inv.push("kariyer sezon listesi ile sayaç tutmuyor");
+    }
+    if (game.dayNumber < 1 || game.dayNumber > CONFIG.seasonDays) inv.push("gün numarası sezon dışında");
+    if (game.reputation < CONFIG.minReputation || game.reputation > CONFIG.repMax) inv.push("itibar bant dışında");
+    if (game.money < 0) inv.push("kasa negatif");
+    for (const m of MEDICINES) {
+      const q = game.stock[m.id] || 0;
+      if (q < 0 || q > effMaxStock()) { inv.push("stok bant dışında: " + m.id + "=" + q); break; }
+    }
+    res.kariyerDeğişmezleri = inv.length === 0;
+    res.ihlaller = inv;
+    res.ok = res.denge && res.konsantrasyon && res.selfTestPatients &&
+             res.medulaDefteri && res.kariyerDeğişmezleri;
+    _admLastCheck = res;        // ekran içi panel bu sonucu gösterir
+    return res;
+  }
+
+  // ---------------------------------------------------------------------------
+  //  DIŞ API
+  // ---------------------------------------------------------------------------
+  function admSim(targetDay, opts) {
+    opts = opts || {};
+    const skill = admSkillOf(opts.skill);
+    let target = Math.round(targetDay || 1);
+    if (target < 1) target = 1;
+    if (target > CONFIG.seasonDays) {
+      console.warn("[ADMIN] Sezon " + CONFIG.seasonDays + " günlük; hedef " + target +
+                   " → " + CONFIG.seasonDays + "'a kırpıldı. Sonraki sezon için cheats.simSeason().");
+      target = CONFIG.seasonDays;
+    }
+    const t0 = admNow();
+    _admLog = [];
+    let day0 = game.dayNumber;
+    admQuietOn();
+    try {
+      admPrepare(opts, careerSeason(), target);
+      day0 = game.dayNumber;
+      admPlayToDay(target, skill);
+    } finally { admQuietOff(); }
+    if (game.dayNumber < target) {
+      console.warn("[ADMIN] Gün " + target + "'e ULAŞILAMADI — koşu " + game.dayNumber +
+                   ". günde bitti (" + (game.careerResult ? game.careerResult.reason : game.state) +
+                   "). Bu bir hata değil: bu skill'de oyuncu o güne gelemiyor demek.");
+    }
+    admReport("sim(" + target + ")", skill, Math.max(0, game.dayNumber - day0), admNow() - t0);
+    if (opts.verify !== false) admVerifyLine(admRunChecks(false));
+    return admState();
+  }
+
+  function admSimSeason(targetSeason, opts) {
+    opts = opts || {};
+    const skill = admSkillOf(opts.skill);
+    const wantDay = clamp(Math.round(opts["gün"] || opts.day || 1), 1, CONFIG.seasonDays);
+    let target = Math.round(targetSeason || 1);
+    if (target < 1) target = 1;
+    const t0 = admNow();
+    _admLog = [];
+    let days0 = 0, days1 = 0;
+    admQuietOn();
+    try {
+      admPrepare(opts, target, wantDay);
+      days0 = (game.career ? game.career.totals.daysPlayed : 0) + game.dayNumber;
+      let guard = 0;
+      while (careerSeason() < target && guard++ < 64) {
+        admPlaySeasonOut(skill);
+        if (game.state !== STATE.SEASONEND) break;        // itibar çöktü → kariyer bitti
+        if (!tryStartNextSeason()) break;                 // ruhsat bedeli ödenemedi
+      }
+      if (careerSeason() === target && admAlive()) admPlayToDay(wantDay, skill);
+      days1 = (game.career ? game.career.totals.daysPlayed : 0) + game.dayNumber;
+    } finally { admQuietOff(); }
+    if (careerSeason() !== target) {
+      console.warn("[ADMIN] Sezon " + target + "'e ULAŞILAMADI — kariyer " +
+                   careerSeason() + ". sezonda bitti (" +
+                   (game.careerResult ? game.careerResult.reason : game.state) +
+                   "). skill'i yükselt ya da hedefi düşür.");
+    }
+    admReport("simSeason(" + target + ", gün " + wantDay + ")", skill,
+              Math.max(0, days1 - days0), admNow() - t0);
+    if (opts.verify !== false) admVerifyLine(admRunChecks(false));
+    return admState();
+  }
+
+  function admState() {
+    const st = admStockTotal(), tot = admTotals();
+    return {
+      sezon: careerSeason(), gün: game.dayNumber, kasa: Math.round(game.money),
+      itibar: Math.round(game.reputation * 10) / 10,
+      geliştirmeler: UPGRADES.reduce((o, u) => { o[u.id] = upgradeLevel(u.id); return o; }, {}),
+      stok: st.n, bekleyenSGK: pendingReceivables(),
+      sahteKaçan: tot.fakeMissed, sahteYakalanan: tot.fakeCaught,
+      ödenenBedel: Math.round((game.career && game.career.totals.feePaid) || 0),
+      kariyerTohumu: game.career ? game.career.seed : null, runSeed: game.runSeed,
+      state: game.state
+    };
+  }
+
+  function admLogTable() {
+    if (!_admLog.length) { console.log("[ADMIN] Kayıt yok — önce cheats.sim() çalıştır."); return []; }
+    console.table(_admLog);
+    return _admLog;
+  }
+
+  // ---------------------------------------------------------------------------
+  //  EKRAN İÇİ PANEL
+  //  Asıl test telefonda yapılıyor ve iPhone Safari'de konsol yok. Rozete dokununca
+  //  açılan bu panel, cheats.sim / cheats.simSeason'ı parmakla çağırılabilir kılar.
+  //  YENİ GÖRSEL DİL İCAT EDİLMEZ: panel, buton ve pill çizimi oyunun kendi
+  //  yardımcılarıyla yapılır (drawPanel · drawSolidButton · fillRoundRect · fitText),
+  //  PC ekranlarıyla (drawPcScreen) aynı kalıp — koyu kart + neon buton + ✕ düğmesi.
+  //  Tek bilinçli fark BAŞLIK ŞERİDİNİN KIRMIZI olması: bu panel oyunun parçası değil.
+  // ---------------------------------------------------------------------------
+  const ADM_TAP_MIN = 48;        // en küçük dokunma alanı kenarı (CSS px)
+  const ADM_SKILLS = [
+    { label: "Acemi",    pct: "%70",  v: 0.70 },
+    { label: "Ortalama", pct: "%85",  v: 0.85 },
+    { label: "Kusursuz", pct: "%100", v: 1.00 }
+  ];
+  const admPanel = {
+    open: false, busy: false, busyLabel: "", t: 0,
+    day: 1, season: 1, skill: ADM.defaultSkill,
+    msg: null, msg2: null, bad: false
+  };
+  // Son çizilen dokunma alanları. Çizim ve dokunma AYNI yerleşimi okur (oyunun
+  // layout.* kalıbı) — panel her karede yeniden ölçülür, ekran döndürülse de tutar.
+  let _admHit = { badge: null, badgeTap: null, panel: null };
+
+  function admIn(px, py, r, grow) {
+    if (!r) return false;
+    const g = grow || 0;
+    return px >= r.x - g && px <= r.x + r.w + g && py >= r.y - g && py <= r.y + r.h + g;
+  }
+
+  // --- Ekrandaki ADMIN rozeti (sol alt köşe) — aynı zamanda panelin açma düğmesi ---
+  function admDrawBadge() {
+    const w = layout.w, h = layout.h;
+    if (!w || !h) return;
+    const s = Math.max(12, Math.round(Math.min(w, h) * 0.032));
+    const pad = Math.round(s * 0.62);
+    const label = "ADMIN";
+    ctx.save();
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.font = "800 " + s + "px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+    const tw = ctx.measureText(label).width;
+    const bw = tw + pad * 2.6, bh = s + pad * 2.2;
+    const x = pad * 1.2, y = h - bh - pad * 1.2;
+    // Çizilen rozet ile DOKUNMA ALANI ayrı: rozet küçük kalsın (oyunu örtmesin) ama
+    // parmakla basılabilsin. Alan ADM_TAP_MIN'e kadar simetrik büyütülür — sabit bir
+    // yüzde eklemek dar ekranda yetmiyor, geniş ekranda gereksiz yer kaplıyordu.
+    _admHit.badge = { x: x, y: y, w: bw, h: bh };
+    const gx = Math.max(0, (ADM_TAP_MIN - bw) / 2), gy = Math.max(0, (ADM_TAP_MIN - bh) / 2);
+    const tw2 = bw + gx * 2, th2 = bh + gy * 2;
+    // Büyütülen alan ekran dışına taşarsa KAYDIRILIR, küçültülmez: rozet köşede
+    // olduğu için kaydırılmış alan rozeti yine tamamen kapsar.
+    _admHit.badgeTap = { x: clamp(x - gx, 0, Math.max(0, w - tw2)),
+                         y: clamp(y - gy, 0, Math.max(0, h - th2)), w: tw2, h: th2 };
+    ctx.globalAlpha = admPanel.open ? 0.55 : 0.95;
+    fillRoundRect(x, y, bw, bh, bh * 0.28, "#c3122b");
+    strokeRoundRect(x, y, bw, bh, bh * 0.28, "rgba(255,255,255,0.85)", Math.max(1, s * 0.08));
+    ctx.fillStyle = "#ffffff";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, x + bw / 2 - s * 0.22, y + bh / 2 + s * 0.04);
+    // küçük "dokun" oku — rozetin tıklanabilir olduğunu göstersin
+    ctx.font = "800 " + Math.round(s * 0.8) + "px -apple-system, sans-serif";
+    ctx.fillText("▸", x + bw - pad * 0.95, y + bh / 2 + s * 0.04);
+    ctx.restore();
+  }
+
+  // --- Yerleşim: panel her karede ölçülür (oyunun computeLayout kalıbı) ---
+  function admStepRow(x, y, w, h) {
+    const gap = w * 0.028, sq = h, git = w * 0.30;
+    const val = w - sq * 2 - git - gap * 3;
+    return {
+      minus: { x: x,                               y: y, w: sq,  h: h },
+      value: { x: x + sq + gap,                    y: y, w: val, h: h },
+      plus:  { x: x + sq + gap + val + gap,        y: y, w: sq,  h: h },
+      git:   { x: x + w - git,                     y: y, w: git, h: h }
+    };
+  }
+  function admPanelLayout() {
+    const S = layout.stage || { x: 0, y: 0, w: layout.w, h: layout.h };
+    const pw = S.w * 0.92, ph = S.h * 0.90;
+    const px = S.x + (S.w - pw) / 2, py = S.y + (S.h - ph) / 2;
+    const R = { panel: { x: px, y: py, w: pw, h: ph } };
+    R.barH = ph * 0.072;
+    R.pad = pw * 0.055;
+    R.cx = px + R.pad;
+    R.cw = pw - R.pad * 2;
+    // ✕ görünüşü oyunun depo panelininkiyle AYNI ölçüde (S.w * 0.085) — görsel dil
+    // değişmesin. Dokunma alanı ayrıca ADM_TAP_MIN'e büyütülür (rozetteki kalıp).
+    const cs = S.w * 0.085;
+    R.close = { x: px + pw - cs * 0.85, y: py - cs * 0.35, w: cs, h: cs };
+    const cg = Math.max(0, (ADM_TAP_MIN - cs) / 2);
+    R.closeTap = { x: R.close.x - cg, y: R.close.y - cg, w: cs + cg * 2, h: cs + cg * 2 };
+
+    let y = py + R.barH + ph * 0.028;
+    R.status = { x: R.cx, y: y, w: R.cw, h: ph * 0.185 };
+    y += R.status.h + ph * 0.026;
+
+    R.skillLabelY = y + ph * 0.016;  y += ph * 0.038;
+    const sh = ph * 0.080, sgap = R.cw * 0.025, sw = (R.cw - sgap * 2) / 3;
+    R.skills = ADM_SKILLS.map((sk, i) => ({ x: R.cx + i * (sw + sgap), y: y, w: sw, h: sh, i: i }));
+    y += sh + ph * 0.028;
+
+    const rowH = ph * 0.088;
+    R.dayLabelY = y + ph * 0.014;    y += ph * 0.035;
+    R.dayRow = admStepRow(R.cx, y, R.cw, rowH);     y += rowH + ph * 0.026;
+    R.seasonLabelY = y + ph * 0.014; y += ph * 0.035;
+    R.seasonRow = admStepRow(R.cx, y, R.cw, rowH);  y += rowH + ph * 0.022;
+    R.msgY = y;
+
+    const kh = ph * 0.088;
+    R.kapat = { x: R.cx, y: py + ph - ph * 0.030 - kh, w: R.cw, h: kh };
+    return R;
+  }
+
+  function admStatusLines() {
+    const st = admStockTotal(), tot = admTotals();
+    return [
+      "Sezon " + careerSeason() + " · Gün " + game.dayNumber + " / " + CONFIG.seasonDays +
+        (game.state === STATE.PLAYING ? "" : "  [" + game.state + "]"),
+      "💰 " + formatMoney(Math.round(game.money)) +
+        "   ⭐ " + (Math.round(game.reputation * 10) / 10) + "/" + CONFIG.repMax +
+        "   📦 " + st.n + " kutu",
+      UPGRADES.map(u => u.emoji + upgradeLevel(u.id)).join("  ") +
+        "   🏦 " + formatMoney(pendingReceivables()),
+      "sahte kaçan " + tot.fakeMissed + " · yakalanan " + tot.fakeCaught +
+        " · bedel " + formatMoney(Math.round((game.career && game.career.totals.feePaid) || 0))
+    ];
+  }
+
+  function admDrawPanel() {
+    const c = CONFIG.colors;
+    const R = admPanelLayout();
+    _admHit.panel = R;
+    const P = R.panel;
+
+    // tam ekran karartma (drawPcScreen ile aynı modal kalıbı)
+    ctx.fillStyle = "rgba(8,6,12,0.82)";
+    ctx.fillRect(0, 0, layout.w, layout.h);
+    drawPanel(P.x, P.y, P.w, P.h, P.w * 0.05, c.panelBgSolid, "#e8736b");
+
+    // başlık şeridi — PC ekranındaki yeşil şeridin kırmızı eşleniği
+    ctx.save();
+    roundRect(P.x, P.y, P.w, P.h, P.w * 0.05);
+    ctx.clip();
+    ctx.fillStyle = "rgba(96, 26, 34, 0.95)";
+    ctx.fillRect(P.x, P.y, P.w, R.barH);
+    ctx.fillStyle = "rgba(255, 160, 150, 0.35)";
+    ctx.fillRect(P.x, P.y + R.barH - Math.max(1, P.h * 0.004), P.w, Math.max(1, P.h * 0.004));
+    ctx.restore();
+    ctx.beginPath();
+    ctx.arc(P.x + P.w * 0.045, P.y + R.barH * 0.5, R.barH * 0.16, 0, Math.PI * 2);
+    ctx.fillStyle = "#ff6b6b"; ctx.fill();
+    fitText("ADMIN — SİMÜLASYON", P.x + P.w * 0.5, P.y + R.barH * 0.5,
+            P.w * 0.72, R.barH * 0.42, "#ffd9d4", "center", "800");
+
+    // ✕ kapat (depo panelinin kalıbı)
+    const cb = R.close;
+    ctx.save();
+    ctx.shadowColor = "rgba(0,0,0,0.45)"; ctx.shadowBlur = 10; ctx.shadowOffsetY = 3;
+    ctx.beginPath(); ctx.arc(cb.x + cb.w / 2, cb.y + cb.h / 2, cb.w / 2, 0, Math.PI * 2);
+    ctx.fillStyle = "#3a2230"; ctx.fill();
+    ctx.restore();
+    ctx.strokeStyle = "#e8736b"; ctx.lineWidth = Math.max(2, cb.w * 0.06);
+    ctx.beginPath(); ctx.arc(cb.x + cb.w / 2, cb.y + cb.h / 2, cb.w / 2, 0, Math.PI * 2); ctx.stroke();
+    text("✕", cb.x + cb.w / 2, cb.y + cb.h / 2, cb.w * 0.5, "#e8736b", "center", "800");
+
+    // --- DURUM kutusu ---
+    const st = R.status;
+    fillRoundRect(st.x, st.y, st.w, st.h, st.h * 0.14, "rgba(10,8,14,0.55)");
+    strokeRoundRect(st.x, st.y, st.w, st.h, st.h * 0.14, "rgba(245,170,70,0.35)", 1.5);
+    const lines = admStatusLines();
+    const lh = st.h / (lines.length + 0.6);
+    for (let i = 0; i < lines.length; i++) {
+      fitText(lines[i], st.x + st.w * 0.5, st.y + lh * (i + 0.8), st.w * 0.90,
+              lh * (i === 0 ? 0.62 : 0.52), i === 0 ? c.neon : c.cream, "center", i === 0 ? "800" : "700");
+    }
+
+    // --- SKILL ---
+    fitText("SERVİS DOĞRULUĞU (skill)", R.cx, R.skillLabelY, R.cw, P.h * 0.026, c.creamSoft, "left", "700");
+    for (const b of R.skills) {
+      const sk = ADM_SKILLS[b.i];
+      const on = Math.abs(admPanel.skill - sk.v) < 1e-9;
+      fillRoundRect(b.x, b.y, b.w, b.h, b.h * 0.30, on ? "rgba(255,157,47,0.92)" : c.btnDark);
+      strokeRoundRect(b.x, b.y, b.w, b.h, b.h * 0.30, on ? "#ffd9a0" : "rgba(245,170,70,0.45)",
+                      Math.max(1.5, b.w * 0.010));
+      fitText(sk.label, b.x + b.w / 2, b.y + b.h * 0.36, b.w * 0.86, b.h * 0.30,
+              on ? "#2b1a06" : c.cream, "center", "800");
+      fitText(sk.pct, b.x + b.w / 2, b.y + b.h * 0.71, b.w * 0.86, b.h * 0.26,
+              on ? "#5a3a0a" : c.creamSoft, "center", "800");
+    }
+
+    // --- GÜN / SEZON satırları ---
+    admDrawStepRow(R, R.dayRow, R.dayLabelY, "GÜN (bu sezon içinde)", admPanel.day);
+    admDrawStepRow(R, R.seasonRow, R.seasonLabelY, "SEZON (bedeller ödenerek)", admPanel.season);
+
+    // --- son sonuç mesajı ---
+    if (admPanel.msg) {
+      const col = admPanel.bad ? c.bad : c.good;
+      fitText(admPanel.msg, R.cx + R.cw / 2, R.msgY + P.h * 0.020, R.cw, P.h * 0.026, col, "center", "800");
+      if (admPanel.msg2)
+        fitText(admPanel.msg2, R.cx + R.cw / 2, R.msgY + P.h * 0.050, R.cw, P.h * 0.023,
+                c.creamSoft, "center", "700");
+    } else {
+      fitText("Hedefe kadar bot oynar; oyun o günün BAŞINDA bırakılır.",
+              R.cx + R.cw / 2, R.msgY + P.h * 0.020, R.cw, P.h * 0.023, c.creamSoft, "center", "700");
+      fitText("Geri gitmek kariyeri aynı tohumla baştan kurar.",
+              R.cx + R.cw / 2, R.msgY + P.h * 0.050, R.cw, P.h * 0.023, c.creamSoft, "center", "700");
+    }
+
+    drawSolidButton(R.kapat, "KAPAT", "rgba(40,18,18,0.92)", "#e8736b", "rgba(232,115,107,0.55)");
+
+    if (admPanel.busy) admDrawBusy(P);
+  }
+
+  function admDrawStepRow(R, row, labelY, label, value) {
+    const c = CONFIG.colors;
+    fitText(label, R.cx, labelY, R.cw, R.panel.h * 0.026, c.creamSoft, "left", "700");
+    drawSolidButton(row.minus, "−", "rgba(26,21,36,0.95)", c.cream, null);
+    drawSolidButton(row.plus,  "+", "rgba(26,21,36,0.95)", c.cream, null);
+    const v = row.value;
+    fillRoundRect(v.x, v.y, v.w, v.h, v.h * 0.26, "rgba(10,8,14,0.7)");
+    strokeRoundRect(v.x, v.y, v.w, v.h, v.h * 0.26, "rgba(245,170,70,0.5)", 1.5);
+    fitText(String(value), v.x + v.w / 2, v.y + v.h / 2, v.w * 0.8, v.h * 0.54, c.neon, "center", "800");
+    drawSolidButton(row.git, "GİT →", "rgba(46,30,10,0.95)", c.neon, c.neonGlow);
+  }
+
+  // "hesaplanıyor" göstergesi — simülasyon ana iş parçacığını kilitler, bu kare
+  // hesaplama BAŞLAMADAN önce boyanır (bkz. admAfterPaint).
+  function admDrawBusy(P) {
+    ctx.fillStyle = "rgba(8,6,12,0.72)";
+    roundRect(P.x, P.y, P.w, P.h, P.w * 0.05);
+    ctx.fill();
+    const bw = P.w * 0.76, bh = P.h * 0.17;
+    const bx = P.x + (P.w - bw) / 2, by = P.y + (P.h - bh) / 2;
+    drawPanel(bx, by, bw, bh, bw * 0.06, CONFIG.colors.panelBgSolid);
+    // Math.abs: ana döngü dt'yi negatiften korumuyor (loop yalnız üst sınırı kırpıyor).
+    // Negatif t burada repeat(-1) ile patlardı — admin paneli oyunu düşürmemeli.
+    const dots = ".".repeat(1 + (Math.floor(Math.abs(admPanel.t) * 4) % 3));
+    fitText("⏳ HESAPLANIYOR" + dots, bx + bw / 2, by + bh * 0.36, bw * 0.86, bh * 0.28,
+            CONFIG.colors.neon, "center", "800");
+    fitText(admPanel.busyLabel, bx + bw / 2, by + bh * 0.70, bw * 0.86, bh * 0.22,
+            CONFIG.colors.creamSoft, "center", "700");
+  }
+
+  // --- Panel davranışı ---
+  function admOpenPanel() {
+    admPanel.open = true;
+    admPanel.t = 0;
+    admPanel.day = clamp(game.dayNumber, 1, CONFIG.seasonDays);
+    admPanel.season = clamp(careerSeason(), 1, ADM.maxSeason);
+  }
+  // Simülasyon ana iş parçacığını kilitler; "hesaplanıyor" karesinin GERÇEKTEN
+  // boyanması için iki kare beklenir (bir rAF yetmez: ilk geri çağrı boyamadan
+  // ÖNCE koşar). rAF yoksa (headless) doğrudan çalışır.
+  function admAfterPaint(fn) {
+    if (typeof requestAnimationFrame !== "function") { fn(); return; }
+    requestAnimationFrame(function () { requestAnimationFrame(fn); });
+  }
+  function admRun(kind, value) {
+    if (admPanel.busy) return;
+    admPanel.busy = true;
+    admPanel.msg = null; admPanel.msg2 = null;
+    admPanel.busyLabel = (kind === "day" ? "Gün " : "Sezon ") + value + "'e kadar oynanıyor";
+    admAfterPaint(function () {
+      const t0 = admNow();
+      let err = null;
+      try {
+        if (kind === "day") admSim(value, { skill: admPanel.skill });
+        else admSimSeason(value, { skill: admPanel.skill });
+      } catch (e) {
+        err = e;
+        console.error("[ADMIN] simülasyon hatası:", e);
+      }
+      const ms = Math.round(admNow() - t0);
+      admPanel.busy = false;
+      admPanel.day = clamp(game.dayNumber, 1, CONFIG.seasonDays);
+      admPanel.season = clamp(careerSeason(), 1, ADM.maxSeason);
+      if (err) {
+        admPanel.bad = true;
+        admPanel.msg = "✗ HATA — konsola bakılmalı";
+        admPanel.msg2 = String(err.message || err).slice(0, 80);
+        return;
+      }
+      const reached = (kind === "day") ? (game.dayNumber >= value) : (careerSeason() >= value);
+      const chk = !!(_admLastCheck && _admLastCheck.ok);
+      admPanel.bad = !reached || !chk;
+      admPanel.msg = (reached ? "✓ " : "⚠ ") + "Sezon " + careerSeason() + " · Gün " + game.dayNumber +
+                     " · " + ms + " ms";
+      admPanel.msg2 = reached
+        ? ("değişmezler " + (chk ? "✓ geçti" : "✗ DÜŞTÜ — konsola bak") +
+           " · kasa " + formatMoney(Math.round(game.money)))
+        : ("hedefe ulaşılamadı: koşu bitti (" +
+           (game.careerResult ? game.careerResult.reason : game.state) + ") — skill'i yükselt");
+    });
+  }
+
+  // Dokunma: rozet + panel HER ŞEYDEN ÖNCE gelir (defter/depo/gün sonu kartı dahil),
+  // yoksa açık bir modalin arkasında panele ulaşılamaz. true dönerse oyun görmez.
+  function admTapOverlay(px, py) {
+    if (admPanel.busy) return true;                       // hesaplarken her dokunuş yutulur
+    if (!admPanel.open) {
+      if (admIn(px, py, _admHit.badgeTap || _admHit.badge)) { admOpenPanel(); return true; }
+      return false;
+    }
+    const R = _admHit.panel;
+    if (!R) { admPanel.open = false; return true; }       // henüz çizilmedi: güvenli çıkış
+    if (admIn(px, py, R.closeTap || R.close) || admIn(px, py, R.kapat)) { admPanel.open = false; return true; }
+    for (const b of R.skills) if (admIn(px, py, b)) { admPanel.skill = ADM_SKILLS[b.i].v; return true; }
+    const d = R.dayRow, se = R.seasonRow;
+    if (admIn(px, py, d.minus)) { admPanel.day = clamp(admPanel.day - 1, 1, CONFIG.seasonDays); return true; }
+    if (admIn(px, py, d.plus))  { admPanel.day = clamp(admPanel.day + 1, 1, CONFIG.seasonDays); return true; }
+    if (admIn(px, py, d.git))   { admRun("day", admPanel.day); return true; }
+    if (admIn(px, py, se.minus)){ admPanel.season = clamp(admPanel.season - 1, 1, ADM.maxSeason); return true; }
+    if (admIn(px, py, se.plus)) { admPanel.season = clamp(admPanel.season + 1, 1, ADM.maxSeason); return true; }
+    if (admIn(px, py, se.git))  { admRun("season", admPanel.season); return true; }
+    if (!admIn(px, py, R.panel)) { admPanel.open = false; return true; }   // dışına dokunuş = kapat
+    return true;                                          // panel içi boşluk: modal, yut
+  }
+
+  function admDrawOverlay() {
+    if (admPanel.open) admDrawPanel();
+    admDrawBadge();                                       // rozet panelin de üstünde kalsın
+  }
+
+  // --- Boot: cheats'e bağlan, oyunun giriş/çizim/güncelleme kancalarını SARMALA ---
+  // Bu blok dosyanın EN ÜSTÜNDE durduğu için (silinmesi kolay olsun diye) render,
+  // handleTap ve window.cheats henüz tanımlı değil; setTimeout(0) script'in tamamı
+  // çalıştıktan SONRA — boot self-test'lerinin hemen ardından — koşar.
+  //
+  // SARMALAMA TEK YÖNLÜDÜR: admin oyunu çağırır, oyun admin'i ÇAĞIRMAZ. Blok
+  // silindiğinde sarmalama hiç kurulmaz ve fonksiyonlar orijinal hâlleriyle kalır.
+  // Uyarı da BİLEREK buradan basılır: selfTestPatients'ın içine yazılsaydı oyun kodu
+  // ADMIN_MODE'a referans verirdi ve blok silinince ReferenceError atardı.
+  function admBoot() {
+    if (typeof window === "undefined") return;
+    if (!window.cheats) window.cheats = {};
+    window.cheats.sim = admSim;
+    window.cheats.simSeason = admSimSeason;
+    window.cheats.simVerify = admVerify;
+    window.cheats.simLog = admLogTable;
+    window.cheats.simState = admState;
+    // Paneli konsoldan aç/kapa VE içini oku. Argümansız çağrı hiçbir şeyi
+    // değiştirmez — masaüstünde ve headless testte panelin durumunu ve dokunma
+    // alanlarını (rects) okumanın tek yolu budur.
+    window.cheats.panel = function (on) {
+      if (on === true) admOpenPanel();
+      else if (on === false) admPanel.open = false;
+      return { open: admPanel.open, busy: admPanel.busy, skill: admPanel.skill,
+               day: admPanel.day, season: admPanel.season,
+               msg: admPanel.msg, msg2: admPanel.msg2, bad: admPanel.bad,
+               lastCheck: !!(_admLastCheck && _admLastCheck.ok),
+               rects: _admHit, t: admPanel.t };
+    };
+
+    if (typeof render === "function" && !render.__admWrapped) {
+      const orig = render;
+      render = function () { orig(); admDrawOverlay(); };
+      render.__admWrapped = true;
+    }
+    // Panel açıkken oyun DONAR — depo panelinin kalıbı (bkz. pcFreezesGame).
+    if (typeof update === "function" && !update.__admWrapped) {
+      _admOrigUpdate = update;
+      update = function (dt) {
+        if (admPanel.open) { admPanel.t += Math.max(0, dt); return; }   // yalnız panel animasyonu ilerler
+        _admOrigUpdate(dt);
+      };
+      update.__admWrapped = true;
+    }
+    if (typeof handleTap === "function" && !handleTap.__admWrapped) {
+      const orig = handleTap;
+      handleTap = function (px, py) {
+        if (admTapOverlay(px, py)) return;
+        orig(px, py);
+      };
+      handleTap.__admWrapped = true;
+    }
+    // Panel açıkken raf/sekme kaydırması altta çalışmasın (dokunuş panele ait).
+    if (typeof onDown === "function" && !onDown.__admWrapped) {
+      const orig = onDown;
+      onDown = function (x, y) {
+        orig(x, y);
+        if (admPanel.open || admPanel.busy) { pointer.inTabs = false; pointer.inGrid = false; }
+      };
+      onDown.__admWrapped = true;
+    }
+
+    console.warn("⚠️ ADMIN MODU AÇIK — yayına çıkmadan kaldır (index.html'deki ADMIN BLOK'u sil).");
+    console.log("[ADMIN] Ekrandaki kırmızı ADMIN rozetine dokun → panel. " +
+                "Konsoldan: cheats.sim(gün,{skill}) · cheats.simSeason(sezon,{skill,gün}) · " +
+                "cheats.simVerify() · cheats.simLog()");
+  }
+  setTimeout(admBoot, 0);
+}
+// ═════════════════════════════════════════════════════════════════════════════
+//  ADMIN BLOK BİTİŞ — YAYINDAN ÖNCE SİL
+// ═════════════════════════════════════════════════════════════════════════════
+
+
 // =====================================================================
 //  CONFIG — tüm sayısal ayarlar burada
 // =====================================================================
