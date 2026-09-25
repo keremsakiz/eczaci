@@ -32,11 +32,13 @@ function parse(argv) {
     else if (a === "--name") o.name = argv[++i];
     else if (a === "--file") o.file = argv[++i];
     else if (a === "--wait") o.wait = +argv[++i];
+    else if (a === "--eval") o.evalJs = argv[++i];
+    else if (a === "--after") o.afterJs = argv[++i];  // durum kurulduktan SONRA çalışacak JS (ör. "game.reputation=132")   // render öncesi çalışacak JS (ör. "STB.signStyle='fascia'")
   }
   return o;
 }
 
-const MIME = { ".html": "text/html; charset=utf-8", ".png": "image/png", ".json": "application/json",
+const MIME = { ".html": "text/html; charset=utf-8", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".json": "application/json",
                ".js": "text/javascript", ".css": "text/css" };
 
 function serve(root) {
@@ -73,6 +75,8 @@ function serve(root) {
   await page.waitForTimeout(o.wait);           // boot self-test'leri ve asset yüklemesi
 
   // İstenen state'e sür. Oyunun KENDİ fonksiyonları çağrılır, state elle kurulmaz.
+  if (o.evalJs) await page.evaluate(o.evalJs);
+  await page.evaluate(() => { if (typeof Intro !== "undefined") Intro.finish(true); });   // açılış videosu ekranı örtmesin
   await page.evaluate(({ state, day, name }) => {
     if (name && typeof setPharmacyName === "function") setPharmacyName(name);
     if (state === "menu")   { if (typeof goMenu === "function") goMenu(); else game.state = STATE.MENU; }
@@ -87,6 +91,7 @@ function serve(root) {
     }
     if (typeof render === "function") render();
   }, o);
+  if (o.afterJs) await page.evaluate(js => { eval(js); if (typeof render === "function") render(); }, o.afterJs);
   await page.waitForTimeout(120);
 
   const out = path.join(root, o.out);
