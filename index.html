@@ -6952,7 +6952,12 @@ const RADIO_STATIONS = [
   // COSMIC FM: 34 sn özgün enstrümantal (tools/make-cosmic.js) — uzay destanı orgu + French house.
   // Kodla yedeği yok: dosya hazır değilse istasyon atlanır.
   { name: "COSMIC FM",  dial: 0.88, gain: 1.0, stepDur: () => RADIO_FILE_STEP, steps: 0,
-    file: "assets/radio_cosmic.mp3", fileGain: 0.88, ad: "assets/ad_cosmic.mp3" }
+    file: "assets/radio_cosmic.mp3", fileGain: 0.88, ad: "assets/ad_cosmic.mp3" },
+  // ECZANE MARŞI: Kerem'in getirdiği şarkı (1:57, sözlü). FM değil — reklam arası YOK, en sonda
+  // çalar, bitince ECZA FM'e dönülür. Kodla yedeği yok: dosya hazır değilse atlanır.
+  // Ölçüldü −15,6 LUFS → 0.77 (≈ −2,3 dB) ile ANADOLU/COSMIC düzeyine (≈ −17,9) iner.
+  { name: "ECZANE MARŞI", dial: 0.46, gain: 1.0, stepDur: () => RADIO_FILE_STEP, steps: 0,
+    file: "assets/radio_marsi.mp3", fileGain: 0.77 }
 ];
 
 // Açılış paraziti: frekansı kayan bant geçiren gürültü (istasyon aranıyormuş gibi).

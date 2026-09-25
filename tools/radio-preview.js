@@ -1,6 +1,6 @@
 // Radyonun sesini DOSYAYA çıkarır: oyunun kendi ses motoru (radioBuildGraph +
 // istasyonun zamanlayıcısı) OfflineAudioContext'te çalıştırılır → WAV → (ffmpeg varsa) MP3.
-//   node tools/radio-preview.js [saniye] [çıktı.mp3] [istasyon: 0=ECZA FM, 1=ANADOLU FM]
+//   node tools/radio-preview.js [saniye] [çıktı.mp3] [istasyon: 0=ECZA FM, 1=ANADOLU FM, 2=COSMIC FM, 3=ECZANE MARŞI]
 const fs = require("fs"), path = require("path"), http = require("http"), { execSync } = require("child_process");
 const SEC = +(process.argv[2] || 30);
 const OUT = process.argv[3] || path.join(__dirname, "..", "shots", "radyo-onizleme.mp3");
