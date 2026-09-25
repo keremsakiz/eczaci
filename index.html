@@ -1526,8 +1526,8 @@ const MEDICINES = [
   { id: "med_ciltbakim",    name: "Ciltbakım",     emoji: "🧴", color: "#f8b8c8", category: "Cilt/Dış",         group: "cilt",        cost: 79,  price: 118, assetKey: "med_ciltbakim" },
   { id: "med_sivilcesil",   name: "Sivilcesil",    emoji: "🧼", color: "#a8d8a8", category: "Cilt/Dış",         group: "cilt",        cost: 63,  price: 92,  assetKey: "med_sivilcesil" },
   { id: "med_mantarkov",    name: "Mantarkov",     emoji: "🦶", color: "#e8a84a", category: "Cilt/Dış",         group: "cilt",        cost: 88,  price: 134, assetKey: "med_mantarkov" },
-  // ALERJİ rafı Burun sekmesi açılınca tek ilaçla kaldı → iki yeni ilaç (görseller Gemini'de üretilecek;
-  // PNG gelene kadar emoji+renk yedeğiyle görünür, assets/med_hapsirmaz.png / med_polenkes.png gelince giyer)
+  // ALERJİ rafı Burun sekmesi açılınca tek ilaçla kaldı → iki yeni ilaç (görseller Gemini, 26 Eylül;
+  // tools/prep-med.py ile yeşil zemin anahtarlandı)
   { id: "med_hapsirmaz",    name: "Hapşırmaz",     emoji: "🌬️", color: "#e8a84a", category: "Alerji",           group: "alerji",      cost: 58,  price: 82,  assetKey: "med_hapsirmaz" },
   { id: "med_polenkes",     name: "Polenkes",      emoji: "🌼", color: "#b8c84a", category: "Alerji",           group: "alerji",      cost: 71,  price: 99,  assetKey: "med_polenkes" },
   { id: "med_kasintidur",   name: "Kaşıntıdur",    emoji: "🚫", color: "#6a9ad8", category: "Cilt/Dış",         group: "cilt",        cost: 52,  price: 74,  assetKey: "med_kasintidur" }   // kaşıntı kremi → Cilt
@@ -11205,8 +11205,8 @@ function loadAssets() {
   Assets.load("med_huzurver", "assets/med_huzurver.png");
   Assets.load("med_burunferah", "assets/med_burunferah.png");
   Assets.load("med_kasintidur", "assets/med_kasintidur.png");
-  Assets.load("med_hapsirmaz", "assets/med_hapsirmaz.png");   // henüz yok: emoji yedeği
-  Assets.load("med_polenkes", "assets/med_polenkes.png");     // henüz yok: emoji yedeği
+  Assets.load("med_hapsirmaz", "assets/med_hapsirmaz.png");
+  Assets.load("med_polenkes", "assets/med_polenkes.png");
   Assets.load("med_kulakdamla", "assets/med_kulakdamla.png");
   Assets.load("med_gorusnet", "assets/med_gorusnet.png");
   Assets.load("patient_granny", "assets/patient_granny.png");
