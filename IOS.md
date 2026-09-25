@@ -113,7 +113,52 @@ npm run ios          # derle + sync + Xcode'u aç
 Xcode'da: App target → Signing & Capabilities → **Team** seç (bundle id `com.kerem.eczaci`
 yeni; Apple Developer hesabında ilk Run'da otomatik oluşturulur) → cihazı seç → Run.
 
-## 9. Gerçek cihazda ölçülecekler (henüz yapılmadı)
+## 9. Game Center — global sıralama "EN İYİ ECZACI KARİYERLERİ"
+
+**Kod tarafı hazır** (25 Eylül). Hazır Capacitor eklentisi kullanılmadı: Capacitor 8 + SPM ile
+çalışan, iOS'u bakımda bir Game Center eklentisi yok. Onun yerine uygulamanın içinde küçük bir
+yerel eklenti var:
+
+| Dosya | Ne |
+|---|---|
+| `ios/App/App/GameCenterPlugin.swift` | `GameCenterPlugin` (signIn, status, submitScore, loadTopScores, showLeaderboard) + `EczaciBridgeViewController` (eklentiyi köprüye kaydeder) |
+| `ios/App/App/SceneDelegate.swift` | kök denetleyici `EczaciBridgeViewController()` |
+| `ios/App/App/App.entitlements` | `com.apple.developer.game-center = true`; `CODE_SIGN_ENTITLEMENTS` iki yapılandırmada |
+| `index.html` → `GC` modülü | açılışta oturum, skor gönderme, menüdeki panel, dokununca Apple'ın sıralama ekranı |
+
+- **Sıralama kimliği:** `com.kerem.eczaci.kariyer` (`GC_LEADERBOARD_ID`, index.html). App Store
+  Connect'teki kimlik BİREBİR aynı olmalı.
+- **Skor:** kariyer skoru = kariyer boyunca ulaşılan en yüksek kasa (₺, tam sayı). Her sezon
+  sonunda ve kariyer bitince gönderilir; Game Center en iyisini tutar. Oturum yoksa skor
+  profil kaydında bekler (`gcPending`), oturum açılınca gönderilir.
+- `npx cap add ios` YENİDEN çalıştırılırsa bu üç dosya ve pbxproj eklemeleri kaybolur — git'ten geri al.
+
+**Mac / Xcode / App Store Connect'te yapılacaklar:**
+
+1. App Store Connect → Uygulamalar → **Eczacı** kaydı yoksa oluştur (bundle id `com.kerem.eczaci`).
+   Yayın gerekmez; Game Center sıralaması uygulama kaydına bağlı.
+2. Uygulama → **Features → Game Center** → Leaderboards → **+** → *Classic Leaderboard*:
+   - Reference name: `En İyi Eczacı Kariyerleri`
+   - Leaderboard ID: `com.kerem.eczaci.kariyer`
+   - Score format: **Integer**, Submission type: **Best Score**, Sort: **High to Low**
+   - Localization Türkçe: ad `EN İYİ ECZACI KARİYERLERİ`, score suffix ` ₺` (ve İngilizce istersen)
+3. Xcode → App target → **Signing & Capabilities**: Team seçiliyken **Game Center** yeteneği
+   listede görünmeli (entitlements dosyasından gelir). Görünmüyorsa `+ Capability → Game Center`.
+4. Cihazda (Ayarlar → Game Center'da giriş yapılı) Run → açılışta "Hoş geldin" şeridi, ana
+   ekranda panel. Kariyer bitir → birkaç saniye sonra panelde sıran.
+   Not: sıralama App Store Connect'te "canlı" olmadan da geliştirme derlemelerinde çalışır.
+
+## 10. Açılış: siyah LaunchScreen + COSMIC INTERACTION logo videosu
+
+- `LaunchScreen.storyboard` artık **düz siyah** (eski eczane görseli yerine) ve
+  `capacitor.config.json` → `ios.backgroundColor: "#000000"`. Sıra: siyah açılış ekranı →
+  `assets/intro_cosmic.mp4` (≈4 sn, Higgsfield'da üretilen stüdyo logosu) → menü. Geçişte renk sıçraması yok.
+- Video HTML `<video>` ile oynar; Capacitor iOS'ta `mediaTypesRequiringUserActionForPlayback = []`
+  olduğu için **sesli otomatik** başlar. SES levhası kapalıysa sessiz. Dokununca geçilir.
+- Eski `Splash.imageset` duruyor (kullanılmıyor); geri dönmek istenirse storyboard'u git'ten al.
+- Videoyu değiştirmek: yenisini aynı adla `assets/intro_cosmic.mp4` olarak koymak yeterli (kod değişmez).
+
+## 11. Gerçek cihazda ölçülecekler (henüz yapılmadı)
 
 DURUM.md 14.7'deki oturum uzunluğu tablosu **10 sn/müşteri varsayımına** dayanıyor ve gerçek
 cihazda doğrulanmadı. Cihazda bakılacaklar:

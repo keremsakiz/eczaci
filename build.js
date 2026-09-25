@@ -64,12 +64,20 @@ if (!DEV) {
 fs.mkdirSync(path.join(OUT, "assets"), { recursive: true });
 fs.writeFileSync(path.join(OUT, "index.html"), html, "utf8");
 let copied = 0;
-for (const f of fs.readdirSync(path.join(ROOT, "assets"))) {
-  const src = path.join(ROOT, "assets", f);
-  if (f.startsWith(".") || !fs.statSync(src).isFile()) continue;
-  fs.writeFileSync(path.join(OUT, "assets", f), fs.readFileSync(src));
-  copied++;
-}
+// Alt klasörler de kopyalanır: assets/fonts/OFL-*.txt (SIL OFL lisans metni uygulamayla
+// dağıtılmak ZORUNDA; HAKKINDA ekranı oraya atıf yapıyor). Eskiden yalnız kök dosyalar gidiyordu.
+(function copyDir(rel) {
+  const dir = path.join(ROOT, "assets", rel);
+  fs.mkdirSync(path.join(OUT, "assets", rel), { recursive: true });
+  for (const f of fs.readdirSync(dir)) {
+    if (f.startsWith(".")) continue;
+    const src = path.join(dir, f), st = fs.statSync(src);
+    if (st.isDirectory()) { copyDir(path.join(rel, f)); continue; }
+    if (!st.isFile()) continue;
+    fs.writeFileSync(path.join(OUT, "assets", rel, f), fs.readFileSync(src));
+    copied++;
+  }
+})("");
 
 const pngs = copied;
 console.log(`[build] ${DEV ? "DEV" : "RELEASE"} → www/`);

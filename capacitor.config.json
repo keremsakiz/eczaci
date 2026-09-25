@@ -5,7 +5,7 @@
   "ios": {
     "contentInset": "never",
     "scrollEnabled": false,
-    "backgroundColor": "#2b2233",
+    "backgroundColor": "#000000",
     "limitsNavigationsToAppBoundDomains": true
   },
   "server": {
