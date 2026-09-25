@@ -6860,10 +6860,35 @@ function radioScheduleAnadolu(ac, g, step, t) {
 // Hazır değilken o istasyon kodla üretilen yedek şarkıyı çalar (sessizlik olmaz).
 const RADIO_FILES = {};
 const RADIO_FILE_STEP = 0.25;                   // dosya çalarken zamanlayıcının adımı (sn)
+const RADIO_WAIT = 4;                           // dosya henüz çözülmediyse en fazla bu kadar parazitle bekle (sn)
+// ID3v2 etiketini at: iOS'a aktarılan dosyalara masaüstü uygulaması 5,8 KB'lık bir C2PA
+// (içerik kimliği) GEOB çerçevesi ekliyor; WebKit'in decodeAudioData'sı bu tür büyük etiketlerde
+// çözümlemeden vazgeçebiliyor (simülatörde ANADOLU/COSMIC FM ve reklamlar sessizdi). MP3 çerçeveleri
+// etiketten hemen sonra başlar — etiketi atmak sesi değiştirmez.
+function stripId3(ab) {
+  const u = new Uint8Array(ab);
+  if (u.length > 10 && u[0] === 0x49 && u[1] === 0x44 && u[2] === 0x33) {
+    const size = ((u[6] & 0x7f) << 21) | ((u[7] & 0x7f) << 14) | ((u[8] & 0x7f) << 7) | (u[9] & 0x7f);
+    const off = 10 + size + ((u[5] & 0x10) ? 10 : 0);
+    if (off < u.length - 1024) return ab.slice(off);
+  }
+  return ab;
+}
+// decodeAudioData'nın hem eski (geri çağrılı) hem yeni (Promise) Safari imzasıyla tek sonuç
+function decodeAB(ac, ab) {
+  return new Promise((res, rej) => {
+    let done = false;
+    const ok = b => { if (!done) { done = true; res(b); } };
+    const bad = e => { if (!done) { done = true; rej(e || new Error("decode")); } };
+    try { const pr = ac.decodeAudioData(ab, ok, bad); if (pr && typeof pr.then === "function") pr.then(ok, bad); }
+    catch (e) { bad(e); }
+  });
+}
 function radioLoadFile(ac, url) {
   const e = RADIO_FILES[url] || (RADIO_FILES[url] = {});
-  if (e.buf || e.loading || e.failed || typeof fetch !== "function") return e;
-  e.loading = true;
+  if (e.buf || e.loading || typeof fetch !== "function") return e;
+  if (e.failed && e.tries >= 2) return e;          // iki kez olmadıysa bir daha zorlama
+  e.loading = true; e.failed = false; e.tries = (e.tries || 0) + 1;
   // Önizleme sayfaları (artefakt) dosyayı base64 olarak gömebilir: orada fetch'i güvenlik
   // politikası engelleyebiliyor. Oyunun kendisinde bu yok, doğrudan dosyadan okunur.
   const emb = typeof window !== "undefined" && window.__RADIO_EMBED && window.__RADIO_EMBED[url];
@@ -6872,11 +6897,23 @@ function radioLoadFile(ac, url) {
         for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u.buffer; })
     : fetch(url).then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.arrayBuffer(); });
   bytes
-    .then(ab => new Promise((res, rej) => ac.decodeAudioData(ab, res, rej)))   // eski Safari: geri çağrı imzası
+    .then(ab => {
+      const orig = ab.slice(0);                      // decodeAudioData tamponu tüketir: yedek kopya
+      return decodeAB(ac, stripId3(ab)).catch(err => {
+        console.warn("[radyo] etiketsiz çözülemedi, özgün deneniyor:", url, err && (err.name || err.message));
+        return decodeAB(ac, orig);
+      });
+    })
     .then(buf => { e.buf = buf; e.loading = false; })
-    .catch(() => { e.failed = true; e.loading = false; });
+    .catch(err => {
+      e.failed = true; e.loading = false; e.error = String(err && (err.name || err.message) || err);
+      console.warn("[radyo] dosya yüklenemedi:", url, e.error);
+    });
   return e;
 }
+// Safari Web Inspector konsolunda teşhis: radyoDurum()
+if (typeof window !== "undefined") window.radyoDurum = () => Object.entries(RADIO_FILES).map(([u, e]) =>
+  u + " → " + (e.buf ? "hazır (" + e.buf.duration.toFixed(1) + " sn)" : e.loading ? "yükleniyor" : e.failed ? "HATA " + (e.error || "") : "?"));
 
 // REKLAM ARASI: her şarkının 13. saniyesinde spiker müziği kısar, anonsu okur, müzik geri gelir.
 // Anons dosyası kendi jingle'ını içerir (tools/make-ads.py). Oyun ve önizleme betiği AYNI işlevi kullanır.
@@ -6940,6 +6977,14 @@ const Radio = {
   fileSteps: 0, src: null, fileStartPending: false,
   enterStation(ac, g, st) {
     const f = st.file ? RADIO_FILES[st.file] : null;
+    if (f && !f.buf && !f.loading && f.failed && (f.tries || 0) < 2) radioLoadFile(ac, st.file);   // bir kez daha dene
+    if (f && !f.buf && f.loading && !this.waitUntil) {
+      // Dosya hâlâ çözülüyor (3 dk'lık şarkı iOS'ta birkaç saniye sürer): hemen yedeğe/atlamaya
+      // geçme, en fazla RADIO_WAIT sn parazitle bekle. Eskiden COSMIC FM bu yüzden atlanıyordu.
+      this.mode = "wait"; this.waitUntil = this.nextT + RADIO_WAIT;
+      return;
+    }
+    this.waitUntil = 0;
     if (f && f.buf) {
       this.mode = "file";
       this.fileSteps = Math.ceil(f.buf.duration / RADIO_FILE_STEP);
@@ -6968,7 +7013,8 @@ const Radio = {
   },
   adDone: false, adSrc: null,
   tuneTo(i) {
-    this.station = i; this.step = 0; this.adDone = false;
+    this.station = i; this.step = 0; this.adDone = false; this.waitUntil = 0;
+    if (this.mode === "wait") this.mode = "synth";
     this.toast = { text: RADIO_STATIONS[i].name, t0: game.clock || 0 };
   },
   // İstenen durumla gerçek durumu eşitle. Her karede çağrılır (ucuz).
@@ -7015,7 +7061,18 @@ const Radio = {
           this.tuneTo((this.station + 1) % RADIO_STATIONS.length);
           st = RADIO_STATIONS[this.station];
         }
-        if (this.step === 0) this.enterStation(ac, g, st);
+        if (this.step === 0 && this.mode !== "wait") this.enterStation(ac, g, st);
+        if (this.mode === "wait") {
+          const f = RADIO_FILES[st.file];
+          if ((f && f.buf) || !(f && f.loading) || this.nextT >= this.waitUntil) {
+            this.mode = "synth"; this.enterStation(ac, g, st);          // hazır / vazgeç → normal yol
+            this.waitUntil = 0;
+          } else {
+            if (Math.floor(this.nextT / 0.5) !== Math.floor((this.nextT + RADIO_FILE_STEP) / 0.5)) radioTuneStatic(ac, g, this.nextT);
+            this.nextT += RADIO_FILE_STEP;
+            continue;
+          }
+        }
         if (this.mode === "skip") { this.tuneTo((this.station + 1) % RADIO_STATIONS.length); continue; }
         // reklam arası: şarkının 13. saniyesi
         const stT = this.step * (this.mode === "file" ? RADIO_FILE_STEP : st.stepDur());
