@@ -1497,7 +1497,7 @@ const MEDICINES = [
 
   { id: "med_gripsavar",    name: "Gripsavar",     emoji: "🤒", color: "#2a4a7a", category: "Soğuk Algınlığı",  group: "soguk",       cost: 66,  price: 94,  assetKey: "med_gripsavar" },
   { id: "med_bogazcan",     name: "Boğazcan",      emoji: "🗣️", color: "#3aa8a0", category: "Soğuk Algınlığı",  group: "soguk",       cost: 37,  price: 49,  assetKey: "med_bogazcan" },
-  { id: "med_burunac",      name: "Burunaç",       emoji: "👃", color: "#7ab8e8", category: "Soğuk Algınlığı",  group: "soguk",       cost: 53,  price: 73,  assetKey: "med_burunac" },
+  { id: "med_burunac",      name: "Burunaç",       emoji: "👃", color: "#7ab8e8", category: "Göz/Kulak/Burun",  group: "goz_kulak",   cost: 53,  price: 73,  assetKey: "med_burunac" },   // kutu: burun tıkanıklığı spreyi (Kerem, 26 Eylül)
 
   { id: "med_bulantistop",  name: "Bulantıstop",   emoji: "🤢", color: "#5a9a5a", category: "Sindirim",         group: "sindirim",    cost: 46,  price: 61,  assetKey: "med_bulantistop" },
   { id: "med_bagirsakduzen",name: "Bağırsakdüzen", emoji: "🦠", color: "#8ac88a", category: "Sindirim",         group: "sindirim",    cost: 60,  price: 83,  assetKey: "med_bagirsakduzen" },
@@ -1515,7 +1515,7 @@ const MEDICINES = [
   { id: "med_burunferah",   name: "Burunferah",    emoji: "🌬️", color: "#5ab8b8", category: "Alerji",           group: "alerji",      cost: 49,  price: 66,  assetKey: "med_burunferah" },
 
   { id: "med_yaratemiz",    name: "Yaratemiz",     emoji: "🧴", color: "#d8e8f8", category: "İlk Yardım",       group: "ilk_yardim",  cost: 36,  price: 47,  assetKey: "med_yaratemiz" },
-  { id: "med_yanikkrem",    name: "Yanıkkrem",     emoji: "🔥", color: "#f8c8d8", category: "İlk Yardım",       group: "ilk_yardim",  cost: 52,  price: 71,  assetKey: "med_yanikkrem" },
+  { id: "med_yanikkrem",    name: "Yanıkkrem",     emoji: "🔥", color: "#f8c8d8", category: "Cilt/Dış",         group: "cilt",        cost: 52,  price: 71,  assetKey: "med_yanikkrem" },   // yanık / güneş yanığı kremi → Cilt
   { id: "med_mikropkir",    name: "Mikropkır",     emoji: "✨", color: "#5ac88a", category: "İlk Yardım",       group: "ilk_yardim",  cost: 43,  price: 58,  assetKey: "med_mikropkir" },
   { id: "med_agrijel",      name: "Ağrıjel",       emoji: "🧊", color: "#8ac8e8", category: "Ağrı/Ateş",        group: "agri_ates",   cost: 58,  price: 79,  assetKey: "med_agrijel" },
 
@@ -1526,7 +1526,7 @@ const MEDICINES = [
   { id: "med_ciltbakim",    name: "Ciltbakım",     emoji: "🧴", color: "#f8b8c8", category: "Cilt/Dış",         group: "cilt",        cost: 79,  price: 118, assetKey: "med_ciltbakim" },
   { id: "med_sivilcesil",   name: "Sivilcesil",    emoji: "🧼", color: "#a8d8a8", category: "Cilt/Dış",         group: "cilt",        cost: 63,  price: 92,  assetKey: "med_sivilcesil" },
   { id: "med_mantarkov",    name: "Mantarkov",     emoji: "🦶", color: "#e8a84a", category: "Cilt/Dış",         group: "cilt",        cost: 88,  price: 134, assetKey: "med_mantarkov" },
-  { id: "med_kasintidur",   name: "Kaşıntıdur",    emoji: "🚫", color: "#6a9ad8", category: "Alerji",           group: "alerji",      cost: 52,  price: 74,  assetKey: "med_kasintidur" }
+  { id: "med_kasintidur",   name: "Kaşıntıdur",    emoji: "🚫", color: "#6a9ad8", category: "Cilt/Dış",         group: "cilt",        cost: 52,  price: 74,  assetKey: "med_kasintidur" }   // kaşıntı kremi → Cilt
 ];
 
 // =====================================================================
@@ -1692,7 +1692,7 @@ const GROUPS = [
   { id: "alerji",     emoji: "🌼", label: "Alerji" },
   { id: "sindirim",   emoji: "🌿", label: "Mide" },
   { id: "vitamin",    emoji: "💉", label: "Vitamin" },
-  { id: "goz_kulak",  emoji: "👁️", label: "Göz&Kulak" },
+  { id: "goz_kulak",  emoji: "👁️", label: "Göz&KBB" },     // göz + kulak-burun (Burunaç da burada)
   { id: "ilk_yardim", emoji: "🩹", label: "İlk Yrd." },
   { id: "uyku_sinir", emoji: "😴", label: "Uyku" },
   { id: "cilt",       emoji: "🧴", label: "Cilt" }
@@ -1723,7 +1723,7 @@ const SYMPTOMS = [
   { emoji: "💪", category: "Ağrı/Ateş",       label: "Kaslarım tutuldu" },
   { emoji: "🤒", category: "Soğuk Algınlığı", label: "Grip oldum" },
   { emoji: "🗣️", category: "Soğuk Algınlığı", label: "Boğazım ağrıyor" },
-  { emoji: "👃", category: "Soğuk Algınlığı", label: "Burnum tıkalı" },
+  { emoji: "👃", category: "Göz/Kulak/Burun", label: "Burnum tıkalı" },
   { emoji: "🤢", category: "Sindirim",        label: "Bulantım var" },
   { emoji: "🔥", category: "Sindirim",        label: "Reflüm azdı" },
   { emoji: "🍽️", category: "Sindirim",        label: "Hazımsızlık çekiyorum" },
@@ -1733,7 +1733,7 @@ const SYMPTOMS = [
   { emoji: "👂", category: "Göz/Kulak/Burun", label: "Kulağım ağrıyor" },
   { emoji: "👓", category: "Göz/Kulak/Burun", label: "Gözüm bulanık görüyor" },
   { emoji: "🌬️", category: "Alerji",           label: "Burnum akıyor" },
-  { emoji: "🔥", category: "İlk Yardım",       label: "Elimi yaktım" },
+  { emoji: "🔥", category: "Cilt/Dış",         label: "Elimi yaktım" },
   { emoji: "🩹", category: "İlk Yardım",       label: "Yaram var" },
   { emoji: "✨", category: "İlk Yardım",       label: "Kesik mikrop kapmasın" },
   { emoji: "😵‍💫", category: "Sinir/Uyku",      label: "Çok stresliyim" },
@@ -1742,7 +1742,7 @@ const SYMPTOMS = [
   { emoji: "🧴", category: "Cilt/Dış",        label: "Cildim çok kuru" },
   { emoji: "🧼", category: "Cilt/Dış",        label: "Sivilcelerim çıktı" },
   { emoji: "🦶", category: "Cilt/Dış",        label: "Ayağımda mantar var" },
-  { emoji: "🚫", category: "Alerji",           label: "Çok kaşınıyorum" }
+  { emoji: "🚫", category: "Cilt/Dış",         label: "Çok kaşınıyorum" }
 ];
 
 // semptomlarda geçen kategoriler (sabit sıra — çok kalemli isteklerde karıştırılır)
