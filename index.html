@@ -1485,9 +1485,9 @@ const MEDICINES = [
   { id: "cvitamin",  name: "C-Vitamin+",  emoji: "🍊", color: "#f6d35b", category: "Vitamin/Takviye",  group: "vitamin",     cost: 69,  price: 115, assetKey: "med_cvitamin" },
   { id: "miderahat", name: "Miderahat",   emoji: "🌿", color: "#86cf9a", category: "Sindirim",         group: "sindirim",    cost: 40,  price: 52,  assetKey: "med_miderahat" },
   { id: "bandajix",  name: "Bandajix",    emoji: "🩹", color: "#f3a8c4", category: "İlk Yardım",       group: "ilk_yardim",  cost: 23,  price: 29,  assetKey: "med_bandajix" },
-  { id: "atesdus",   name: "Ateşdüş",     emoji: "🌡️", color: "#b07fd6", category: "Ağrı/Ateş",       group: "agri_ates",   cost: 43,  price: 55,  assetKey: "med_atesdus" },
+  { id: "atesdus",   name: "Ateşdüş",     emoji: "🌡️", color: "#b07fd6", category: "Soğuk Algınlığı",  group: "soguk",       cost: 43,  price: 55,  assetKey: "med_atesdus" },   // ateş şurubu → Soğuk (Kerem)
   { id: "alerjin",   name: "Alerjin",     emoji: "🤧", color: "#bfe39a", category: "Alerji",           group: "alerji",      cost: 62,  price: 89,  assetKey: "med_alerjin" },
-  { id: "goznur",    name: "Göznur",      emoji: "👁️", color: "#5fd0c5", category: "Göz/Kulak/Burun",  group: "goz_kulak",   cost: 63,  price: 87,  assetKey: "med_goznur" },
+  { id: "goznur",    name: "Göznur",      emoji: "👁️", color: "#5fd0c5", category: "Göz/Kulak",  group: "goz_kulak",   cost: 63,  price: 87,  assetKey: "med_goznur" },
   { id: "uykutas",   name: "Uykutaş",     emoji: "😴", color: "#5566b0", category: "Sinir/Uyku",       group: "uyku_sinir",  cost: 92,  price: 132, assetKey: "med_uykutas" },
 
   // --- Genişletilmiş havuz (görselsiz; emoji+color fallback, PNG gelince otomatik giyer) ---
@@ -1497,7 +1497,7 @@ const MEDICINES = [
 
   { id: "med_gripsavar",    name: "Gripsavar",     emoji: "🤒", color: "#2a4a7a", category: "Soğuk Algınlığı",  group: "soguk",       cost: 66,  price: 94,  assetKey: "med_gripsavar" },
   { id: "med_bogazcan",     name: "Boğazcan",      emoji: "🗣️", color: "#3aa8a0", category: "Soğuk Algınlığı",  group: "soguk",       cost: 37,  price: 49,  assetKey: "med_bogazcan" },
-  { id: "med_burunac",      name: "Burunaç",       emoji: "👃", color: "#7ab8e8", category: "Göz/Kulak/Burun",  group: "goz_kulak",   cost: 53,  price: 73,  assetKey: "med_burunac" },   // kutu: burun tıkanıklığı spreyi (Kerem, 26 Eylül)
+  { id: "med_burunac",      name: "Burunaç",       emoji: "👃", color: "#7ab8e8", category: "Burun",            group: "burun",       cost: 53,  price: 73,  assetKey: "med_burunac" },   // burun tıkanıklığı spreyi → Burun sekmesi (Kerem)
 
   { id: "med_bulantistop",  name: "Bulantıstop",   emoji: "🤢", color: "#5a9a5a", category: "Sindirim",         group: "sindirim",    cost: 46,  price: 61,  assetKey: "med_bulantistop" },
   { id: "med_bagirsakduzen",name: "Bağırsakdüzen", emoji: "🦠", color: "#8ac88a", category: "Sindirim",         group: "sindirim",    cost: 60,  price: 83,  assetKey: "med_bagirsakduzen" },
@@ -1510,9 +1510,9 @@ const MEDICINES = [
   { id: "med_cinko",        name: "Çinko+",        emoji: "🛡️", color: "#6a8aa8", category: "Vitamin/Takviye",  group: "vitamin",     cost: 76,  price: 124, assetKey: "med_cinko" },
   { id: "med_magnezyum",    name: "Magnezyum",     emoji: "🌙", color: "#8a6ac8", category: "Vitamin/Takviye",  group: "vitamin",     cost: 141, price: 231, assetKey: "med_magnezyum" },
 
-  { id: "med_kulakdamla",   name: "Kulakdamla",    emoji: "👂", color: "#e8943a", category: "Göz/Kulak/Burun",  group: "goz_kulak",   cost: 70,  price: 96,  assetKey: "med_kulakdamla" },
-  { id: "med_gorusnet",     name: "Görüşnet",      emoji: "👓", color: "#7ab8e8", category: "Göz/Kulak/Burun",  group: "goz_kulak",   cost: 85,  price: 121, assetKey: "med_gorusnet" },
-  { id: "med_burunferah",   name: "Burunferah",    emoji: "🌬️", color: "#5ab8b8", category: "Alerji",           group: "alerji",      cost: 49,  price: 66,  assetKey: "med_burunferah" },
+  { id: "med_kulakdamla",   name: "Kulakdamla",    emoji: "👂", color: "#e8943a", category: "Göz/Kulak",  group: "goz_kulak",   cost: 70,  price: 96,  assetKey: "med_kulakdamla" },
+  { id: "med_gorusnet",     name: "Görüşnet",      emoji: "👓", color: "#7ab8e8", category: "Göz/Kulak",  group: "goz_kulak",   cost: 85,  price: 121, assetKey: "med_gorusnet" },
+  { id: "med_burunferah",   name: "Burunferah",    emoji: "🌬️", color: "#5ab8b8", category: "Burun",            group: "burun",       cost: 49,  price: 66,  assetKey: "med_burunferah" },   // alerjik nezle burun spreyi → Burun sekmesi
 
   { id: "med_yaratemiz",    name: "Yaratemiz",     emoji: "🧴", color: "#d8e8f8", category: "İlk Yardım",       group: "ilk_yardim",  cost: 36,  price: 47,  assetKey: "med_yaratemiz" },
   { id: "med_yanikkrem",    name: "Yanıkkrem",     emoji: "🔥", color: "#f8c8d8", category: "Cilt/Dış",         group: "cilt",        cost: 52,  price: 71,  assetKey: "med_yanikkrem" },   // yanık / güneş yanığı kremi → Cilt
@@ -1526,6 +1526,10 @@ const MEDICINES = [
   { id: "med_ciltbakim",    name: "Ciltbakım",     emoji: "🧴", color: "#f8b8c8", category: "Cilt/Dış",         group: "cilt",        cost: 79,  price: 118, assetKey: "med_ciltbakim" },
   { id: "med_sivilcesil",   name: "Sivilcesil",    emoji: "🧼", color: "#a8d8a8", category: "Cilt/Dış",         group: "cilt",        cost: 63,  price: 92,  assetKey: "med_sivilcesil" },
   { id: "med_mantarkov",    name: "Mantarkov",     emoji: "🦶", color: "#e8a84a", category: "Cilt/Dış",         group: "cilt",        cost: 88,  price: 134, assetKey: "med_mantarkov" },
+  // ALERJİ rafı Burun sekmesi açılınca tek ilaçla kaldı → iki yeni ilaç (görseller Gemini'de üretilecek;
+  // PNG gelene kadar emoji+renk yedeğiyle görünür, assets/med_hapsirmaz.png / med_polenkes.png gelince giyer)
+  { id: "med_hapsirmaz",    name: "Hapşırmaz",     emoji: "🌬️", color: "#e8a84a", category: "Alerji",           group: "alerji",      cost: 58,  price: 82,  assetKey: "med_hapsirmaz" },
+  { id: "med_polenkes",     name: "Polenkes",      emoji: "🌼", color: "#b8c84a", category: "Alerji",           group: "alerji",      cost: 71,  price: 99,  assetKey: "med_polenkes" },
   { id: "med_kasintidur",   name: "Kaşıntıdur",    emoji: "🚫", color: "#6a9ad8", category: "Cilt/Dış",         group: "cilt",        cost: 52,  price: 74,  assetKey: "med_kasintidur" }   // kaşıntı kremi → Cilt
 ];
 
@@ -1689,10 +1693,11 @@ function effNightPriceMul() {
 const GROUPS = [
   { id: "agri_ates",  emoji: "💊", label: "Ağrı" },
   { id: "soguk",      emoji: "🤧", label: "Soğuk" },
+  { id: "burun",      emoji: "👃", label: "Burun" },           // Burunaç + Burunferah (Kerem, 26 Eylül)
   { id: "alerji",     emoji: "🌼", label: "Alerji" },
   { id: "sindirim",   emoji: "🌿", label: "Mide" },
   { id: "vitamin",    emoji: "💉", label: "Vitamin" },
-  { id: "goz_kulak",  emoji: "👁️", label: "Göz&KBB" },     // göz + kulak-burun (Burunaç da burada)
+  { id: "goz_kulak",  emoji: "👁️", label: "Göz&Kulak" },
   { id: "ilk_yardim", emoji: "🩹", label: "İlk Yrd." },
   { id: "uyku_sinir", emoji: "😴", label: "Uyku" },
   { id: "cilt",       emoji: "🧴", label: "Cilt" }
@@ -1712,9 +1717,9 @@ const SYMPTOMS = [
   { emoji: "🥶", category: "Vitamin/Takviye", label: "Hâlsizim" },
   { emoji: "🤢", category: "Sindirim",        label: "Midem bulanıyor" },
   { emoji: "🩸", category: "İlk Yardım",      label: "Yaralandım" },
-  { emoji: "🌡️", category: "Ağrı/Ateş",       label: "Ateşim var" },
+  { emoji: "🌡️", category: "Soğuk Algınlığı", label: "Ateşim var" },
   { emoji: "🤧", category: "Alerji",          label: "Alerjim azdı" },
-  { emoji: "👁️", category: "Göz/Kulak/Burun", label: "Gözüm yanıyor" },
+  { emoji: "👁️", category: "Göz/Kulak", label: "Gözüm yanıyor" },
   { emoji: "😴", category: "Sinir/Uyku",      label: "Uyuyamıyorum" },
 
   // genişletilmiş havuz (grup okunur adlarıyla eşleşir)
@@ -1723,16 +1728,16 @@ const SYMPTOMS = [
   { emoji: "💪", category: "Ağrı/Ateş",       label: "Kaslarım tutuldu" },
   { emoji: "🤒", category: "Soğuk Algınlığı", label: "Grip oldum" },
   { emoji: "🗣️", category: "Soğuk Algınlığı", label: "Boğazım ağrıyor" },
-  { emoji: "👃", category: "Göz/Kulak/Burun", label: "Burnum tıkalı" },
+  { emoji: "👃", category: "Burun",           label: "Burnum tıkalı" },
   { emoji: "🤢", category: "Sindirim",        label: "Bulantım var" },
   { emoji: "🔥", category: "Sindirim",        label: "Reflüm azdı" },
   { emoji: "🍽️", category: "Sindirim",        label: "Hazımsızlık çekiyorum" },
   { emoji: "☀️", category: "Vitamin/Takviye", label: "D vitaminim düşük" },
   { emoji: "🩸", category: "Vitamin/Takviye", label: "Demir eksikliğim var" },
   { emoji: "⚡", category: "Vitamin/Takviye", label: "Sürekli yorgunum" },
-  { emoji: "👂", category: "Göz/Kulak/Burun", label: "Kulağım ağrıyor" },
-  { emoji: "👓", category: "Göz/Kulak/Burun", label: "Gözüm bulanık görüyor" },
-  { emoji: "🌬️", category: "Alerji",           label: "Burnum akıyor" },
+  { emoji: "👂", category: "Göz/Kulak", label: "Kulağım ağrıyor" },
+  { emoji: "👓", category: "Göz/Kulak", label: "Gözüm bulanık görüyor" },
+  { emoji: "🌬️", category: "Burun",           label: "Burnum akıyor" },
   { emoji: "🔥", category: "Cilt/Dış",         label: "Elimi yaktım" },
   { emoji: "🩹", category: "İlk Yardım",       label: "Yaram var" },
   { emoji: "✨", category: "İlk Yardım",       label: "Kesik mikrop kapmasın" },
@@ -1742,7 +1747,10 @@ const SYMPTOMS = [
   { emoji: "🧴", category: "Cilt/Dış",        label: "Cildim çok kuru" },
   { emoji: "🧼", category: "Cilt/Dış",        label: "Sivilcelerim çıktı" },
   { emoji: "🦶", category: "Cilt/Dış",        label: "Ayağımda mantar var" },
-  { emoji: "🚫", category: "Cilt/Dış",         label: "Çok kaşınıyorum" }
+  { emoji: "🚫", category: "Cilt/Dış",         label: "Çok kaşınıyorum" },
+  { emoji: "🌼", category: "Alerji",           label: "Polen alerjim tuttu" },
+  { emoji: "🐈", category: "Alerji",           label: "Kediye alerjim var" },
+  { emoji: "🤧", category: "Alerji",           label: "Durmadan hapşırıyorum" }
 ];
 
 // semptomlarda geçen kategoriler (sabit sıra — çok kalemli isteklerde karıştırılır)
@@ -11197,6 +11205,8 @@ function loadAssets() {
   Assets.load("med_huzurver", "assets/med_huzurver.png");
   Assets.load("med_burunferah", "assets/med_burunferah.png");
   Assets.load("med_kasintidur", "assets/med_kasintidur.png");
+  Assets.load("med_hapsirmaz", "assets/med_hapsirmaz.png");   // henüz yok: emoji yedeği
+  Assets.load("med_polenkes", "assets/med_polenkes.png");     // henüz yok: emoji yedeği
   Assets.load("med_kulakdamla", "assets/med_kulakdamla.png");
   Assets.load("med_gorusnet", "assets/med_gorusnet.png");
   Assets.load("patient_granny", "assets/patient_granny.png");
@@ -11736,17 +11746,24 @@ function selfTestPatientsInner(days) {
     // ÖLÇÜLDÜ: priceStepMax 0.22'de şişme +0,23 puan (ihmal edilebilir), 0.35'te +1,64,
     // 0.50'de +3,17 puan — yani büyük adım sezon skorunu enflasyonla yukarı çeker ve
     // "yüksek skor" beceriden değil ayardan gelir. Ray %1 puanı aşarsa haber ver.
+    // TEK tohumla ölçmek gürültülüydü (ölçüldü: 200 tohumda ortalama ≈ 0 puan ama tohumların
+    // ~%35'i tek başına %1'i aşıyor) — kategori eklemek bile uyarıyı açıp kapatıyordu.
+    // Artık 24 koşu tohumunun ortalaması ölçülür; ray gerçekten asimetrikse ortalama da kayar.
     {
       let base = 0, endM = 0, k = 0;
-      const prevOv = _dateDayOverride;
-      _dateDayOverride = LAST_S;
+      const prevOv = _dateDayOverride, prevSeed = game.runSeed;
       try {
-        for (const m of MEDICINES) {
-          base += 1 - m.cost / m.price;
-          endM += 1 - medCost(m) / medPrice(m);
-          k++;
+        for (let sd = 1; sd <= 24; sd++) {
+          game.runSeed = sd * 7919;
+          invalidatePriceStates();
+          _dateDayOverride = LAST_S;
+          for (const m of MEDICINES) {
+            base += 1 - m.cost / m.price;
+            endM += 1 - medCost(m) / medPrice(m);
+            k++;
+          }
         }
-      } finally { _dateDayOverride = prevOv; }
+      } finally { _dateDayOverride = prevOv; game.runSeed = prevSeed; invalidatePriceStates(); }
       const drift = (endM - base) / Math.max(1, k);
       if (drift > 0.01)
         warn.push("marj rayı ortalama kâr oranını " + (drift * 100).toFixed(2) +
