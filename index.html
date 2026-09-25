@@ -8217,7 +8217,7 @@ function drawPcScreen(title) {
   layout._pcScreen = { x: sx, y: sy, w: sw, h: sh, r: sr };
   // alt şerit: marka plakası + güç ışığı + iki düğme
   const by = panelY + panelH - botB / 2;
-  fitTextF("ECZA-TERM 2000", panelX + panelW * 0.5, by, panelW * 0.4, botB * 0.42, "#c9c6ad", "center", "700", SIGN_FONT, "emboss");
+  fitTextF("TERMİNAL", panelX + panelW * 0.5, by, panelW * 0.4, botB * 0.42, "#c9c6ad", "center", "700", SIGN_FONT, "emboss");
   for (const kx of [0.10, 0.18]) {
     const cx = panelX + panelW * kx, rr = botB * 0.22;
     const kg = ctx.createRadialGradient(cx - rr * 0.3, by - rr * 0.3, rr * 0.1, cx, by, rr);
