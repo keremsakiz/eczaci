@@ -3246,7 +3246,9 @@ function goalForDay() {
   return dailyGoalFor(game.dayNumber);
 }
 
-// --- tarih sistemi: gün 1 = 17 Haziran 2026, her gün +1 ---
+// --- tarih sistemi: kariyerin 1. günü = 1 Haziran 2026, her gün +1 (Kerem) ---
+// Sezonlar takvimde ARDIŞIK: 2. sezonun 1. günü, 1. sezonun son gününün ertesi günüdür
+// (30 günlük sezonla 1 Temmuz). Yıl, takvim ilerledikçe kendiliğinden değişir.
 const MONTHS_TR = ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"];
 // Gün listesi önden üretilirken (buildDaySchedule) reçetelere O GÜNÜN tarihi basılmalı,
 // oynanan günün değil. Üretim sırasında bu override doldurulur.
@@ -3256,17 +3258,19 @@ let _dateDayOverride = 0;
 // gününün oranlarıyla kurulur, oynanan günün oranlarıyla değil.
 function genDay() { return _dateDayOverride || game.dayNumber; }
 function gameDate(offsetDays) {
-  const d = new Date(2026, 5, 17);
-  d.setDate(d.getDate() + ((_dateDayOverride || game.dayNumber) - 1) + (offsetDays || 0));
+  const d = new Date(2026, 5, 1);
+  const seasonOff = (careerSeason() - 1) * CONFIG.seasonDays;
+  d.setDate(d.getDate() + seasonOff + ((_dateDayOverride || game.dayNumber) - 1) + (offsetDays || 0));
   return d;
 }
 // gün değişmediği sürece cache'lenir (HUD her frame çağırır; frame'de new Date olmasın)
-let _dateCacheDay = 0, _dateCacheStr = "";
+let _dateCacheDay = "", _dateCacheStr = "";
 function dateShort() {
-  if (_dateCacheDay === game.dayNumber) return _dateCacheStr;
-  _dateCacheDay = game.dayNumber;
+  const key = careerSeason() + ":" + game.dayNumber;
+  if (_dateCacheDay === key) return _dateCacheStr;
+  _dateCacheDay = key;
   const d = gameDate(0);
-  _dateCacheStr = d.getDate() + " " + MONTHS_TR[d.getMonth()];
+  _dateCacheStr = d.getDate() + " " + MONTHS_TR[d.getMonth()] + " " + d.getFullYear();   // HUD: yıl da görünür
   return _dateCacheStr;
 }
 
@@ -3795,6 +3799,7 @@ function placeDepotOrder() {
     game.stock[id] = Math.min(effMaxStock(), (game.stock[id] || 0) + q);
   }
   game.depotPending = {};
+  saveNow();                                        // anında kayıt
 }
 
 // --- Geliştirme satın alma ---
@@ -3816,6 +3821,7 @@ function buyUpgrade(id) {
   // Vitrin hasta karışımını, Medula hasta tipini, Nöbet Ruhsatı ise gece CİROSUNU
   // (dolayısıyla R ve hedefi) değiştirir => önden üretilmiş günler geçersizleşir.
   if (id === "vitrin" || id === "medula" || id === "nobet") invalidateDaySchedules();
+  saveNow();                                        // anında kayıt: hemen kapatılsa da kaybolmasın
   return true;
 }
 
@@ -4571,6 +4577,8 @@ function runSnapshot(at) {
   if (!game.career) return null;
   const data = {};
   for (const k of RUN_FIELDS) data[k] = game[k];
+  // gün içi kayıt: kaç müşteri TAMAMLANDI (sırada bekleyenler dönüşte baştan gelir)
+  if (at === "mid") { data.midCompleted = game.dayCompleted; data.midSpawnTimer = game.spawnTimer; }
   return JSON.parse(JSON.stringify({ v: SAVE_VERSION, at: at, data: data }));
 }
 function saveRun(at) {
@@ -4586,8 +4594,9 @@ function clearRun() {
   _lastRunJson = "";
   SaveStore.set(SAVE_KEYS.run, null);
 }
-// Kart ekranlarında oyuncu depodan sipariş verebilir → kayıt bir buçuk saniyede bir tazelenir
-// (değişmediyse yazmaz). Gün içi ASLA yazılmaz.
+// Kayıt bir buçuk saniyede bir tazelenir (değişmediyse yazmaz). GÜN İÇİ DE yazılır ("mid"):
+// Kerem gün ortasında tezgahı geliştirip oyunu hemen kapattı, kayıt gün başında kalmıştı.
+// Satın almalar ve siparişler ayrıca ANINDA kaydedilir (saveNow).
 function tickRunSave(dt) {
   if (!_saveReady) return;
   _runSaveClock += dt;
@@ -4600,14 +4609,24 @@ function checkpointNow() {
   const st = game.state === STATE.MENU || game.state === STATE.HOWTO || game.state === STATE.ABOUT ? game.resumeState : game.state;
   if (st === STATE.DAYEND) return "dayend";
   if (st === STATE.SEASONEND) return "seasonend";
+  // Gün içi: poşet havadayken ya da karar geri bildirimi sürerken YAZILMAZ — o anda para
+  // işlenmiş ama müşteri henüz "tamamlandı" sayılmamış olabilir (dönüşte aynı müşteri
+  // tekrar gelir ve kazanç iki kez yazılırdı). Bir önceki temiz an diskte kalır.
+  if (st === STATE.PLAYING && game.career && game.daySchedule && !game.feedback && !game.bagAnim) return "mid";
   return null;
+}
+// Satın alma / sipariş gibi kalıcı değişikliklerden hemen sonra: bekleme yok.
+function saveNow() {
+  if (!_saveReady) return;
+  const at = checkpointNow();
+  if (at) saveRun(at);
 }
 
 // Diskteki koşuyu oyuna kur. Başarılıysa oyuncu menüde DEVAM ET ile kaldığı yere döner.
 function applyRun(s) {
   if (!s || s.v !== SAVE_VERSION || !s.data || !s.data.career) return false;
   const at = s.at;
-  if (at !== "start" && at !== "dayend" && at !== "seasonend") return false;
+  if (at !== "start" && at !== "mid" && at !== "dayend" && at !== "seasonend") return false;
   const d = s.data;
   if (!(d.dayNumber >= 1 && d.dayNumber <= CONFIG.seasonDays) || !isFinite(d.money)) return false;
   for (const k of RUN_FIELDS) if (k in d) game[k] = d[k];
@@ -4641,14 +4660,19 @@ function applyRun(s) {
   game.medulaInput = "";
   game.medulaResult = null;
   game.careerResult = null;
-  if (at === "start") {
-    game.dayScheduleIdx = 0;
-    game.daySpawned = 0;
-    game.dayCompleted = 0;
+  if (at === "start" || at === "mid") {
+    // Müşteriler sırayla hizmet görür (yalnız öndeki tamamlanır/küser), yani tamamlanan
+    // müşteriler günün listesinin İLK dayCompleted kişisidir. Kayıt anında sırada
+    // bekleyenler dönüşte listeden yeniden gelir; kazanç/stok onlar için henüz işlenmemişti.
+    const n = game.daySchedule ? game.daySchedule.patients.length : 0;
+    const done = at === "mid" ? clamp(Math.floor(+d.midCompleted || 0), 0, n) : 0;
+    game.dayScheduleIdx = done;
+    game.daySpawned = done;
+    game.dayCompleted = done;
     game.spawnTimer = CONFIG.spawnInterval;
     game.hasRun = true;
     game.resumeState = STATE.PLAYING;
-    spawnPatient();                 // gün başındaki ilk müşteri (startNextDay'in yaptığı gibi)
+    spawnPatient();                 // sıradaki müşteri hemen gelsin (startNextDay'in yaptığı gibi)
   } else {
     const n = game.daySchedule ? game.daySchedule.patients.length : 0;
     game.dayScheduleIdx = n;
@@ -7682,7 +7706,8 @@ const Intro = {
     if (!box || !v || typeof v.play !== "function" || !canMp4) { this.finish(true); return; }
     this.started = true;
     this.active = true; this.t0 = Date.now();
-    v.muted = !MenuMusic.on;
+    v.muted = false;                  // şirket açılışı HER ZAMAN sesli (Kerem) — oyun sesi kapalı olsa da
+    try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch (e) { /* yok */ }
     // Video bitince son kare (logo) INTRO_HOLD_MS boyunca ekranda kalır, sonra oyuna geçilir
     // (Kerem: önce 2 sn istedi, "çok olmuş" → 1 sn). Dokunuş yine anında geçer.
     v.addEventListener("ended", () => { clearTimeout(this.guard); this.hold = setTimeout(() => this.finish(), INTRO_HOLD_MS); });
@@ -8875,12 +8900,8 @@ function drawUpgrades() {
     ry += rowH + rowGap;
   }
 
-  // kasa yetmeyen (ama TAM/kilitli olmayan) kalem varsa depo ekranıyla AYNI biçimde uyarı
-  const short = layout.upgradeRows.some(x => !x.maxed && !x.locked && !x.enabled);
-  if (short) {
-    text("⛔ Yetersiz bakiye — kasa: " + formatMoney(game.money),
-      rx0 + rw / 2, ry + r.h * 0.022, r.h * 0.022, c.bad, "center", "700");
-  }
+  // (Eski: kasa yetmeyen kalem varsa altta yanıp sönen "Yetersiz bakiye" uyarısı. Kerem
+  // kaldırttı — fiyatlar zaten kırmızı yazıyor, sürekli yanıp sönmesi rahatsız ediciydi.)
 }
 
 // Ecza deposu — PC sipariş ekranı. Satır başına −/+ adımlayıcı ile sepet (pendingQty),
