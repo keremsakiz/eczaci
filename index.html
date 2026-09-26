@@ -1126,6 +1126,15 @@ if (ADMIN_MODE) {
 // =====================================================================
 //  CONFIG — tüm sayısal ayarlar burada
 // =====================================================================
+// Boot'taki self-test'ler (denge / kayıt / diyalog / yerleşim denetimleri) YALNIZ geliştirmede
+// koşar. Yayın derlemesi (build.js) bunu false yapar: ~105 gün listesi kurup telefonda açılışı
+// yarım saniye kadar geciktiriyorlardı. Her biri kendi try/catch'inde: biri patlarsa açılış durmaz.
+const SELFTEST = true;
+function bootCheck(name, fn) {
+  if (!SELFTEST) return;
+  try { fn(); } catch (e) { console.warn("[self-test] " + name + " istisna:", e && e.message); }
+}
+
 const CONFIG = {
   // startMoney: MEDICINES ortalamalarindan turetilir (asagida deriveEconomy ile atanir).
   // Amac: oyuncu ilk depo siparisini rahat versin, ikincisinde zorlansin.
@@ -1637,7 +1646,6 @@ function upgradeLevel(id) {
   const lv = game.upgrades ? game.upgrades[id] : 1;
   return lv || 1;
 }
-function upgradeMaxed(id) { return upgradeLevel(id) >= UPGRADE_BY_ID[id].maxLevel; }
 
 // --- Efektif değerler: kod ARTIK CONFIG.maxQueue/maxStock/basePatience'ı doğrudan okumaz ---
 function effMaxQueue()    { return CONFIG.maxQueue + (upgradeLevel("tezgah") - 1); }        // 3 / 4 / 5
@@ -1854,7 +1862,6 @@ const PATIENT_AVATARS = [
   { emoji: "🧑", assetKey: "patient_fan",        optional: true },  // maçtan gelen taraftar genç
   { emoji: "🧑", assetKey: "patient_courier",    optional: true },  // motor kuryesi
   { emoji: "👩‍⚕️", assetKey: "patient_nurse",     optional: true },  // mesai çıkışı hemşire
-  { emoji: "👩", assetKey: "patient_housewife",  optional: true },  // file çantalı teyze
   { emoji: "👨", assetKey: "patient_barber",     optional: true },  // mahalle berberi
   { emoji: "🏃‍♀️", assetKey: "patient_runner",    optional: true }   // sabah koşusundan gelen genç kadın
 ];
@@ -2627,8 +2634,6 @@ function nightFakeBonusFor(day) {
 function nightFakeChance(day) {
   return Math.min(CONFIG.nightFakeRateCap, fakeChanceFor(day) + nightFakeBonusFor(day));
 }
-// günün TOPLAM hasta sayısı (gündüz + gece)
-function totalPatientsFor(day) { return patientLimitFor(day) + nightPatientsFor(day); }
 
 // hasta başına izinli hata oranı — gün ilerledikçe daralır, floor'un altına inmez.
 // Daralma hızı CONFIG'te elle verilmez: tabana missRateFloorDay'de varacak şekilde türetilir.
@@ -3562,6 +3567,9 @@ function spawnPatient(opts) {
 
   const sch = game.daySchedule;
   if (!sch || game.dayScheduleIdx >= sch.patients.length) return;
+  // Nöbet günü: gündüz bölümü bitene kadar gece müşterileri kapıda bekler (beginNightShift açar).
+  // Eskiden gündüzün son müşterileri sırada beklerken gece müşterileri gündüz içeri giriyordu.
+  if (game.phase === "day" && sch.nightN > 0 && game.dayScheduleIdx >= sch.dayN) return;
   const p = sch.patients[game.dayScheduleIdx++];
   enqueuePatient(p);
   return p;
@@ -4051,7 +4059,11 @@ function onFeedbackEnd() {
   const done = game.queue.shift();
   game.counter = [];
   game.feedback = null;
-  if (done && done.bonus) return;          // cheat hastası: günün programına sayılmaz
+  if (done && done.bonus) {                // dilenci / borçlu / cheat hastası: programa sayılmaz
+    // günün son müşterisinden sonra sırada bekleyen dilenci de görüldükten SONRA gün biter
+    if (game.dayCompleted >= patientsForDay() && !game.queue.length) endDay();
+    return;
+  }
   game.dayCompleted++;
   const sch = game.daySchedule;
   // gündüz bölümü bitti ve o gün nöbetçiyse: DAYEND'e gitme, gece bölümüne geç
@@ -4059,7 +4071,10 @@ function onFeedbackEnd() {
     beginNightShift();
     return;
   }
-  if (game.dayCompleted >= patientsForDay()) endDay();
+  if (game.dayCompleted >= patientsForDay()) {
+    if (game.queue.some(q => q.bonus)) return;   // sırada dilenci/borçlu var: önce o (gün sonra biter)
+    endDay();
+  }
 }
 
 // Gündüz bitti → NÖBET bölümü. Kuyruk boş, kısa geçiş kartı, sahne kararır.
@@ -4207,6 +4222,7 @@ function finishSeason(reason) {
   game.depotOpen = false;
   game.pcScreen = "home";
   game.nightIntro = null;
+  game.bookState = "closed";        // açık defter kartın üstünde kalıp ilk dokunuşu yutmasın
   resetTransientAnims();            // havadaki poşet kararı ölü kuyruğa uygulamasın
   if (reason === "reputation") { finishCareer("reputation"); return; }
   game.state = STATE.SEASONEND;
@@ -4351,6 +4367,7 @@ function finishCareer(reason) {
   game.depotOpen = false;
   game.pcScreen = "home";
   game.nightIntro = null;
+  game.bookState = "closed";
   resetTransientAnims();
 }
 
@@ -4384,7 +4401,7 @@ const GC_LEADERBOARD_ID = "com.kerem.eczaci.kariyer";
 const GC_TOP_N = 3;
 const GC_CACHE_KEY = "eczaci.gc.v1";
 const GC = {
-  plugin: null, available: false, authed: false, asked: false,
+  plugin: null, available: false, authed: false, needSettings: false, sending: false,
   board: null,            // { entries:[{rank, score, displayName, isLocal}], local, total, at }
   loading: false, lastFetch: 0, pending: 0,
   init() {
@@ -4397,21 +4414,27 @@ const GC = {
     try { if (P.addListener) P.addListener("authChanged", d => this.onAuth(d)); } catch (e) {}
     this.signIn();
   },
-  signIn() {
+  // fromTap: oyuncu panele dokundu. GameKit giriş ekranını bir kez kapatılınca bir daha
+  // göstermez (Apple kuralı) → o zaman panel "Ayarlar › Game Center" yol tarifini yazar.
+  signIn(fromTap) {
     if (!this.plugin) return;
-    this.asked = true;
-    this.plugin.signIn({}).then(d => this.onAuth(d)).catch(() => this.onAuth(null));
+    this.plugin.signIn({})
+      .then(d => { this.onAuth(d); if (fromTap && !this.authed) this.needSettings = true; })
+      .catch(() => { this.onAuth(null); if (fromTap) this.needSettings = true; });
   },
   onAuth(d) {
     const was = this.authed;
     this.authed = !!(d && d.authenticated);
+    if (this.authed) this.needSettings = false;
     if (this.authed && !was) {
       if (this.pending > 0) this.submit(this.pending);
       this.refresh(true);
     }
   },
   refresh(force) {
-    if (!this.authed || this.loading) return;
+    if (!this.authed) return;
+    if (this.pending > 0 && !this.sending) this.submit(this.pending);   // gidemeyen skor: yeniden dene
+    if (this.loading) return;
     const now = Date.now();
     if (!force && now - this.lastFetch < 60000) return;
     this.loading = true; this.lastFetch = now;
@@ -4430,14 +4453,15 @@ const GC = {
     if (score > this.pending) { this.pending = score; saveProfile(); }
     if (!this.authed || !this.plugin) return;          // oturum açılınca onAuth gönderir
     const sent = this.pending;
+    this.sending = true;
     this.plugin.submitScore({ leaderboardId: GC_LEADERBOARD_ID, score: sent })
-      .then(() => { if (this.pending <= sent) { this.pending = 0; saveProfile(); } this.refresh(true); })
-      .catch(() => {});                                  // kalır, sonraki oturumda yeniden denenir
+      .then(() => { this.sending = false; if (this.pending <= sent) { this.pending = 0; saveProfile(); } this.refresh(true); })
+      .catch(() => { this.sending = false; });           // kalır; menüye dönüşte (refresh) yeniden denenir
   },
   // Menüdeki panele dokunuş: oturum yoksa giriş, varsa Apple'ın sıralama ekranı.
   tap() {
     if (!this.plugin) return false;
-    if (!this.authed) { this.signIn(); return true; }
+    if (!this.authed) { this.signIn(true); return true; }
     this.plugin.showLeaderboard({ leaderboardId: GC_LEADERBOARD_ID }).catch(() => {});
     return true;
   }
@@ -4464,7 +4488,8 @@ function scoreboardRows() {
     rows.push(["En uzun kariyer", rc.seasons + " sezon"]);
     rows.push(["En iyi sezon kazancı", formatMoney(rc.bestSeason)]);
   }
-  if (GC.available) rows.push(["🌍 Dünya sıralaması için Game Center'a dokun", "", "hint"]);
+  if (GC.available) rows.push([GC.needSettings ? "🌍 Giriş için: Ayarlar › Game Center"
+                                                : "🌍 Dünya sıralaması için Game Center'a dokun", "", "hint"]);
   return rows;
 }
 
@@ -4504,13 +4529,15 @@ const SaveStore = {
   },
   set(k, v) {
     const s = v == null ? null : JSON.stringify(v);
+    let ok = true;
     try { if (s == null) localStorage.removeItem(k); else localStorage.setItem(k, s); }
-    catch (e) { /* özel sekme / dolu depo: oyun kayıtsız sürer */ }
+    catch (e) { ok = false; /* özel sekme / dolu depo: oyun kayıtsız sürer */ }
     const P = nativePrefs();
     if (P) {
       try { const pr = s == null ? P.remove({ key: k }) : P.set({ key: k, value: s }); if (pr && pr.catch) pr.catch(() => {}); }
       catch (e) { /* eklenti yok */ }
     }
+    return ok;
   }
 };
 
@@ -4552,8 +4579,7 @@ function saveRun(at) {
   if (!s) return;
   const j = JSON.stringify(s);
   if (j === _lastRunJson) return;
-  _lastRunJson = j;
-  SaveStore.set(SAVE_KEYS.run, s);
+  if (SaveStore.set(SAVE_KEYS.run, s)) _lastRunJson = j;   // yazılamadıysa sonraki turda yeniden dene
 }
 function clearRun() {
   if (!_saveReady) return;
@@ -6919,6 +6945,11 @@ function radioLoadFile(ac, url) {
     });
   return e;
 }
+// Radyo 24 kHz'te çalışır: dosya yolu 12 kHz'te, sentez 6,5 kHz'te alçak geçiren süzgeçten
+// geçiyor → duyulur fark yok, ama çözülmüş şarkılar bellekte YARI yer kaplar.
+function radioNewContext(AC) {
+  try { return new AC({ sampleRate: 24000 }); } catch (e) { return new AC(); }
+}
 // Safari Web Inspector konsolunda teşhis: radyoDurum()
 if (typeof window !== "undefined") window.radyoDurum = () => Object.entries(RADIO_FILES).map(([u, e]) =>
   u + " → " + (e.buf ? "hazır (" + e.buf.duration.toFixed(1) + " sn)" : e.loading ? "yükleniyor" : e.failed ? "HATA " + (e.error || "") : "?"));
@@ -7029,6 +7060,25 @@ const Radio = {
     this.station = i; this.step = 0; this.adDone = false; this.waitUntil = 0;
     if (this.mode === "wait") this.mode = "synth";
     this.toast = { text: RADIO_STATIONS[i].name, t0: game.clock || 0 };
+    this.prefetch();
+  },
+  // BELLEK: çözülmüş şarkı büyüktür (3 dk ≈ 35 MB, 24 kHz'te bile). Eskiden radyo açılınca ÜÇ
+  // şarkı birden çözülüp oturum boyu tutuluyordu (~130 MB). Artık yalnız çalan ve SIRADAKİ
+  // istasyonun dosyası bellekte; sıradaki, çalan şarkı sürerken arkada hazırlanır.
+  prefetch() {
+    const ac = this.ac;
+    if (!ac || this.station < 0) return;
+    const n = RADIO_STATIONS.length, keep = new Set();
+    for (const j of [this.station, (this.station + 1) % n]) {
+      const f = RADIO_STATIONS[j].file;
+      if (f) keep.add(f);
+    }
+    for (const st of RADIO_STATIONS) {
+      if (!st.file) continue;
+      if (keep.has(st.file)) { radioLoadFile(ac, st.file); continue; }
+      const e = RADIO_FILES[st.file];
+      if (e && e.buf && !(this.src && this.src.buffer === e.buf)) e.buf = null;   // çalanı bırakma
+    }
   },
   // İstenen durumla gerçek durumu eşitle. Her karede çağrılır (ucuz).
   sync(fromTap) {
@@ -7040,7 +7090,7 @@ const Radio = {
   start(withStatic) {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
-    if (!this.ac) { this.ac = new AC(); this.g = radioBuildGraph(this.ac, this.ac.destination); }
+    if (!this.ac) { this.ac = radioNewContext(AC); this.g = radioBuildGraph(this.ac, this.ac.destination); }
     const ac = this.ac, g = this.g, my = ++this.token;
     if (ac.resume) ac.resume();
     this.running = true;
@@ -7055,10 +7105,8 @@ const Radio = {
     if (this.nextT < ac.currentTime) this.nextT = fadeAt;
     clearInterval(this.timer);
     if (this.station < 0) this.tuneTo(0);
-    for (const st of RADIO_STATIONS) {                                          // arka planda indir
-      if (st.file) radioLoadFile(ac, st.file);
-      if (st.ad) radioLoadFile(ac, st.ad);
-    }
+    for (const st of RADIO_STATIONS) if (st.ad) radioLoadFile(ac, st.ad);      // reklamlar küçük: hepsi
+    this.prefetch();                                                          // şarkılar: çalan + sıradaki
     g.duck.gain.cancelScheduledValues(ac.currentTime);                          // yarım kalan anons
     g.duck.gain.setValueAtTime(1, ac.currentTime);
     if (this.mode === "file" && this.step > 0) this.fileStartPending = true;  // menüden dönüş: kaldığı yerden
@@ -7552,11 +7600,13 @@ const Intro = {
     this.done = true; this.active = false;
     clearTimeout(this.guard); clearTimeout(this.hold);
     try { if (this.v && this.started) this.v.pause(); } catch (e) { /* zaten durdu */ }
-    const box = this.box;
-    if (box) {
-      if (instant) box.parentNode && box.parentNode.removeChild(box);
-      else { box.classList.add("done"); setTimeout(() => box.parentNode && box.parentNode.removeChild(box), 520); }
-    }
+    const box = this.box, v = this.v, started = this.started;
+    const drop = () => {
+      if (box && box.parentNode) box.parentNode.removeChild(box);
+      try { if (v && started) { v.removeAttribute("src"); v.load(); } } catch (e) { /* çözücü zaten bırakıldı */ }
+    };
+    if (box && !instant) { box.classList.add("done"); setTimeout(drop, 520); }
+    else drop();
     MenuMusic.sync();
   }
 };
@@ -8752,7 +8802,10 @@ function drawDepot() {
   const groups = groupsWithMeds();
   if (!game.depotGroup && groups.length) game.depotGroup = groups[0].id;
   const tabsX = r.x + r.w * 0.05, tabsW = r.w * 0.90;
-  const tabsY = r.y + r.h * 0.085, tabsH = r.h * 0.072;
+  // Fiyat güncellemesi günü başlığın altına bir satır not düşer; seçici o notun ALTINA iner
+  // (eskiden not, kategori seçicinin üstüne biniyordu).
+  const priceToday = priceRoundOn(game.dayNumber);
+  const tabsY = r.y + r.h * (priceToday ? 0.108 : 0.085), tabsH = r.h * 0.072;
   layout.depotTabs = [];
   if (groups.length) {
     let gi = groups.findIndex(g => g.id === game.depotGroup);
@@ -8823,8 +8876,9 @@ function drawDepot() {
       rowH * 0.22, stock <= 0 ? c.bad : c.creamSoft, "left", "600");
 
     // ORTA: birim alış (üst) + satır tutarı / DOLU (alt) — kendi alanında, adın üzerine binmez
-    // Fiyat GÜNCEL değerden okunur (medCost); güncelleme gününde yanında ↑/↓ durur.
-    const unit = medCost(m);
+    // Fiyat GÜNCEL değerden okunur; Toptancı indirimi dahil (depotUnitCost — SİPARİŞ VER toplamıyla
+    // aynı kaynak). Eskiden satır indirimsiz medCost gösteriyordu. Güncelleme gününde ↑/↓ durur.
+    const unit = depotUnitCost(m);
     const move = priceMoveToday(m.id);
     if (move !== 0) {
       const mv = move > 0 ? "↑" : "↓";
@@ -10459,6 +10513,8 @@ function selectTabAt(px, py) {
 }
 
 function handleTap(px, py) {
+  noteState();
+  if (performance.now() - _stateWatch.at < TAP_GUARD_MS) return;   // ekran az önce değişti
   // defter animasyon sırasında tüm dokunuşları yut
   if (game.bookState === "opening" || game.bookState === "closing") return;
 
@@ -10511,8 +10567,11 @@ function handleTap(px, py) {
     if (layout.menuBoardBtn && pointInRect(px, py, layout.menuBoardBtn)) { sfx("tap"); GC.tap(); return; }
     if (layout.menuStartBtn && pointInRect(px, py, layout.menuStartBtn)) {
       // Kayıt artık kalıcı: süren kariyer varken tek dokunuş onu silmesin → ikinci dokunuş onaylar
-      if (canResume() && !(game.newCareerAskUntil > game.clock)) { sfx("deny"); game.newCareerAskUntil = game.clock + 3; }
-      else { game.newCareerAskUntil = 0; sfx("door"); startNewCareer(); }
+      if (canResume() && !(game.newCareerAskUntil > game.clock)) {
+        sfx("deny"); game.newCareerAskUntil = game.clock + 3; game.newCareerAskAt = performance.now();
+      } else if (canResume() && performance.now() - (game.newCareerAskAt || 0) < 400) {
+        /* çift dokunuşun ikincisi onay sayılmaz — süren kariyer yanlışlıkla silinmesin */
+      } else { game.newCareerAskUntil = 0; sfx("door"); startNewCareer(); }
     }
     else if (canResume() && layout.menuResumeBtn && pointInRect(px, py, layout.menuResumeBtn)) { sfx("tap"); resumeRun(); }  // reset YOK
     else if (layout.menuHowBtn && pointInRect(px, py, layout.menuHowBtn)) { sfx("tap"); openHowTo(); }
@@ -10543,7 +10602,10 @@ function handleTap(px, py) {
   if (game.state !== STATE.PLAYING) return;
 
   // HUD ev butonu → menüye dön (oyun verisi SİLİNMEZ; menüden DEVAM ET ile geri gelinir)
-  if (layout.homeBtn && pointInRect(px, py, layout.homeBtn)) { sfx("back"); game.state = STATE.MENU; return; }
+  if (layout.homeBtn && pointInRect(px, py, layout.homeBtn)) {
+    if (game.bagAnim) return;                          // poşet havada: karar uygulanınca çıkılabilir
+    sfx("back"); game.state = STATE.MENU; return;
+  }
 
   // tezgahtaki PC'ye dokun → depo sipariş ekranını aç
   if (layout.pcBtn && pointInRect(px, py, layout.pcBtn)) { sfx("pc"); openPc(); return; }
@@ -10663,23 +10725,55 @@ function onMove(x, y) {
 function onUp(x, y) {
   if (!pointer.down) return;
   pointer.down = false;
-  if (!pointer.dragging) handleTap(x, y);  // kaydırma değilse tap
+  if (!pointer.dragging) { handleTap(x, y); noteState(); }  // kaydırma değilse tap
 }
 
+// Ekran (state) değişiminden hemen sonraki dokunuşlar yutulur: çift dokunuşun ikincisi yeni
+// ekranda bir butona basmasın (ör. KARİYERİ BİTİR → kariyer kartında YENİ KARİYER).
+const _stateWatch = { s: null, at: 0 };
+const TAP_GUARD_MS = 250;
+function noteState() {
+  if (game.state !== _stateWatch.s) { _stateWatch.s = game.state; _stateWatch.at = performance.now(); }
+}
+
+// Çoklu dokunuş: sürükleme/kaydırma YALNIZ ilk parmağa bağlıdır; o basılıyken inen diğer
+// parmaklar kendi başına kısa dokunuş sayılır. Eskiden tek `pointer` vardı: iki başparmakla
+// hızlı ad yazarken ikinci harf kayboluyor, sürüklerken ikinci parmak kaydırmayı zıplatıyordu.
+const extraTouches = {};
+function touchXY(t) {
+  const r = canvas.getBoundingClientRect();
+  return { x: t.clientX - r.left, y: t.clientY - r.top };
+}
 canvas.addEventListener("touchstart", (e) => {
   e.preventDefault();
-  const p = getEventPos(e);
-  onDown(p.x, p.y);
+  for (const t of Array.from(e.changedTouches)) {
+    const p = touchXY(t);
+    if (!pointer.down) { pointer.id = t.identifier; onDown(p.x, p.y); }
+    else extraTouches[t.identifier] = p;
+  }
 }, { passive: false });
 canvas.addEventListener("touchmove", (e) => {
   e.preventDefault();
-  const p = getEventPos(e);
-  onMove(p.x, p.y);
+  for (const t of Array.from(e.changedTouches)) {
+    if (pointer.down && t.identifier === pointer.id) { const p = touchXY(t); onMove(p.x, p.y); }
+  }
 }, { passive: false });
 canvas.addEventListener("touchend", (e) => {
   e.preventDefault();
-  const p = getEventPos(e);
-  onUp(p.x, p.y);
+  for (const t of Array.from(e.changedTouches)) {
+    const p = touchXY(t);
+    if (pointer.down && t.identifier === pointer.id) { onUp(p.x, p.y); continue; }
+    const st = extraTouches[t.identifier];
+    if (!st) continue;
+    delete extraTouches[t.identifier];
+    if (Math.hypot(p.x - st.x, p.y - st.y) < 12) { handleTap(p.x, p.y); noteState(); }
+  }
+}, { passive: false });
+canvas.addEventListener("touchcancel", (e) => {
+  for (const t of Array.from(e.changedTouches)) {
+    if (t.identifier === pointer.id) pointer.down = false;
+    delete extraTouches[t.identifier];
+  }
 }, { passive: false });
 
 canvas.addEventListener("mousedown", (e) => { const p = getEventPos(e); onDown(p.x, p.y); });
@@ -10690,13 +10784,20 @@ canvas.addEventListener("mouseup", (e) => { const p = getEventPos(e); onUp(p.x, 
 //  ANA DÖNGÜ (60 FPS)
 // =====================================================================
 let lastTime = performance.now();
+let _loopErrors = 0;
 function loop(now) {
+  requestAnimationFrame(loop);      // ÖNCE: bu karede istisna olsa da döngü sürer (eskiden oyun donardı)
   let dt = (now - lastTime) / 1000;
   lastTime = now;
   if (dt > 0.1) dt = 0.1;
-  update(dt);
-  render();
-  requestAnimationFrame(loop);
+  noteState();
+  try {
+    update(dt);
+    render();
+  } catch (err) {
+    if (_loopErrors++ < 5) console.error("[döngü] kare atlandı:", err);
+    canvas.width = canvas.width;    // yarım kalan save/clip/alfa durumunu sıfırla (render her kare baştan kurar)
+  }
 }
 
 // =====================================================================
@@ -11170,8 +11271,6 @@ window.cheats = {
 // --- Asset'leri yükle (asenkron; yüklendikçe fallback yerine PNG çizilir) ---
 function loadAssets() {
   Assets.load("bg_pharmacy", "assets/bg_pharmacy.png");
-  Assets.load("shop_day", "assets/bg_shop_day.png");        // eczacı gözünden, arkada kapı (yoksa 404 → eski arka plan)
-  Assets.load("shop_night", "assets/bg_shop_night.png");
   Assets.load("counter", "assets/counter.png");
   Assets.load("med_agriban", "assets/med_agriban.png");
   Assets.load("med_oksurmez", "assets/med_oksurmez.png");
@@ -11232,11 +11331,6 @@ function loadAssets() {
   Assets.load("menu_bg", "assets/menu_bg.jpg");
   Assets.load("menu_bg_day", "assets/menu_bg_day.jpg");   // gündüz; yoksa gece görseli kalır
 
-  // assetler yüklenince tezgah yerleşimini bir kez ölç-doğrula (sapma varsa console.warn)
-  const vt = setInterval(() => {
-    if (Assets.loaded < Assets.total) return;
-    clearInterval(vt);
-  }, 200);
 }
 
 // hedefi tutturmak için gereken en az DOĞRU işlem sayısı (N üzerinden).
@@ -11379,7 +11473,7 @@ function verifyGoalBalanceAllTiers(verbose) {
     return ok;
   });
 }
-verifyGoalBalanceAllTiers(false);   // boot'ta sessiz; yalnız denge bozuksa uyarır
+bootCheck("denge", () => verifyGoalBalanceAllTiers(false));   // boot'ta sessiz; yalnız denge bozuksa uyarır
 
 // --- Konsantrasyon tavanı doğrulaması ---
 // Hiçbir GEÇERLİ hastanın payı o günün tavanını aşmamalı. Sahteler kapsam dışı.
@@ -11435,7 +11529,7 @@ function verifyConcentrationCapAllTiers(verbose) {
     return ok;
   });
 }
-verifyConcentrationCapAllTiers(false);   // boot'ta sessiz; yalnız tavan aşılırsa uyarır
+bootCheck("tavan", () => verifyConcentrationCapAllTiers(false));   // boot'ta sessiz; yalnız tavan aşılırsa uyarır
 
 // Semptom isteği için birkaç geçerli cevap üret: her kalemin kategorisindeki İLK ve SON
 // ilaç ayrı ayrı denenir (kategori içi her ilaç doğru sayılmalı).
@@ -12233,8 +12327,8 @@ function selfTestPatientsInner(days) {
   return warn.length === 0;
 }
 _noRecords = true;      // denetimlerin sahte kariyerleri rekor defterine yazılmasın
-selfTestPatients();
-selfTestEmoji();
+bootCheck("hasta", selfTestPatients);
+bootCheck("emoji", selfTestEmoji);
 
 // --- Veri sağlık kontrolü: kategori eşleşmeleri (SADECE konsol; oyuncuya görünmez) ---
 function checkDataHealth() {
@@ -12247,7 +12341,7 @@ function checkDataHealth() {
     if (!medCats.has(cat)) console.warn("[veri] Bu semptom kategorisinin ilacı yok:", cat);
   }
 }
-checkDataHealth();
+bootCheck("veri", checkDataHealth);
 
 // --- KAYIT gidiş-dönüş denetimi: kontrol noktası yazılıp geri okununca AYNI oyun mu? ---
 // Diske DOKUNMAZ (_saveReady henüz false). Canlı state yedeklenip sonunda geri konur.
@@ -12296,14 +12390,14 @@ function verifySaveRoundtrip() {
   for (const w of warn) console.warn("[kayıt] " + w);
   return warn.length === 0;
 }
-verifySaveRoundtrip();
-verifyDialog();
+bootCheck("kayıt", verifySaveRoundtrip);
+bootCheck("diyalog", verifyDialog);
 _noRecords = false;
 
 loadAssets();
 resize();
-verifyMenuLayout();   // yerleşim denetimi: layout ancak resize()'dan SONRA vardır
-verifyRadioLayout();  // tezgahtaki radyo defter/PC ile çakışmasın, dokunma alanı 44 pt olsun
+bootCheck("menü yerleşimi", verifyMenuLayout);   // yerleşim denetimi: layout ancak resize()'dan SONRA vardır
+bootCheck("radyo yerleşimi", verifyRadioLayout);  // tezgahtaki radyo defter/PC ile çakışmasın, dokunma alanı 44 pt olsun
 game.spawnTimer = CONFIG.spawnInterval;
 // Kayıt: profil (ad, rekorlar, ses) + süren kariyer. Self-test'lerden SONRA okunur.
 loadSave();

@@ -56,13 +56,17 @@ public class GameCenterPlugin: CAPPlugin, CAPBridgedPlugin, GKGameCenterControll
 
     // Oturum: GameKit giriş ekranı gerekiyorsa verir, biz sunarız. Oyuncu kapatırsa bir daha
     // zorlanmaz (Apple kuralı) — o zaman "authenticated: false" döner, oyun yerel rekorla sürer.
+    // Tüm durum (waiting / handlerSet / authAnswered) YALNIZ ana iş parçacığında okunur-yazılır:
+    // GameKit authenticateHandler'ı ana iş parçacığında çağırır, Capacitor ise eklenti
+    // metodlarını kendi kuyruğunda. Eskiden ikisi aynı diziyi aynı anda değiştirebiliyordu.
     @objc func signIn(_ call: CAPPluginCall) {
-        if GKLocalPlayer.local.isAuthenticated { call.resolve(playerInfo()); return }
-        if authAnswered && handlerSet { call.resolve(playerInfo()); return }
-        waiting.append(call)
-        if handlerSet { return }
-        handlerSet = true
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            if GKLocalPlayer.local.isAuthenticated { call.resolve(self.playerInfo()); return }
+            if self.authAnswered && self.handlerSet { call.resolve(self.playerInfo()); return }
+            self.waiting.append(call)
+            if self.handlerSet { return }
+            self.handlerSet = true
             GKLocalPlayer.local.authenticateHandler = { [weak self] viewController, error in
                 guard let self = self else { return }
                 if let vc = viewController {

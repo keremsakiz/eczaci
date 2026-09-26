@@ -55,6 +55,12 @@ if (!DEV) {
   if (!dbg.test(html)) throw new Error("CONFIG.debugDecisions satırı bulunamadı.");
   html = html.replace(dbg, "$1false$2");
   notes.push("CONFIG.debugDecisions = false");
+
+  // --- 3b. boot self-test'lerini kapat (telefonda açılışı geciktiriyorlar) --------
+  const st = /\nconst SELFTEST = true;/;
+  if (!st.test(html)) throw new Error("const SELFTEST = true; satırı bulunamadı.");
+  html = html.replace(st, "\nconst SELFTEST = false;");
+  notes.push("SELFTEST = false (boot denetimleri yalnız geliştirmede)");
 }
 
 // --- 4. yaz ----------------------------------------------------------------
