@@ -6929,7 +6929,7 @@ function radioLoadFile(ac, url) {
   const bytes = emb
     ? Promise.resolve().then(() => { const b = atob(emb), u = new Uint8Array(b.length);
         for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u.buffer; })
-    : fetch(url).then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.arrayBuffer(); });
+    : radioFetchBytes(url);
   bytes
     .then(ab => {
       const orig = ab.slice(0);                      // decodeAudioData tamponu tüketir: yedek kopya
@@ -6956,6 +6956,37 @@ if (typeof window !== "undefined") window.radyoDurum = () => Object.entries(RADI
 
 // REKLAM ARASI: her şarkının 13. saniyesinde spiker müziği kısar, anonsu okur, müzik geri gelir.
 // Anons dosyası kendi jingle'ını içerir (tools/make-ads.py). Oyun ve önizleme betiği AYNI işlevi kullanır.
+// Ses dosyasını bayt olarak oku. Önce fetch; olmazsa (iOS WKWebView'in capacitor:// şemasında
+// bazı sürümlerde fetch boş/hata dönüyor) XMLHttpRequest ile bir kez daha dene.
+function radioFetchBytes(url) {
+  const viaXhr = () => new Promise((res, rej) => {
+    const x = new XMLHttpRequest();
+    x.open("GET", url, true); x.responseType = "arraybuffer";
+    x.onload = () => (x.status === 0 || (x.status >= 200 && x.status < 300)) && x.response && x.response.byteLength
+      ? res(x.response) : rej(new Error("XHR " + x.status));
+    x.onerror = () => rej(new Error("XHR ağ hatası"));
+    x.send();
+  });
+  if (typeof fetch !== "function") return viaXhr();
+  return fetch(url)
+    .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.arrayBuffer(); })
+    .then(ab => { if (!ab || !ab.byteLength) throw new Error("boş yanıt"); return ab; })
+    .catch(err => { console.warn("[radyo] fetch olmadı, XHR deneniyor:", url, err && err.message); return viaXhr(); });
+}
+
+// iOS SES OTURUMU: WKWebView'de Web Audio varsayılan olarak "ambient" oturumda çalar → telefon
+// SESSİZ MODDAYSA (yan tuş) ana ekran müziği, radyo ve tık sesleri HİÇ duyulmaz; açılış videosu
+// ise duyulur (o ayrı oturum). Oyunun sesi açıkken "playback" isteriz: sessiz modda da çalar.
+// Ses levhası ve radyo kapalıyken "ambient"e döner → oyuncunun Spotify'ı vb. kesilmez.
+function iosAudioSession() {
+  try {
+    const as = typeof navigator !== "undefined" && navigator.audioSession;
+    if (!as) return;
+    const want = (MenuMusic.on || Radio.on) ? "playback" : "ambient";
+    if (as.type !== want) as.type = want;
+  } catch (e) { /* desteklenmiyor */ }
+}
+
 const RADIO_AD_AT = 13;                         // şarkının kaçıncı saniyesinde
 const RADIO_DUCK = 0.22;                        // kısılan müzik düzeyi (≈ −13 dB)
 function radioPlayAd(ac, g, buf, t) {
@@ -7013,6 +7044,7 @@ const Radio = {
   volume: 0.85,
   toggle() {
     this.on = !this.on;
+    iosAudioSession();
     if (this.on) this.tuneTo((this.station + 1) % RADIO_STATIONS.length);
     this.sync(true);
     saveProfile();
@@ -7616,7 +7648,7 @@ const MenuMusic = {
   running: false, ac: null, g: null, timer: null, token: 0,
   step: 0, nextT: 0, phase: null, amb: null, switchAt: 0,
   volume: 0.9,
-  toggle() { this.on = !this.on; this.sync(); if (this.on) this.unlock(); saveProfile(); },
+  toggle() { this.on = !this.on; iosAudioSession(); this.sync(); if (this.on) this.unlock(); saveProfile(); },
   // dokunuşla ses motorunu uyandır (tarayıcı/iOS otomatik başlatmaya izin vermediyse)
   unlock() { if (this.ac && this.running && this.ac.state !== "running" && this.ac.resume) this.ac.resume(); },
   wanted() {
@@ -7695,6 +7727,7 @@ if (typeof document !== "undefined" && document.addEventListener) {
   // iOS/tarayıcı: ses ancak bir dokunuşun İÇİNDE başlatılabilir → ilk dokunuşta uyandır
   for (const ev of ["touchend", "mousedown", "pointerdown", "keydown"])
     document.addEventListener(ev, () => {
+      iosAudioSession();
       MenuMusic.unlock();
       // kayıttan "radyo açık" gelirse radyo dokunuşsuz kurulur ve askıda kalabilir → uyandır
       if (Radio.ac && Radio.running && Radio.ac.state !== "running" && Radio.ac.resume) Radio.ac.resume();
