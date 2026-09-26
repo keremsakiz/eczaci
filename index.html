@@ -6918,8 +6918,65 @@ function decodeAB(ac, ab) {
     catch (e) { bad(e); }
   });
 }
+// iOS UYGULAMASINDA dosyalar <audio> öğesiyle çalınır. Tarayıcıda çalışan yol (fetch +
+// decodeAudioData) iOS'un uygulama içi web görünümünde sessiz kalıyordu — kodla üretilen ECZA FM
+// çalarken üç şarkı ve bütün reklamlar susuyordu. Açılış videosu aynı klasörden <video> ile sorunsuz
+// oynadığı için şarkılar da aynı yoldan (medya öğesi) okunur; ses yine radyonun süzgecinden,
+// kısma (reklam arası) ve açma/kapama geçişlerinden geçer (createMediaElementSource).
+// Yan kazanç: şarkı belleğe çözülmez, akıtılır (≈ 0 MB yerine ≈ 40 MB).
+// Süreler ölçüldü (ffprobe); öğenin kendi süresi gelince onunla güncellenir.
+const RADIO_DUR = {
+  "assets/radio_anadolu.mp3": 182.8, "assets/radio_cosmic.mp3": 34.04, "assets/radio_marsi.mp3": 117.0,
+  "assets/ad_anadolu.mp3": 5.38, "assets/ad_cosmic.mp3": 4.05, "assets/ad_ecza.mp3": 5.54
+};
+function radioUseElement() {
+  if (typeof window === "undefined") return false;
+  if (window.__RADIO_ELEMENT) return true;                 // tarayıcıda denemek için
+  const C = window.Capacitor;
+  try { return !!(C && ((C.isNativePlatform && C.isNativePlatform()) || (C.getPlatform && C.getPlatform() !== "web"))); }
+  catch (err) { return false; }
+}
+function radioLoadElement(url, e) {
+  e.tries = (e.tries || 0) + 1; e.failed = false; e.loading = false;
+  const el = new Audio();
+  el.preload = "auto";
+  el.setAttribute("playsinline", ""); el.setAttribute("webkit-playsinline", "");
+  const buf = { el: el, entry: e, duration: RADIO_DUR[url] || 30 };
+  el.addEventListener("loadedmetadata", () => { if (isFinite(el.duration) && el.duration > 0) buf.duration = el.duration; });
+  el.addEventListener("error", () => {
+    const code = el.error ? el.error.code : "?";
+    e.error = "öğe hatası " + code; console.warn("[radyo] öğe yüklenemedi:", url, e.error);
+    if (e.buf === buf) { e.buf = null; e.failed = true; }
+  });
+  el.src = url;
+  try { el.load(); } catch (err) { /* bazı tarayıcılar gerektirmez */ }
+  e.buf = buf;                                              // süre biliniyor: hemen hazır say
+  return e;
+}
+// Öğeyi radyonun ses grafiğine BİR KEZ bağlar (createMediaElementSource her öğe için tek sefer).
+// Bağlanamazsa öğe doğrudan çalar (süzgeçsiz ama sesli).
+function radioElRoute(ac, e, dest) {
+  if (e.routed) return;
+  e.routed = true;
+  try {
+    const n = ac.createMediaElementSource(e.buf.el), gg = ac.createGain();
+    n.connect(gg); gg.connect(dest);
+    e.gain = gg;
+  } catch (err) { e.gain = null; console.warn("[radyo] öğe grafiğe bağlanamadı, doğrudan çalınacak:", err && err.message); }
+}
+function radioElPlay(el, offset, e) {
+  try { el.currentTime = Math.max(0, offset || 0); } catch (err) { /* meta gelmeden atlanamaz */ }
+  let pr;
+  try { pr = el.play(); } catch (err) { e.error = "play: " + (err && err.message); }
+  if (pr && pr.catch) pr.catch(err => { e.error = "play: " + (err && (err.name || err.message)); console.warn("[radyo] çalınamadı:", e.error); });
+}
+
 function radioLoadFile(ac, url) {
   const e = RADIO_FILES[url] || (RADIO_FILES[url] = {});
+  if (radioUseElement()) {
+    if (!e.buf && !(e.failed && e.tries >= 2)) radioLoadElement(url, e);
+    return e;
+  }
   if (e.buf || e.loading || typeof fetch !== "function") return e;
   if (e.failed && e.tries >= 2) return e;          // iki kez olmadıysa bir daha zorlama
   e.loading = true; e.failed = false; e.tries = (e.tries || 0) + 1;
@@ -6952,7 +7009,7 @@ function radioNewContext(AC) {
 }
 // Safari Web Inspector konsolunda teşhis: radyoDurum()
 if (typeof window !== "undefined") window.radyoDurum = () => Object.entries(RADIO_FILES).map(([u, e]) =>
-  u + " → " + (e.buf ? "hazır (" + e.buf.duration.toFixed(1) + " sn)" : e.loading ? "yükleniyor" : e.failed ? "HATA " + (e.error || "") : "?"));
+  u + " → " + (e.buf ? "hazır (" + e.buf.duration.toFixed(1) + " sn" + (e.buf.el ? ", öğe" + (e.gain ? "+grafik" : "") + (e.error ? ", " + e.error : "") : "") + ")" : e.loading ? "yükleniyor" : e.failed ? "HATA " + (e.error || "") : "?"));
 
 // REKLAM ARASI: her şarkının 13. saniyesinde spiker müziği kısar, anonsu okur, müzik geri gelir.
 // Anons dosyası kendi jingle'ını içerir (tools/make-ads.py). Oyun ve önizleme betiği AYNI işlevi kullanır.
@@ -6993,9 +7050,16 @@ function radioPlayAd(ac, g, buf, t) {
   g.duck.gain.cancelScheduledValues(t);
   g.duck.gain.setValueAtTime(1, t);
   g.duck.gain.linearRampToValueAtTime(RADIO_DUCK, t + 0.35);        // spiker müziği kısar…
-  const s = ac.createBufferSource(); s.buffer = buf; s.connect(g.voice);
   const t0 = t + 0.3, end = t0 + buf.duration;
-  s.start(t0);
+  let s;
+  if (buf.el) {                                                     // iOS: <audio> öğesi
+    radioElRoute(ac, buf.entry, g.voice);
+    const el = buf.el, h = setTimeout(() => radioElPlay(el, 0, buf.entry), Math.max(0, (t0 - ac.currentTime) * 1000));
+    s = { stop() { clearTimeout(h); try { el.pause(); } catch (err) { /* durdu */ } } };
+  } else {
+    s = ac.createBufferSource(); s.buffer = buf; s.connect(g.voice);
+    s.start(t0);
+  }
   g.duck.gain.setValueAtTime(RADIO_DUCK, end - 0.15);
   g.duck.gain.linearRampToValueAtTime(1, end + 0.8);                // …anons bitince geri açar
   return s;
@@ -7076,6 +7140,14 @@ const Radio = {
   playFile(ac, g, st, t, offset) {
     const buf = RADIO_FILES[st.file].buf;
     this.stopFile(t);
+    if (buf.el) {                                                   // iOS: <audio> öğesi
+      const e = RADIO_FILES[st.file], el = buf.el;
+      radioElRoute(ac, e, g.fileIn);
+      if (e.gain) e.gain.gain.value = st.fileGain;
+      radioElPlay(el, Math.min(Math.max(0, offset), Math.max(0, buf.duration - 0.05)), e);
+      this.src = { buffer: buf, stop() { try { el.pause(); } catch (err) { /* durdu */ } } };
+      return;
+    }
     const s = ac.createBufferSource(), gg = ac.createGain();
     s.buffer = buf; gg.gain.value = st.fileGain;
     s.connect(gg); gg.connect(g.fileIn);
@@ -7109,7 +7181,7 @@ const Radio = {
       if (!st.file) continue;
       if (keep.has(st.file)) { radioLoadFile(ac, st.file); continue; }
       const e = RADIO_FILES[st.file];
-      if (e && e.buf && !(this.src && this.src.buffer === e.buf)) e.buf = null;   // çalanı bırakma
+      if (e && e.buf && !e.buf.el && !(this.src && this.src.buffer === e.buf)) e.buf = null;   // çalanı bırakma
     }
   },
   // İstenen durumla gerçek durumu eşitle. Her karede çağrılır (ucuz).
