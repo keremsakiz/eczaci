@@ -4474,6 +4474,7 @@ const GC = {
   plugin: null, available: false, authed: false, needSettings: false, sending: false,
   board: null,            // { entries:[{rank, score, displayName, isLocal}], local, total, at }
   loading: false, lastFetch: 0, pending: 0,
+  loadError: false,       // son sıralama isteği başarısız (ör. sıralama henüz yayında değil)
   init() {
     const C = typeof window !== "undefined" ? window.Capacitor : null;
     const P = C && C.Plugins && C.Plugins.GameCenter;
@@ -4512,9 +4513,10 @@ const GC = {
       .then(r => {
         const pack = e => e && { rank: +e.rank, score: +e.score, displayName: String(e.displayName || "Eczacı"), isLocal: !!e.isLocal };
         this.board = { entries: (r.entries || []).map(pack).slice(0, GC_TOP_N), local: pack(r.local), total: +r.total || 0, at: now };
+        this.loadError = false;
         try { localStorage.setItem(GC_CACHE_KEY, JSON.stringify(this.board)); } catch (e) {}
       })
-      .catch(() => {})
+      .catch(() => { this.loadError = true; this.lastFetch = now - 45000; })   // 15 sn sonra yeniden dene
       .then(() => { this.loading = false; });
   },
   submit(score) {
@@ -4538,28 +4540,38 @@ const GC = {
 };
 
 // Paneldeki satırlar: [sol, sağ, bayrak] — bayrak "me" (oyuncunun kendi satırı) | "hint".
+// Panel bir DÜNYA SIRALAMASI (Game Center): ilk 3 eczacı + senin sıran. Oturum yoksa ya da
+// sıralama yüklenemiyorsa bunu söyler; kişisel rekor yalnız TEK satır olarak ("Senin rekorun")
+// eşlik eder. Kişisel rekor listesi yalnız Game Center'ın hiç olmadığı yerde (tarayıcı) çıkar.
 function scoreboardRows() {
   const rc = game.records, rows = [];
   const b = GC.board;
-  if (GC.available && GC.authed && b && b.entries.length) {
+  const mine = () => { if (rc.peak > 0) rows.push(["Senin rekorun", formatMoney(rc.peak), "me"]); };
+  if (!GC.available) {                               // tarayıcı: Game Center yok
+    if (rc.peak > 0) {
+      rows.push(["En yüksek kasa", formatMoney(rc.peak), "me"]);
+      rows.push(["En uzun kariyer", rc.seasons + " sezon"]);
+      rows.push(["En iyi sezon kazancı", formatMoney(rc.bestSeason)]);
+    }
+    return rows;
+  }
+  if (!GC.authed) {
+    rows.push([GC.needSettings ? "🌍 Giriş için: Ayarlar › Game Center"
+                               : "🌍 Dünya sıralamasını görmek için dokun", "", "hint"]);
+    mine();
+    return rows;
+  }
+  if (b && b.entries.length) {
     for (const e of b.entries) rows.push([e.rank + ". " + e.displayName, formatMoney(e.score), e.isLocal ? "me" : ""]);
     const me = b.local;
     if (me && !b.entries.some(e => e.isLocal)) rows.push(["Sen · " + me.rank + ". sıra", formatMoney(me.score), "me"]);
-    else if (!me && rc.peak > 0) rows.push(["Senin rekorun", formatMoney(rc.peak), "me"]);
+    else if (!me) mine();
     return rows;
   }
-  if (GC.available && GC.authed) {
-    rows.push(["Sıralama henüz boş — ilk sen ol!", "", "hint"]);
-    if (rc.peak > 0) rows.push(["Senin rekorun", formatMoney(rc.peak), "me"]);
-    return rows;
-  }
-  if (rc.peak > 0) {
-    rows.push(["En yüksek kasa", formatMoney(rc.peak), "me"]);
-    rows.push(["En uzun kariyer", rc.seasons + " sezon"]);
-    rows.push(["En iyi sezon kazancı", formatMoney(rc.bestSeason)]);
-  }
-  if (GC.available) rows.push([GC.needSettings ? "🌍 Giriş için: Ayarlar › Game Center"
-                                                : "🌍 Dünya sıralaması için Game Center'a dokun", "", "hint"]);
+  rows.push([GC.loading && !GC.loadError ? "🌍 Dünya sıralaması yükleniyor…"
+           : GC.loadError ? "🌍 Dünya sıralaması şu an açılamadı"
+           : "🌍 Sıralama henüz boş — ilk sen ol!", "", "hint"]);
+  mine();
   return rows;
 }
 
