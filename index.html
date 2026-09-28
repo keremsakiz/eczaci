@@ -2276,6 +2276,67 @@ let layout = {
 // =====================================================================
 const canvas = document.getElementById("game");
 const ctx = canvas.getContext("2d");
+
+// --- YAZI HİZASI KORUMASI ---
+// iPhone'da (WebKit) bazen gömülü yazı tipinin ölçülen genişliği ~0 dönüyor: ortalı yazı
+// ortadan BAŞLIYOR, sağa yaslı yazı sağdan taşıyor, sığdırma döngüsü de küçültmüyor (gün
+// sonu kartındaki "Hedef tutmadı" şeridi). Harfler yine doğru çiziliyor — bozuk olan yalnız
+// ölçü. Bu yüzden: ortalı/sağa yaslı yazıyı tarayıcının hizalamasına bırakmayız; genişliği
+// ölçer, akla yatkın değilse aynı puntoda sistem fontuyla yeniden ölçer, soldan basarız.
+// measureText de aynı düzeltmeyi döndürür → fitText/fitTextF küçültmeleri doğru çalışır.
+const TextGuard = (() => {
+  const P = typeof CanvasRenderingContext2D !== "undefined" && CanvasRenderingContext2D.prototype;
+  if (!P || P.__guarded) return { glitches: 0 };
+  const rawMeasure = P.measureText, rawFill = P.fillText;
+  const pxCache = {};
+  const fontPx = f => (f in pxCache) ? pxCache[f] : (pxCache[f] = parseFloat((/([\d.]+)px/.exec(f) || [0, 0])[1]) || 0);
+  const G = { glitches: 0, lastReload: -1e9 };
+  function sane(c, str, w) {
+    const n = String(str).replace(/\s/g, "").length;
+    return n < 2 || w >= fontPx(c.font) * 0.2 * n;
+  }
+  function fallbackWidth(c, str) {
+    const f = c.font;
+    c.font = f.replace(/px\s.*$/, "px -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif");
+    const w = rawMeasure.call(c, str).width;
+    c.font = f;
+    G.glitches++;
+    // yazı tipi verisi bellekten atılmış olabilir: en fazla 5 sn'de bir yeniden yükleme iste
+    const now = Date.now();
+    if (now - G.lastReload > 5000 && typeof document !== "undefined" && document.fonts && document.fonts.load) {
+      G.lastReload = now;
+      for (const ff of ["700 20px EczSign", "600 20px EczSign", "700 20px EczSlab", "600 20px EczSlab", "400 20px EczTerm", "400 20px EczSig"])
+        document.fonts.load(ff, "ĞŞİıÇÖÜ₺").catch(() => {});
+    }
+    return w;
+  }
+  function width(c, str) {
+    const w = rawMeasure.call(c, str).width;
+    return sane(c, str, w) ? w : Math.max(w, fallbackWidth(c, str));
+  }
+  P.measureText = function (str) {
+    const m = rawMeasure.call(this, str);
+    if (sane(this, str, m.width)) return m;
+    const w = Math.max(m.width, fallbackWidth(this, str));
+    return { width: w, actualBoundingBoxLeft: 0, actualBoundingBoxRight: w,
+      actualBoundingBoxAscent: m.actualBoundingBoxAscent, actualBoundingBoxDescent: m.actualBoundingBoxDescent,
+      fontBoundingBoxAscent: m.fontBoundingBoxAscent, fontBoundingBoxDescent: m.fontBoundingBoxDescent };
+  };
+  P.fillText = function (str, x, y, maxW) {
+    const a = this.textAlign;
+    const rtl = this.direction === "rtl";
+    const right = a === "right" || (a === "end" && !rtl) || (a === "start" && rtl);
+    if (a !== "center" && !right) return maxW === undefined ? rawFill.call(this, str, x, y) : rawFill.call(this, str, x, y, maxW);
+    let w = width(this, str);
+    if (maxW !== undefined && w > maxW) w = maxW;
+    this.textAlign = "left";
+    const lx = a === "center" ? x - w / 2 : x - w;
+    if (maxW === undefined) rawFill.call(this, str, lx, y); else rawFill.call(this, str, lx, y, maxW);
+    this.textAlign = a;
+  };
+  P.__guarded = true;
+  return G;
+})();
 let DPR = 1;
 const MAX_DPR = 2;
 
