@@ -4580,6 +4580,24 @@ function scoreboardRows() {
 // localStorage boş açılırsa (WebView verisi silinmişse) oradan geri gelir.
 const SAVE_KEYS = { profile: "eczaci.profile.v1", run: "eczaci.run.v1" };
 const SAVE_VERSION = 1;
+// SÜRÜM GÖÇÜ: kayıt biçimi ileride değişirse SAVE_VERSION artar ve buraya bir adım eklenir
+// (ör. SAVE_MIGRATIONS[1] = s => { ...v1'i v2'ye çevir...; s.v = 2; return s; }).
+// Eskiden sürüm birebir eşleşmezse kayıt SESSİZCE atılıyordu — güncelleme oyuncunun
+// kariyerini silerdi. Artık eski kayıt adım adım yükseltilir; yalnız GELECEK sürümün
+// kaydı (oyuncu eski sürüme dönmüşse) okunmaz, üzerine de yazılmaz.
+const SAVE_MIGRATIONS = {};
+function migrateSave(o) {
+  if (!o || typeof o !== "object" || !Number.isInteger(o.v)) return null;
+  if (o.v > SAVE_VERSION) return null;
+  while (o.v < SAVE_VERSION) {
+    const step = SAVE_MIGRATIONS[o.v];
+    if (!step) return null;
+    o = step(o);
+    if (!o || !Number.isInteger(o.v)) return null;
+  }
+  return o;
+}
+let _saveFromFuture = false;
 // Boot self-test'leri sahte kariyerler oynatıyor; kayıt ancak boot bitince açılır.
 let _saveReady = false;
 let _lastRunJson = "", _runSaveClock = 0;
@@ -4598,6 +4616,7 @@ const SaveStore = {
     catch (e) { return null; }
   },
   set(k, v) {
+    if (_saveFromFuture) return false;        // daha yeni sürümün kaydı var: dokunma
     const s = v == null ? null : JSON.stringify(v);
     let ok = true;
     try { if (s == null) localStorage.removeItem(k); else localStorage.setItem(k, s); }
@@ -4620,7 +4639,8 @@ function saveProfile() {
   });
 }
 function applyProfile(p) {
-  if (!p || p.v !== SAVE_VERSION) return false;
+  p = migrateSave(p);
+  if (!p) return false;
   if (typeof p.name === "string" && p.name.trim()) game.pharmacyName = p.name.trim().slice(0, NAME_MAX);
   if (p.records) for (const k of ["peak", "seasons", "bestSeason"]) {
     const n = +p.records[k];
@@ -4688,7 +4708,8 @@ function saveNow() {
 
 // Diskteki koşuyu oyuna kur. Başarılıysa oyuncu menüde DEVAM ET ile kaldığı yere döner.
 function applyRun(s) {
-  if (!s || s.v !== SAVE_VERSION || !s.data || !s.data.career) return false;
+  s = migrateSave(s);
+  if (!s || !s.data || !s.data.career) return false;
   const at = s.at;
   if (at !== "start" && at !== "mid" && at !== "dayend" && at !== "seasonend") return false;
   const d = s.data;
@@ -4753,21 +4774,26 @@ function applyRun(s) {
 function loadSave() {
   game.resumeState = game.hasRun ? STATE.PLAYING : null;   // self-test artığı kalmasın
   let prof = SaveStore.get(SAVE_KEYS.profile), run = SaveStore.get(SAVE_KEYS.run);
+  // diskte daha YENİ sürümün kaydı varsa (oyuncu eski sürüme dönmüş) üzerine yazılmaz
+  _saveFromFuture = [prof, run].some(o => o && Number.isInteger(o.v) && o.v > SAVE_VERSION);
   let okP = false, okR = false;
   try { okP = applyProfile(prof); } catch (e) { console.warn("[kayıt] profil okunamadı", e); }
   try { okR = applyRun(run); } catch (e) { console.warn("[kayıt] koşu okunamadı", e); okR = false; }
   _saveReady = true;
   // localStorage boşsa (iOS WebView verisi silinmiş olabilir) yerel ayna denenir
+  // Aynı yol, localStorage'daki kayıt BOZUK/okunamaz çıktığında da denenir (eskiden yalnız
+  // boşsa deneniyordu: yarım yazılmış bir kayıt kariyeri kaybettiriyordu).
   const P = nativePrefs();
-  if (P && (!prof || !run)) {
+  if (P && (!okP || !okR)) {
     Promise.all([P.get({ key: SAVE_KEYS.profile }), P.get({ key: SAVE_KEYS.run })]).then(([a, b]) => {
-      const pa = a && a.value ? JSON.parse(a.value) : null, rb = b && b.value ? JSON.parse(b.value) : null;
+      const js = x => { try { return x && x.value ? JSON.parse(x.value) : null; } catch (e) { return null; } };
+      const pa = js(a), rb = js(b);
       const onMenu = game.state === STATE.MENU || game.state === STATE.NAMING;
-      if (!prof && pa && applyProfile(pa)) {
+      if (!okP && pa && applyProfile(pa)) {
         try { localStorage.setItem(SAVE_KEYS.profile, a.value); } catch (e) {}
         if (game.state === STATE.NAMING && game.pharmacyName) game.state = STATE.MENU;
       }
-      if (!run && rb && onMenu && !game.hasRun && applyRun(rb)) {
+      if (!okR && rb && onMenu && !game.hasRun && applyRun(rb)) {
         try { localStorage.setItem(SAVE_KEYS.run, b.value); } catch (e) {}
       }
     }).catch(() => {});
@@ -10997,6 +11023,28 @@ canvas.addEventListener("mouseup", (e) => { const p = getEventPos(e); onUp(p.x, 
 // =====================================================================
 //  ANA DÖNGÜ (60 FPS)
 // =====================================================================
+// HATA GÜNLÜĞÜ: sahada (oyuncunun telefonunda) çıkan hatalar son 10 kayıtla saklanır.
+// Mac'te Safari → Geliştir → iPhone → oyun → Konsol: hataGunlugu() ile okunur.
+// Ağ yok, dışarı hiçbir şey gönderilmez (App Store: Veri Toplanmıyor).
+const ERRLOG_KEY = "eczaci.errlog";
+function logError(where, err) {
+  try {
+    const list = JSON.parse(localStorage.getItem(ERRLOG_KEY) || "[]");
+    const msg = String((err && (err.stack || err.message)) || err).slice(0, 600);
+    if (list.length && list[list.length - 1].msg === msg) { list[list.length - 1].n = (list[list.length - 1].n || 1) + 1; }
+    else list.push({ t: new Date().toISOString(), where, state: game && game.state, day: game && game.dayNumber, msg });
+    localStorage.setItem(ERRLOG_KEY, JSON.stringify(list.slice(-10)));
+  } catch (e) { /* günlük tutulamazsa oyun sürer */ }
+}
+function hataGunlugu() {
+  try { return JSON.parse(localStorage.getItem(ERRLOG_KEY) || "[]"); } catch (e) { return []; }
+}
+if (typeof window !== "undefined") {
+  window.hataGunlugu = hataGunlugu;
+  window.addEventListener("error", e => logError("window", e.error || e.message));
+  window.addEventListener("unhandledrejection", e => logError("promise", e.reason));
+}
+
 let lastTime = performance.now();
 let _loopErrors = 0;
 // KARE HIZI: hareket varken 60, sakin anlarda 30 kare/sn. Ekranın çoğu zaman durağan
@@ -11027,7 +11075,7 @@ function loop(now) {
     update(dt);
     render();
   } catch (err) {
-    if (_loopErrors++ < 5) console.error("[döngü] kare atlandı:", err);
+    if (_loopErrors++ < 5) { console.error("[döngü] kare atlandı:", err); logError("loop", err); }
     canvas.width = canvas.width;    // yarım kalan save/clip/alfa durumunu sıfırla (render her kare baştan kurar)
   }
 }
