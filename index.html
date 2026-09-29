@@ -4179,6 +4179,9 @@ function endDay() {
   foldDayIntoSeason(met);
   // KARİYER SKORU = ulaşılan EN YÜKSEK kasa. Her gün sonunda güncellenir (istenen kadans).
   updateCareerPeak();
+  // …ve HER GÜN SONUNDA Game Center'a gider (Kerem): oyuncu sezonu bitirmeyi beklemeden 1. günden
+  // sıralamada görünür. Game Center yalnız en iyisini tutar; gönderilemezse GC.pending'de bekler.
+  if (!_noRecords && game.career) GC.submit(game.career.peakMoney);
   // Ceza itibarı sıfırlayıp sezonu (ve kariyeri) KAPATABİLİR. O yüzden fold/peak'ten
   // SONRA uygulanır ve hemen ardından state kontrol edilir: kapanmışsa DAYEND'e çekmek
   // finishSeason'ın kurduğu bitiş state'ini sessizce ezerdi.
