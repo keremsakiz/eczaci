@@ -4533,12 +4533,246 @@ const GC = {
       .then(() => { this.sending = false; if (this.pending <= sent) { this.pending = 0; saveProfile(); } this.refresh(true); })
       .catch(() => { this.sending = false; });           // kalır; menüye dönüşte (refresh) yeniden denenir
   },
+  // ANLIK skor (Kerem: gün sonunu bekleme): oyun her kayıt aldığında o ana kadarki en yüksek
+  // kasa gider. En fazla 15 sn'de bir, yalnız değer ARTTIYSA (Game Center en iyisini tutar).
+  liveSent: 0, liveAt: 0,
+  live() {
+    if (_noRecords || !game.career || Tutorial.active) return;
+    const v = Math.round(Math.max(game.career.peakMoney || 0, game.money || 0));
+    const now = Date.now();
+    if (!(v > this.liveSent) || v <= CONFIG.startMoney || now - this.liveAt < 15000) return;   // başlangıç kasası sıralamaya yazılmaz
+    this.liveSent = v; this.liveAt = now;
+    this.submit(v);
+  },
   // Menüdeki panele dokunuş: oturum yoksa giriş, varsa Apple'ın sıralama ekranı.
   tap() {
     if (!this.plugin) return false;
     if (!this.authed) { this.signIn(true); return true; }
     this.plugin.showLeaderboard({ leaderboardId: GC_LEADERBOARD_ID }).catch(() => {});
     return true;
+  }
+};
+
+
+// =====================================================================
+//  EĞİTİM — yeni oyuncuya ZORUNLU, adım adım (Kerem: "yeni indiren zorlanıyor")
+// =====================================================================
+// İlk kariyerin 1. günü başlamadan önce üç senaryolu müşteri gelir: semptomlu (Ağrıban),
+// geçerli reçete (defter kontrolü + ONAYLA + sekme değiştirme) ve sahte reçete (REDDET).
+// Her adımda ekran kararır, yalnız yapılacak şey aydınlık kalır; oyuncu yalnız oraya
+// dokunabilir. Eğitim bitince kasa/stok/itibar/istatistik eğitim ÖNCESİ hâline döner ve
+// asıl 1. gün baştan başlar (eğitimde kazanılan para sayılmaz). Eğitim sırasında kayıt
+// alınmaz; uygulama yarıda kapanırsa DEVAM ET'te eğitim yeniden başlar. Bir kez bitince
+// profile yazılır (tutorialDone). Güncellemeyle gelen eski oyuncular (rekoru ya da süren
+// kariyeri olan) eğitimi görmez.
+const Tutorial = {
+  active: false, done: false, i: 0, snap: null, t: 0, stepT: 0,
+  shouldStart() {
+    return !this.done && !this.active && _saveReady && !_noRecords &&
+      !(typeof window !== "undefined" && window.__NO_TUTORIAL) &&
+      game.career && careerSeason() === 1 && game.dayNumber === 1 && game.dayCompleted === 0;
+  },
+  start() {
+    const snap = {};
+    for (const k of RUN_FIELDS) snap[k] = game[k];
+    this.snap = JSON.parse(JSON.stringify(snap));
+    game.queue = []; game.counter = []; game.flyAnims = []; game.feedback = null; game.bagAnim = null;
+    game.dayScheduleIdx = 0; game.daySpawned = 0; game.spawnTimer = 0;
+    game.depotOpen = false; game.pcScreen = "home"; game.bookState = "closed"; game.bookT = 0;
+    game.state = STATE.PLAYING;
+    this.active = true; this.i = 0; this.t = 0;
+    this.enter();
+  },
+  finish() {
+    for (const k in this.snap) game[k] = this.snap[k];
+    this.snap = null;
+    this.active = false; this.done = true;
+    game.queue = []; game.counter = []; game.flyAnims = []; game.feedback = null; game.bagAnim = null;
+    game.depotOpen = false; game.pcScreen = "home"; game.bookState = "closed"; game.bookT = 0;
+    game.dayScheduleIdx = 0; game.daySpawned = 0; game.dayCompleted = 0; game.spawnTimer = 0;
+    game.activeGroup = GROUPS[0].id; layout.shelfScroll = 0; buildShelf(); ensureActiveTabVisible();
+    invalidateDaySchedules(); beginDaySchedule(game.dayNumber);
+    saveProfile();
+    spawnPatient();                 // asıl 1. günün ilk müşterisi
+    saveRun("start");
+  },
+  // --- senaryolu müşteriler ---
+  patient(kind) {
+    const av = key => PATIENT_AVATARS.find(a => a.assetKey === key) || PATIENT_AVATARS[0];
+    let p;
+    if (kind === "symptom") {
+      p = makePatient({});
+      const items = [{ symptom: SYMPTOMS.find(x => x.label === "Başım ağrıyor"), qty: 1 }];
+      p.request = { type: "symptom", items, symptom: items[0].symptom, line: buildSymptomLine(items) };
+      p.line = p.request.line;
+      const a = av("patient_granny"); p.avatar = a.emoji; p.avatarKey = a.assetKey;
+    } else {
+      p = makePatient({ forcePrescription: true, forceFake: kind === "fake" });
+      const r = p.request;
+      r.items = [{ id: kind === "fake" ? this.medA() : this.medB(), qty: 1 }];
+      r.hasStamp = true; r.expired = false; r.date = dateRx(0);
+      if (kind === "fake") { const f = FAKE_DOCTORS[0]; r.flaws = ["fake_doctor"]; r.doctor = f.name; r.sig = f.sig; }
+      else { const d = pickKnownDoctor(); r.flaws = []; r.doctor = d.name; r.sig = d.sig; r.fake = false; }
+      const a = av(kind === "fake" ? "patient_youth" : "patient_man"); p.avatar = a.emoji; p.avatarKey = a.assetKey;
+    }
+    p.bonus = true;
+    enqueuePatient(p);
+    p.maxPatience = p.patience = 1e6;          // eğitimde acele yok
+    return p;
+  },
+  medA() { return (MEDICINES.find(m => m.category === "Ağrı/Ateş" && m.group === "agri_ates") || MEDICINES[0]).id; },
+  medB() { return (MEDICINES.find(m => m.group === "soguk") || MEDICINES[1]).id; },
+  // --- hedef dikdörtgenleri ---
+  card(id) {
+    const b = (layout.shelfButtons || []).find(b => b.id === id);
+    return b ? { x: b.x, y: b.y - (layout.shelfScroll || 0), w: b.w, h: b.h } : null;
+  },
+  tab(gid) {
+    const ta = layout.tabsArea, t = (layout.tabs || []).find(t => t.group.id === gid);
+    if (!ta || !t) return null;
+    return { x: ta.x + (layout.tabsOffset || 0) + t.x - (layout.tabScroll || 0), y: ta.y, w: t.w * 0.84, h: ta.h };
+  },
+  rxPanel() {
+    const S = layout.stage, a = layout._patientArea;
+    if (!S || !a) return null;
+    return { x: S.x + S.w * 0.04, y: a.y + S.h * 0.006, w: S.w * 0.42, h: Math.min(S.h * 0.40, a.h * 0.94) };
+  },
+  sellFlow() {                      // terminal → SATIŞ → SERVİS ET: sıradaki dokunuş
+    if (!game.depotOpen) return layout.pcBtn;
+    if (game.pcScreen !== "sale") return (layout.pcMenuBtns || []).find(b => b.key === "sale") || null;
+    return layout.saleServeBtn;
+  },
+  get steps() {
+    const T = this, front = () => activePatient();
+    const served = () => !!(game.bagAnim || game.feedback);
+    const idle = () => !game.bagAnim && !game.feedback && game.queue.length === 0;
+    const nm = id => (getMedicine(id) || {}).name || id;
+    const doc = () => { const p = front(); return (p && p.request && p.request.doctor) || "doktor"; };
+    return [
+      { text: "Eczanene hoş geldin! 👋 Kısa bir eğitimle başlayalım. Devam etmek için ekrana dokun.", tap: true },
+      { enter: () => T.patient("symptom"), target: () => layout._talkRect || layout._patientArea,
+        text: "İlk müşterin geldi. Derdini konuşma balonundan oku: başı ağrıyor.", tap: true },
+      { enter: () => { game.activeGroup = "agri_ates"; layout.shelfScroll = 0; buildShelf(); ensureActiveTabVisible(); },
+        target: () => T.card(T.medA()), text: "Baş ağrısı → AĞRI rafı. " + nm(T.medA()).toLocaleUpperCase("tr") + "'a dokun.",
+        done: () => cartCount(T.medA()) >= 1 },
+      { target: () => layout.pcBtn, text: "İlaç terminale gitti. Satış yapmak için tezgahtaki bilgisayara dokun.",
+        done: () => game.depotOpen },
+      { target: () => (layout.pcMenuBtns || []).find(b => b.key === "sale"), text: "SATIŞ ekranını aç.",
+        done: () => game.depotOpen && game.pcScreen === "sale" },
+      { target: () => layout.saleServeBtn, text: "Sepette " + nm(T.medA()) + " ×1 var. İlacı vermek için SERVİS ET'e bas.",
+        done: served },
+      { text: "👍 Doğru ilaç = para + itibar. Yanlış ilaç verirsen zarar edersin.", done: idle, wait: true },
+      { enter: () => T.patient("rx"), target: () => T.rxPanel(),
+        text: "Bu müşteri REÇETEYLE geldi. Reçetede doktor adı, tarih, kaşe ve imza var. Her birini kontrol et.", tap: true },
+      { target: () => layout.bookClosedRect, text: "Reçeteyi yazan: " + doc() + ". Bu doktor gerçek mi? Tezgahtaki DOKTOR LİSTESİ defterine dokun.",
+        done: () => game.bookState === "open" },
+      { any: true, text: doc() + " bu listede var ✓ Defteri kapatmak için dışarıya dokun.",
+        done: () => game.bookState === "closed" },
+      { target: () => layout.approveBtn, text: "Reçete geçerli. ONAYLA'ya bas.",
+        done: () => { const p = front(); return !!(p && p.decided === "approve"); } },
+      { target: () => T.tab("soguk"), text: "Reçetede " + nm(T.medB()) + " ×1 yazıyor. Önce SOĞUK sekmesine geç.",
+        done: () => game.activeGroup === "soguk" },
+      { target: () => T.card(T.medB()), text: nm(T.medB()).toLocaleUpperCase("tr") + "'e dokun. Reçetede ilaç VE adet birebir tutmalı.",
+        done: () => cartCount(T.medB()) >= 1 },
+      { target: () => T.sellFlow(), text: "Şimdi bilgisayar → SATIŞ → SERVİS ET.", done: served },
+      { text: "Harika! 💊 Reçeteli satışta istenenin tam aynısını ver.", done: idle, wait: true },
+      { enter: () => T.patient("fake"), target: () => T.rxPanel(),
+        text: "Bir reçete daha. Bu sefer dikkat: reçeteyi yazan " + doc() + "…", tap: true },
+      { target: () => layout.bookClosedRect, text: "…bu adı defterde ara.", done: () => game.bookState === "open" },
+      { any: true, text: doc() + " listede YOK → reçete SAHTE! Defteri kapat.", done: () => game.bookState === "closed" },
+      { target: () => layout.rejectBtn, text: "Sahte reçeteye ilaç verme: REDDET'e bas.",
+        done: () => { const p = front(); return !p || p.decided === "reject"; } },
+      { text: "🕵️ Sahteyi yakaladın, ödül kazandın! Tarihi geçmiş, kaşesiz ya da imzası tutmayan reçeteler de sahtedir.", done: idle, wait: true },
+      { target: () => layout._hud, text: "Üstte gün, tarih, itibarın ve kasan var. Her günün bir kazanç hedefi var: tutturursan itibar kazanırsın. İtibar sıfırlanırsa kariyer biter.", tap: true },
+      { target: () => layout.pcBtn, text: "Bilgisayardan depoya ilaç siparişi verir, eczaneni geliştirirsin. Stoğu biten ilacı satamazsın!", tap: true },
+      { text: "Hazırsın! 🎉 İlk iş günün şimdi başlıyor. Bol kazançlar, eczacı!", tap: true, last: true }
+    ];
+  },
+  step() { return this.steps[this.i]; },
+  enter() { this.stepT = 0; const st = this.step(); if (st && st.enter) st.enter(); },
+  next() {
+    const st = this.step();
+    if (st && st.last) { this.finish(); return; }
+    this.i++; this.enter();
+  },
+  update(dt) {
+    if (!this.active) return;
+    this.t += dt; this.stepT += dt;
+    const st = this.step();
+    if (st && st.done && this.stepT > 0.15 && st.done()) this.next();
+  },
+  // dokunuşa izin var mı? (false = yut)
+  onTap(px, py) {
+    const st = this.step();
+    if (!st) return true;
+    if (st.tap) { if (this.stepT > 0.35) { sfx("tap"); this.next(); } return false; }
+    if (st.any) return true;
+    if (st.wait) return false;
+    const r = st.target && st.target();
+    if (r) {
+      const pad = 8;
+      if (px >= r.x - pad && px <= r.x + r.w + pad && py >= r.y - pad && py <= r.y + r.h + pad) return true;
+    }
+    sfx("deny");
+    return false;
+  },
+  draw() {
+    if (!this.active) return;
+    const st = this.step();
+    if (!st) return;
+    const W = layout.w, H = layout.h, S = layout.stage;
+    const r = st.target ? st.target() : null;
+    const pulse = 0.5 + 0.5 * Math.sin(this.t * 5);
+    ctx.save();
+    // karartma + spot
+    ctx.beginPath();
+    ctx.rect(0, 0, W, H);
+    if (r) {                         // delik: yuvarlak köşeli alt yol (roundRect beginPath yaptığı için elle)
+      const pad = 6, x = r.x - pad, y = r.y - pad, w = r.w + pad * 2, h = r.h + pad * 2;
+      const rr = Math.min(18, w / 2, h / 2);
+      ctx.moveTo(x + rr, y);
+      ctx.arcTo(x + w, y, x + w, y + h, rr); ctx.arcTo(x + w, y + h, x, y + h, rr);
+      ctx.arcTo(x, y + h, x, y, rr); ctx.arcTo(x, y, x + w, y, rr); ctx.closePath();
+    }
+    ctx.fillStyle = st.wait ? "rgba(0,0,0,0.25)" : "rgba(8,5,3,0.66)";
+    ctx.fill("evenodd");
+    if (r) {
+      const pad = 6 + pulse * 3;
+      ctx.shadowColor = "rgba(255,190,90,0.95)"; ctx.shadowBlur = 14;
+      strokeRoundRect(r.x - pad, r.y - pad, r.w + pad * 2, r.h + pad * 2, 14, "rgba(255,200,110," + (0.7 + 0.3 * pulse) + ")", 3);
+      ctx.shadowBlur = 0;
+      if (!st.tap && !st.any) {      // dokunulacak yeri gösteren parmak
+        const fx = r.x + r.w * 0.5, fy = r.y + r.h + 10 + pulse * 8;
+        const up = fy + 34 < H - 8;
+        drawEmoji("👆", fx, up ? fy + 14 : r.y - 24 - pulse * 8, 30, "#fff");
+      }
+    }
+    // yönerge kutusu: hedef aşağıdaysa üstte, yukarıdaysa altta
+    const bw = Math.min(S.w * 0.92, 520), bx = S.x + (S.w - bw) / 2;
+    const cy = r ? r.y + r.h / 2 : H / 2;
+    const below = !r || cy < H * 0.5;
+    withCardFont(() => {
+      const fs = Math.max(14, Math.min(19, S.w * 0.043));
+      const lines = wrapToLines(st.text, bw - 36, fs, 6);
+      const lh = fs * 1.32;
+      const bh = 44 + lines.length * lh + (st.tap ? fs * 1.6 : 0);
+      const pinBottom = !r && game.bookState !== "closed";      // açık defterin listesini örtme
+      let by = pinBottom ? H - bh - 16 - (window.__safeRawBottom || 0) : below ? (r ? Math.min(H - bh - 20, r.y + r.h + 64) : H * 0.5 - bh / 2) : Math.max(16, r.y - bh - 64);
+      if (r && below && by < r.y + r.h + 12) by = r.y + r.h + 12;
+      ctx.shadowColor = "rgba(0,0,0,0.6)"; ctx.shadowBlur = 16; ctx.shadowOffsetY = 4;
+      fillRoundRect(bx, by, bw, bh, 16, "#f4ead6");
+      ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+      strokeRoundRect(bx, by, bw, bh, 16, "#b8894a", 2.5);
+      const n = this.steps.length;
+      text("EĞİTİM " + (this.i + 1) + "/" + n, bx + 18, by + 20, fs * 0.72, "#9a6b2c", "left", "800");
+      let ly = by + 24 + lh * 0.75;
+      for (const ln of lines) { text(ln, bx + 18, ly, fs, "#2e2416", "left", "700"); ly += lh; }
+      if (st.tap) {
+        const a = 0.55 + 0.45 * pulse;
+        text("Devam için dokun ›", bx + bw - 18, by + bh - fs * 0.95, fs * 0.8, "rgba(154,107,44," + a + ")", "right", "800");
+      }
+    });
+    ctx.restore();
   }
 };
 
@@ -4650,7 +4884,8 @@ function saveProfile() {
   SaveStore.set(SAVE_KEYS.profile, {
     v: SAVE_VERSION, name: game.pharmacyName, records: game.records,
     sound: MenuMusic.on, radio: Radio.on, station: Radio.station,
-    gcPending: GC.pending || 0      // Game Center'a henüz gidemeyen en iyi kariyer skoru
+    gcPending: GC.pending || 0,     // Game Center'a henüz gidemeyen en iyi kariyer skoru
+    tutorialDone: Tutorial.done
   });
 }
 function applyProfile(p) {
@@ -4663,6 +4898,9 @@ function applyProfile(p) {
   }
   if (typeof p.sound === "boolean") MenuMusic.on = p.sound;
   if (Number.isFinite(p.gcPending) && p.gcPending > 0) GC.pending = Math.round(p.gcPending);
+  // eğitim: bayrak yoksa (güncellemeyle gelen eski oyuncu) rekoru olan eğitimi görmez
+  if (typeof p.tutorialDone === "boolean") Tutorial.done = Tutorial.done || p.tutorialDone;
+  else if (p.records && +p.records.peak > 0) Tutorial.done = true;
   if (typeof p.radio === "boolean") Radio.on = p.radio;
   if (Number.isInteger(p.station) && p.station >= 0 && p.station < RADIO_STATIONS.length) {
     Radio.station = p.station;
@@ -4687,6 +4925,7 @@ function saveRun(at) {
   const j = JSON.stringify(s);
   if (j === _lastRunJson) return;
   if (SaveStore.set(SAVE_KEYS.run, s)) _lastRunJson = j;   // yazılamadıysa sonraki turda yeniden dene
+  GC.live();                                               // kayıt alındı → skor da anlık gitsin
 }
 function clearRun() {
   if (!_saveReady) return;
@@ -4705,6 +4944,7 @@ function tickRunSave(dt) {
   if (at) saveRun(at);
 }
 function checkpointNow() {
+  if (Tutorial.active) return null;       // eğitimde kayıt yok (bitince 1. gün baştan kaydedilir)
   const st = game.state === STATE.MENU || game.state === STATE.HOWTO || game.state === STATE.ABOUT ? game.resumeState : game.state;
   if (st === STATE.DAYEND) return "dayend";
   if (st === STATE.SEASONEND) return "seasonend";
@@ -4813,6 +5053,8 @@ function loadSave() {
       }
     }).catch(() => {});
   }
+  // süren kariyeri 1. günün ötesinde olan (eski sürümden gelen) oyuncu eğitimi görmez
+  if (okR && !(careerSeason() === 1 && game.dayNumber === 1)) Tutorial.done = true;
   return { profile: okP, run: okR };
 }
 
@@ -4823,6 +5065,7 @@ function canResume() {
 function resumeRun() {
   const st = game.resumeState;
   game.state = (st === STATE.DAYEND || st === STATE.SEASONEND) ? st : STATE.PLAYING;
+  if (game.state === STATE.PLAYING && Tutorial.shouldStart()) Tutorial.start();   // eğitim yarıda kalmıştı
 }
 if (typeof window !== "undefined" && window.addEventListener) {
   // arka plana alınırken kart ekranındaki son hâl (ör. depo siparişi) kaçmasın
@@ -5033,6 +5276,7 @@ function triggerGameOver() { finishSeason("reputation"); }
 // =====================================================================
 function update(dt) {
   game.clock += dt;
+  Tutorial.update(dt);
   tickRunSave(dt);                // kart ekranlarındaki değişiklik (depo siparişi) kayda geçsin
 
   // doktor defteri açılma/kapanma animasyonu
@@ -5084,13 +5328,12 @@ function update(dt) {
   game.spawnTimer += dt;
   const prog = goalN > 0 ? game.dayCompleted / goalN : 0;       // gün ilerledikçe hızlan
   const interval = lerp(CONFIG.spawnInterval, CONFIG.minSpawnInterval, prog);
-  if (game.spawnTimer >= interval && game.queue.length < effMaxQueue() && game.daySpawned < goalN) {
+  if (!Tutorial.active && game.spawnTimer >= interval && game.queue.length < effMaxQueue() && game.daySpawned < goalN) {
     game.spawnTimer = 0;
     spawnPatient();
   }
   // Dilenci — programın DIŞINDA, kendi planına göre girer (spawn sayacına karışmaz)
-  maybeSpawnBeggar();
-  maybeSpawnBeggarPay();      // vadesi gelen borçlu (aynı bonus hasta yolu)
+  if (!Tutorial.active) { maybeSpawnBeggar(); maybeSpawnBeggarPay(); }      // vadesi gelen borçlu (aynı bonus hasta yolu)
 
   // pozisyon + giriş animasyonları
   for (let i = 0; i < game.queue.length; i++) {
@@ -9376,6 +9619,7 @@ function render() {
   drawNightIntro();                   // "NÖBET BAŞLIYOR" geçiş kartı (modal)
   if (game.depotOpen) drawPcPanel();  // PC paneli (PLAYING/DAYEND üstünde modal)
   drawBookOverlay();   // defter açılma animasyonu + açık panel (en üstte)
+  Tutorial.draw();     // eğitim katmanı (spot + yönerge) her şeyin üstünde
 }
 
 // =====================================================================
@@ -10770,6 +11014,7 @@ function selectTabAt(px, py) {
 function handleTap(px, py) {
   noteState();
   if (performance.now() - _stateWatch.at < TAP_GUARD_MS) return;   // ekran az önce değişti
+  if (Tutorial.active && game.state === STATE.PLAYING && !Tutorial.onTap(px, py)) return;   // eğitim: yalnız gösterilen yer
   // defter animasyon sırasında tüm dokunuşları yut
   if (game.bookState === "opening" || game.bookState === "closing") return;
 
@@ -10826,7 +11071,7 @@ function handleTap(px, py) {
         sfx("deny"); game.newCareerAskUntil = game.clock + 3; game.newCareerAskAt = performance.now();
       } else if (canResume() && performance.now() - (game.newCareerAskAt || 0) < 400) {
         /* çift dokunuşun ikincisi onay sayılmaz — süren kariyer yanlışlıkla silinmesin */
-      } else { game.newCareerAskUntil = 0; sfx("door"); startNewCareer(); }
+      } else { game.newCareerAskUntil = 0; sfx("door"); startNewCareer(); if (Tutorial.shouldStart()) Tutorial.start(); }
     }
     else if (canResume() && layout.menuResumeBtn && pointInRect(px, py, layout.menuResumeBtn)) { sfx("tap"); resumeRun(); }  // reset YOK
     else if (layout.menuHowBtn && pointInRect(px, py, layout.menuHowBtn)) { sfx("tap"); openHowTo(); }
