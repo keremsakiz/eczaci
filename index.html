@@ -4637,6 +4637,10 @@ const Tutorial = {
     if (!S || !a) return null;
     return { x: S.x + S.w * 0.04, y: a.y + S.h * 0.006, w: S.w * 0.42, h: Math.min(S.h * 0.40, a.h * 0.94) };
   },
+  rxPart(k) {                       // öndeki müşterinin reçetesindeki bir parça (kaşe/doktor/tarih/imza/ilaçlar)
+    const q = layout._rxParts, f = activePatient();
+    return q && f && q.p === f && q[k] ? q[k] : null;
+  },
   sellFlow() {                      // terminal → SATIŞ → SERVİS ET: sıradaki dokunuş
     if (!game.depotOpen) return layout.pcBtn;
     if (game.pcScreen !== "sale") return (layout.pcMenuBtns || []).find(b => b.key === "sale") || null;
@@ -4663,7 +4667,17 @@ const Tutorial = {
         done: served },
       { text: "👍 Doğru ilaç = para + itibar. Yanlış ilaç verirsen zarar edersin.", done: idle, wait: true },
       { enter: () => T.patient("rx"), target: () => T.rxPanel(),
-        text: "Bu müşteri REÇETEYLE geldi. Reçetede doktor adı, tarih, kaşe ve imza var. Her birini kontrol et.", tap: true },
+        text: "Bu müşteri REÇETEYLE geldi. Reçeteyi vermeden önce 4 şeyi kontrol edersin. Tek tek bakalım.", tap: true },
+      { target: () => T.rxPart("stamp"), label: "KAŞE",
+        text: "Sol üstteki yeşil ✚ mühür: KAŞE. Gerçek reçetede her zaman olur. Kaşe yoksa reçete sahtedir.", tap: true },
+      { target: () => T.rxPart("doctor"), label: "DOKTOR ADI",
+        text: "Kaşenin yanındaki isim: DOKTOR ADI. Bu adı birazdan doktor listesi defterinde arayacaksın.", tap: true },
+      { target: () => T.rxPart("date"), label: "TARİH",
+        text: "Sağ üstteki: TARİH. Tarihi geçmiş (eski) reçete geçersizdir; üstteki bugünün tarihiyle karşılaştır.", tap: true },
+      { target: () => T.rxPart("items"), label: "İLAÇLAR",
+        text: "Ortada: İLAÇLAR ve ADETLERİ (× 1). Müşteriye tam olarak bunu vereceksin.", tap: true },
+      { target: () => T.rxPart("sig"), label: "İMZA",
+        text: "Sağ alttaki el yazısı: İMZA. İmza doktorun adıyla uyuşmalı; başka birinin imzasıysa reçete sahtedir.", tap: true },
       { target: () => layout.bookClosedRect, text: "Reçeteyi yazan: " + doc() + ". Bu doktor gerçek mi? Tezgahtaki DOKTOR LİSTESİ defterine dokun.",
         done: () => game.bookState === "open" },
       { any: true, text: doc() + " bu listede var ✓ Defteri kapatmak için dışarıya dokun.",
@@ -4676,7 +4690,7 @@ const Tutorial = {
         done: () => cartCount(T.medB()) >= 1 },
       { target: () => T.sellFlow(), text: "Şimdi bilgisayar → SATIŞ → SERVİS ET.", done: served },
       { text: "Harika! 💊 Reçeteli satışta istenenin tam aynısını ver.", done: idle, wait: true },
-      { enter: () => T.patient("fake"), target: () => T.rxPanel(),
+      { enter: () => T.patient("fake"), target: () => T.rxPart("doctor") || T.rxPanel(), label: "DOKTOR ADI",
         text: "Bir reçete daha. Bu sefer dikkat: reçeteyi yazan " + doc() + "…", tap: true },
       { target: () => layout.bookClosedRect, text: "…bu adı defterde ara.", done: () => game.bookState === "open" },
       { any: true, text: doc() + " listede YOK → reçete SAHTE! Defteri kapat.", done: () => game.bookState === "closed" },
@@ -4741,6 +4755,22 @@ const Tutorial = {
       ctx.shadowColor = "rgba(255,190,90,0.95)"; ctx.shadowBlur = 14;
       strokeRoundRect(r.x - pad, r.y - pad, r.w + pad * 2, r.h + pad * 2, 14, "rgba(255,200,110," + (0.7 + 0.3 * pulse) + ")", 3);
       ctx.shadowBlur = 0;
+      if (st.label) {                // parçanın adı: hedefin hemen altında (üst sıradaysa) ya da üstünde
+        withCardFont(() => {
+          const lf = Math.max(12, Math.min(16, S.w * 0.036));
+          ctx.font = uiFont("800", lf);
+          const tw = ctx.measureText(st.label).width + lf * 1.3, th = lf * 1.7;
+          const S2 = layout.stage;
+          let tx = r.x + r.w / 2 - tw / 2;
+          tx = Math.max(S2.x + 6, Math.min(S2.x + S2.w - tw - 6, tx));
+          const above = r.y - pad - th - 6 > (layout._hud ? layout._hud.y + layout._hud.h : 0);
+          const ty = above ? r.y - pad - th - 6 : r.y + r.h + pad + 6;
+          ctx.shadowColor = "rgba(0,0,0,0.5)"; ctx.shadowBlur = 8;
+          fillRoundRect(tx, ty, tw, th, th / 2, "#ffb347");
+          ctx.shadowBlur = 0;
+          text(st.label, tx + tw / 2, ty + th / 2, lf, "#2a1a08", "center", "800");
+        });
+      }
       if (!st.tap && !st.any) {      // dokunulacak yeri gösteren parmak
         const fx = r.x + r.w * 0.5, fy = r.y + r.h + 10 + pulse * 8;
         const up = fy + 34 < H - 8;
@@ -6240,12 +6270,16 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
 
   const ink = "#3a3326", inkSoft = "#8a7c5e";
   const req = p.request;
+  // Parçaların ekrandaki yeri (eğitim bunları tek tek gösterir): kaşe, doktor, tarih, ilaçlar, imza
+  const parts = layout._rxParts = { p };
 
 
   // üst: kaşe (✚) + doktor adı + tarih
   const headY = y + padY + h * 0.045;
   // tarih — sahte/eski olsa da renkle ele vermez; oyuncu tarihi OKUYUP anlamalı
   fitText(req.date, rx, headY, innerW * 0.34, h * 0.05, inkSoft, "right", "600");
+  { const dw = Math.min(innerW * 0.34, ctx.measureText(req.date).width);
+    parts.date = { x: rx - dw, y: headY - h * 0.04, w: dw, h: h * 0.08 }; }
   // kaşe rozeti (gerçeklerde HER ZAMAN çizilir; no_stamp kusurunda HİÇ çizilmez)
   let docX = lx;
   if (req.hasStamp !== false) {
@@ -6257,8 +6291,11 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
     ctx.restore();
     drawEmoji("✚", bx, by, br * 1.5, "#2e7d32", "800");
     docX = lx + br * 2 + w * 0.025;
+    parts.stamp = { x: lx, y: headY - br, w: br * 2, h: br * 2 };
   }
   fitText(req.doctor, docX, headY, (rx - innerW * 0.36) - docX, h * 0.052, ink, "left", "700");
+  { const dw = Math.min((rx - innerW * 0.36) - docX, ctx.measureText(req.doctor).width);
+    parts.doctor = { x: docX, y: headY - h * 0.04, w: dw, h: h * 0.08 }; }
 
   // ayraç
   ctx.strokeStyle = "rgba(120,90,50,0.35)";
@@ -6273,6 +6310,7 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
   const fs = Math.min(lineH * 0.55, h * 0.062);
   const qtyW = innerW * 0.20;
   let ly = listTop + lineH * 0.5;
+  parts.items = { x: lx, y: listTop, w: innerW, h: lineH * items.length };
   for (const it of items) {
     const m = getMedicine(it.id);
     const dotR = fs * 0.36;
@@ -6306,6 +6344,8 @@ function drawPrescriptionPaper(p, cx, top, w, h, alpha) {
   ctx.fillStyle = "#111111";
   ctx.textAlign = "right"; ctx.textBaseline = "middle";
   ctx.fillText(p.request.sig, rx, sep2 + h * 0.055);
+  { const sw = Math.min(innerW * 0.55, ctx.measureText(p.request.sig).width);
+    parts.sig = { x: rx - sw, y: sep2 + h * 0.055 - sg * 0.62, w: sw, h: sg * 1.24 }; }
 
   ctx.restore();   // içerik kırpması
   ctx.restore();   // ana
