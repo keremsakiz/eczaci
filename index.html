@@ -1909,92 +1909,97 @@ const AVATAR_VOICE = {
 // {L} = semptom (büyük harfle), {l} = semptom (küçük harfle)
 const VOICES = {
   yasli: {
-    sym:    ["Evladım, {l}.", "{L}, bir ilaç ver de geçsin.", "Yavrum, {l}. Ne verirsin?", "Aman evladım, {l}."],
-    sym2:   ["{L}, iki kutu ver evladım.", "Evladım {l}, iki tane olsun."],
-    open:   ["Evladım,", "Yavrum,", "Hayırlı işler evladım,"],
-    rx:     ["Evladım, reçetem var.", "Doktor bunları yazdı yavrum.", "Şunlara bir bakıver evladım."],
-    medula: ["E-reçete dediler evladım, kod bu.", "Kızım kodu yazdı, al bak evladım."],
-    thanks: ["Allah razı olsun evladım!", "Eline sağlık yavrum.", "Sağlıcakla kal evladım."],
-    wrong:  ["Bu değildi ki evladım…", "Yanlış verdin yavrum!"],
-    caught: ["Doktor öyle yazdı ama…", "Peki evladım, peki…"],
-    sly:    ["Sağ ol evladım, sağ ol…", "Hayırlısı olsun…"],
-    wrongReject: ["Reçetem gerçekti evladım!", "Ayıp ettin yavrum…"],
-    angry:  ["Bu kadar bekletilir mi evladım?", "Başka eczaneye gideyim bari."],
-    imp1:   ["Daha sürecek mi evladım?", "Ayakta duramıyorum yavrum…"],
-    imp2:   ["Of evladım, of…", "Dizlerim tutmuyor artık!"],
-    night:  ["Gece gece kusura bakma evladım,", "Uyku tutmadı evladım,"],
-    morning:["Hayırlı sabahlar evladım,", "Sabah sabah geldim yavrum,"],
-    price:  ["Her şey pahalandı evladım,", "Emekli maaşı yetmiyor yavrum,"]
+    sym:    ["Evladım, {l}.", "{L}, bir ilaç ver de geçsin.", "Yavrum, {l}. Ne verirsin?", "Aman evladım, {l}.",
+             "Kuzum, {l}. Şöyle etkili bir şey ver.", "{L} yavrum; bizim zamanda ilaç mı vardı…", "Evladım {l}, hekim değilsin ama sen bilirsin."],
+    sym2:   ["{L}, iki kutu ver evladım.", "Evladım {l}, iki tane olsun.", "{L}; iki kutu ver, biri komşuya."],
+    open:   ["Evladım,", "Yavrum,", "Hayırlı işler evladım,", "Kuzum,", "Maşallah gençsin evladım,"],
+    rx:     ["Evladım, reçetem var.", "Doktor bunları yazdı yavrum.", "Şunlara bir bakıver evladım.", "Gözlüğüm yok, sen oku yavrum.", "Doktor yazdı, ben okuyamadım."],
+    medula: ["E-reçete dediler evladım, kod bu.", "Kızım kodu yazdı, al bak evladım.", "Torunum telefona kod attı, bu."],
+    thanks: ["Allah razı olsun evladım!", "Eline sağlık yavrum.", "Sağlıcakla kal evladım.", "Mürüvvetini göresin evladım!", "Ellerin dert görmesin kuzum!"],
+    wrong:  ["Bu değildi ki evladım…", "Yanlış verdin yavrum!", "Gözüm iyi görmez ama bu değil!"],
+    caught: ["Doktor öyle yazdı ama…", "Peki evladım, peki…", "Yaşlıyım diye kandırdılar beni."],
+    sly:    ["Sağ ol evladım, sağ ol…", "Hayırlısı olsun…", "Ah evladım, Allah razı olsun…"],
+    wrongReject: ["Reçetem gerçekti evladım!", "Ayıp ettin yavrum…", "Yaşlı başımla beni üzdün ya…"],
+    angry:  ["Bu kadar bekletilir mi evladım?", "Başka eczaneye gideyim bari.", "Bu yaşta beklenir mi böyle?"],
+    imp1:   ["Daha sürecek mi evladım?", "Ayakta duramıyorum yavrum…", "Otobüs kaçacak evladım…", "Bir sandalye olsaydı bari…"],
+    imp2:   ["Of evladım, of…", "Dizlerim tutmuyor artık!", "Belim koptu evladım!", "Ayakta kök saldım!"],
+    night:  ["Gece gece kusura bakma evladım,", "Uyku tutmadı evladım,", "Uykum kaçtı evladım,"],
+    morning:["Hayırlı sabahlar evladım,", "Sabah sabah geldim yavrum,", "Ezan okunmadan geldim,"],
+    price:  ["Her şey pahalandı evladım,", "Emekli maaşı yetmiyor yavrum,", "Ah o eski fiyatlar,"]
   },
   esnaf: {
-    sym:    ["Kolay gelsin, {l}.", "Hocam, {l}. Bir şey ver.", "{L}, iyi bir şey ver eczacım.", "Eczacım selam, {l}."],
-    sym2:   ["{L}, iki kutu olsun hocam.", "Hocam {l}, iki tane ver."],
-    open:   ["Kolay gelsin,", "Hocam,", "Eczacım selam,"],
-    rx:     ["Hocam reçete bu.", "Kolay gelsin, reçetem var.", "Doktor bunu yazdı eczacım."],
-    medula: ["Sistemde reçete var hocam, kod bu.", "E-reçete var, kodu şu eczacım."],
-    thanks: ["Eyvallah hocam!", "Eline sağlık!", "Hayırlı işler!"],
-    wrong:  ["Hocam bu yanlış!", "Bunu istemedim ki!"],
-    caught: ["Tamam tamam, anladık.", "Hıh… peki hocam."],
-    sly:    ["Eyvallah, eyvallah…", "Sağ ol hocam, hehe."],
-    wrongReject: ["Hocam reçete gerçek ya!", "Bu ne biçim iş hocam?"],
-    angry:  ["Başka eczaneye gidiyorum!", "Vaktim yok hocam, kalsın!"],
-    imp1:   ["Hocam biraz hızlı?", "İşi bıraktım geldim ama…"],
-    imp2:   ["Hadi hocam, hadi!", "Dükkân boş kaldı ya!"],
-    night:  ["Nöbetçi olmanız iyi oldu,", "Gece yarısı kusura bakma,"],
-    morning:["Siftah benden olsun,", "Hayırlı sabahlar hocam,"],
-    price:  ["Yine zam gelmiş hocam,", "Fiyatlar uçmuş hocam,"]
+    sym:    ["Kolay gelsin, {l}.", "Hocam, {l}. Bir şey ver.", "{L}, iyi bir şey ver eczacım.", "Eczacım selam, {l}.",
+             "Usta, {l}. Çabuk bir çare.", "Hocam {l}, dükkânı açamadım.", "{L} be hocam, ilacın hasını ver."],
+    sym2:   ["{L}, iki kutu olsun hocam.", "Hocam {l}, iki tane ver.", "{L}; iki kutu ver, biri yedek."],
+    open:   ["Kolay gelsin,", "Hocam,", "Eczacım selam,", "Selamün aleyküm,", "Bereketli olsun,"],
+    rx:     ["Hocam reçete bu.", "Kolay gelsin, reçetem var.", "Doktor bunu yazdı eczacım.", "Hocam şu reçeteye bir bak.", "Doktor yazdı, sen hallet."],
+    medula: ["Sistemde reçete var hocam, kod bu.", "E-reçete var, kodu şu eczacım.", "Kod bu hocam, sistem senin."],
+    thanks: ["Eyvallah hocam!", "Eline sağlık!", "Hayırlı işler!", "Bereketli olsun hocam!", "Bir gün uğra, çayım var!"],
+    wrong:  ["Hocam bu yanlış!", "Bunu istemedim ki!", "Hocam gözlüğü tak bi!"],
+    caught: ["Tamam tamam, anladık.", "Hıh… peki hocam.", "Bir denedik, olmadı."],
+    sly:    ["Eyvallah, eyvallah…", "Sağ ol hocam, hehe.", "Hocam sen çok iyisin, hehe."],
+    wrongReject: ["Hocam reçete gerçek ya!", "Bu ne biçim iş hocam?", "Hocam esnafa yapılır mı?"],
+    angry:  ["Başka eczaneye gidiyorum!", "Vaktim yok hocam, kalsın!", "Müşteri böyle kaçar hocam!"],
+    imp1:   ["Hocam biraz hızlı?", "İşi bıraktım geldim ama…", "Çırak dükkânı batıracak…", "Hocam vakit nakittir!"],
+    imp2:   ["Hadi hocam, hadi!", "Dükkân boş kaldı ya!", "Ya sabır, ya sabır!"],
+    night:  ["Nöbetçi olmanız iyi oldu,", "Gece yarısı kusura bakma,", "Kepenk kapattım geldim,"],
+    morning:["Siftah benden olsun,", "Hayırlı sabahlar hocam,", "Kepenk yeni açıldı,"],
+    price:  ["Yine zam gelmiş hocam,", "Fiyatlar uçmuş hocam,", "Bizim mala zam yok ama,"]
   },
   genc: {
-    sym:    ["Selam, {l}.", "{L} ya, bir şey var mı?", "Eczacım, {l} ya.", "{L}, işimi görecek bir şey?"],
-    sym2:   ["{L}, iki tane alayım.", "Selam, {l}. İki kutu lütfen."],
-    open:   ["Selam,", "Eczacım,", "Merhaba,"],
-    rx:     ["Reçetem var, bakar mısın?", "Doktor şunları yazdı.", "Selam, reçete getirdim."],
-    medula: ["E-reçete var, kodu şu.", "Meluda'da reçetem var, kod bu."],
-    thanks: ["Süpersin, sağ ol!", "Eyvallah, iyi günler!", "Çok sağ ol!"],
-    wrong:  ["Ya bu değil ki!", "Bu yanlış olmuş!"],
-    caught: ["Ya bir şey olmaz dedim…", "Tamam ya, gidiyorum."],
-    sly:    ["Oh be, geçti!", "Sağ ol, hehe."],
-    wrongReject: ["Ne alaka, reçete gerçek!", "Ciddi misin ya?"],
-    angry:  ["Ya çok bekledim, gidiyorum.", "Of, başka yere bakacağım."],
-    imp1:   ["Daha var mı ya?", "Acelem var ama…"],
-    imp2:   ["Hadi yaa!", "Kaç dakika oldu ya!"],
-    night:  ["İyi ki açıksınız,", "Gece gece kusura bakma,"],
-    morning:["Günaydın,", "Sabah sabah selam,"],
-    price:  ["Zam mı geldi yine,", "Her şey pahalı ya,"]
+    sym:    ["Selam, {l}.", "{L} ya, bir şey var mı?", "Eczacım, {l} ya.", "{L}, işimi görecek bir şey?",
+             "Selam, {l}. Kurtar beni!", "{L}, hayatım alt üst oldu ya.", "Eczacım {l}, bir mucize lazım."],
+    sym2:   ["{L}, iki tane alayım.", "Selam, {l}. İki kutu lütfen.", "{L}; iki tane, stok yapayım."],
+    open:   ["Selam,", "Eczacım,", "Merhaba,", "Selam selam,", "Of ya,"],
+    rx:     ["Reçetem var, bakar mısın?", "Doktor şunları yazdı.", "Selam, reçete getirdim.", "Doktor yazdı, ben anlamadım.", "Şunu bi okur musun?"],
+    medula: ["E-reçete var, kodu şu.", "Meluda'da reçetem var, kod bu.", "Kod telefonda, bak bakalım."],
+    thanks: ["Süpersin, sağ ol!", "Eyvallah, iyi günler!", "Çok sağ ol!", "Hayat kurtardın!", "Efsanesin eczacım!"],
+    wrong:  ["Ya bu değil ki!", "Bu yanlış olmuş!", "Bu ne alaka şimdi?"],
+    caught: ["Ya bir şey olmaz dedim…", "Tamam ya, gidiyorum.", "Yakalandım, tamam…"],
+    sly:    ["Oh be, geçti!", "Sağ ol, hehe.", "Kimse fark etmedi, eyw."],
+    wrongReject: ["Ne alaka, reçete gerçek!", "Ciddi misin ya?", "Bunu herkese anlatacağım!"],
+    angry:  ["Ya çok bekledim, gidiyorum.", "Of, başka yere bakacağım.", "Kötü yorum yazacağım, bak!"],
+    imp1:   ["Daha var mı ya?", "Acelem var ama…", "Şarjım bitecek ya…", "Servis kaçacak ya…"],
+    imp2:   ["Hadi yaa!", "Kaç dakika oldu ya!", "Yaşlandım burada ya!"],
+    night:  ["İyi ki açıksınız,", "Gece gece kusura bakma,", "Gece gece canım çıktı,"],
+    morning:["Günaydın,", "Sabah sabah selam,", "Daha kahve içmedim,"],
+    price:  ["Zam mı geldi yine,", "Her şey pahalı ya,", "Bütçe öğrenci bütçesi,"]
   },
   kibar: {
-    sym:    ["İyi günler, {l}.", "{L}, ne önerirsiniz?", "Merhaba, {l}. Yardımcı olur musunuz?", "{L}, bir şey rica edebilir miyim?"],
-    sym2:   ["{L}, iki kutu alabilir miyim?", "İyi günler, {l}. İki kutu lütfen."],
-    open:   ["İyi günler,", "Merhaba,", "Kolay gelsin,"],
-    rx:     ["Reçetem var, bakar mısınız?", "İyi günler, reçetem burada.", "Şunları hazırlar mısınız?"],
-    medula: ["E-reçetem var, kodu şu.", "Meluda'dan bakar mısınız?"],
-    thanks: ["Çok teşekkür ederim!", "Sağ olun, iyi günler.", "Teşekkürler, iyi çalışmalar."],
-    wrong:  ["Sanırım yanlış oldu…", "Bunu istememiştim."],
-    caught: ["Bir yanlışlık olmalı…", "Peki… anladım."],
-    sly:    ["Teşekkürler… iyi günler.", "Çok naziksiniz, sağ olun."],
-    wrongReject: ["Reçetem gerçekti ama…", "Bu hiç hoş olmadı."],
-    angry:  ["Maalesef daha bekleyemem.", "Çok bekledim, iyi günler."],
-    imp1:   ["Uzun sürecek mi acaba?", "Biraz acelem var…"],
-    imp2:   ["Lütfen, geç kalıyorum!", "Artık gitmem lazım…"],
-    night:  ["Bu saatte açık olmanız ne iyi,", "Geç saatte rahatsız ettim,"],
-    morning:["Günaydın,", "Günaydın, kolay gelsin,"],
-    price:  ["Fiyatlar yine artmış,", "Her şeye zam gelmiş,"]
+    sym:    ["İyi günler, {l}.", "{L}, ne önerirsiniz?", "Merhaba, {l}. Yardımcı olur musunuz?", "{L}, bir şey rica edebilir miyim?",
+             "Kusura bakmayın, {l}.", "{L}; tavsiyeniz nedir?", "Rahatsız ettim ama {l}."],
+    sym2:   ["{L}, iki kutu alabilir miyim?", "İyi günler, {l}. İki kutu lütfen.", "{L}; iki kutu rica edeyim."],
+    open:   ["İyi günler,", "Merhaba,", "Kolay gelsin,", "Rica etsem,", "Affedersiniz,"],
+    rx:     ["Reçetem var, bakar mısınız?", "İyi günler, reçetem burada.", "Şunları hazırlar mısınız?", "Doktorumun reçetesi bu."],
+    medula: ["E-reçetem var, kodu şu.", "Meluda'dan bakar mısınız?", "E-reçetemin kodu bu efendim."],
+    thanks: ["Çok teşekkür ederim!", "Sağ olun, iyi günler.", "Teşekkürler, iyi çalışmalar.", "Çok naziksiniz, sağ olun!", "Size zahmet oldu, sağ olun."],
+    wrong:  ["Sanırım yanlış oldu…", "Bunu istememiştim.", "Galiba bir şey karıştı."],
+    caught: ["Bir yanlışlık olmalı…", "Peki… anladım.", "Hmm… ben de bilmiyordum."],
+    sly:    ["Teşekkürler… iyi günler.", "Çok naziksiniz, sağ olun.", "Ne kadar anlayışlısınız…"],
+    wrongReject: ["Reçetem gerçekti ama…", "Bu hiç hoş olmadı.", "Doktorum çok şaşıracak…"],
+    angry:  ["Maalesef daha bekleyemem.", "Çok bekledim, iyi günler.", "Bir daha gelmem herhalde."],
+    imp1:   ["Uzun sürecek mi acaba?", "Biraz acelem var…", "Randevum var da…"],
+    imp2:   ["Lütfen, geç kalıyorum!", "Artık gitmem lazım…", "Lütfen biraz hızlanalım!"],
+    night:  ["Bu saatte açık olmanız ne iyi,", "Geç saatte rahatsız ettim,", "Bu saatte çok ayıp ettim,"],
+    morning:["Günaydın,", "Günaydın, kolay gelsin,", "Hayırlı sabahlar,"],
+    price:  ["Fiyatlar yine artmış,", "Her şeye zam gelmiş,", "Fiyatlar uçmuş maşallah,"]
   },
   // Turist: Türkçeyi kursta/rehberden öğrenmiş; kısa, hafif bozuk cümleler, bol "lütfen" ve
   // "arkadaş". İngilizce kelime yok denecek kadar az — turist olduğu söyleyişinden belli olur.
   turist: {
-    sym:    ["Merhaba! {L}… ilaç var mı?", "Pardon, Türkçe az biliyorum. {L}.", "{L}. Yardım lütfen, arkadaş.", "Merhaba arkadaş, {l}. Ne almak?"],
+    sym:    ["Merhaba! {L}… ilaç var mı?", "Pardon, Türkçe az biliyorum. {L}.", "{L}. Yardım lütfen, arkadaş.", "Merhaba arkadaş, {l}. Ne almak?",
+             "Arkadaş, {l}. Doktor yok, sen var!", "{L}… sözlükte böyle yazıyor."],
     sym2:   ["{L}. İki kutu lütfen!", "Pardon… {l}. İki tane, tamam mı?"],
     open:   ["Merhaba arkadaş,", "Pardon, pardon,", "Türkiye çok güzel ama,"],
     rx:     ["Doktor yazdı. Bu… tamam mı?", "Reçete bu. Bakmak lütfen.", "Merhaba! Kâğıt, doktor verdi."],
     medula: ["Otel doktoru kod verdi. Bu.", "Kod var, telefonda. Lütfen."],
-    thanks: ["Teşekkürler! Çok güzel!", "Sağ ol arkadaş, süper!", "Çok teşekkür, iyi günler!"],
+    thanks: ["Teşekkürler! Çok güzel!", "Sağ ol arkadaş, süper!", "Çok teşekkür, iyi günler!", "Türk insanı çok iyi!"],
     wrong:  ["Hmm… bu değil, sanırım?", "Pardon, yanlış ilaç bu?"],
     caught: ["Ah… anlamadım, pardon.", "Tamam, tamam… gidiyorum."],
     sly:    ["Teşekkür, teşekkür! Hehe.", "Çok iyi, sağ ol arkadaş!"],
     wrongReject: ["Ama doktor yazdı, gerçek!", "Neden hayır? Anlamadım…"],
     angry:  ["Çok bekledim… başka eczane.", "Tur otobüsü gitti, off!"],
-    imp1:   ["Uzun mu? Otobüs bekliyor…", "Pardon, çabuk lütfen?"],
+    imp1:   ["Uzun mu? Otobüs bekliyor…", "Pardon, çabuk lütfen?", "Kebap soğuyor, lütfen!"],
     imp2:   ["Otobüs gidiyor, lütfen!", "Çok geç oldu, çok geç!"],
     night:  ["Pardon, gece geldim,", "Gece açıksınız, süper,"],
     morning:["Günaydın arkadaş,", "Sabah, günaydın,"],
@@ -2002,12 +2007,13 @@ const VOICES = {
   },
   // Gurbetçi: izne gelmiş Almancı; "kardeşim", "ja", her şeyi Almanya'yla kıyaslar.
   gurbetci: {
-    sym:    ["Kardeşim, {l}. İyi bir ilaç ver.", "{L} ya, Almanya'da bu ilaç pahalı!", "Ja… {l}. Bir şey ver kardeşim.", "Selam kardeşim, {l}."],
-    sym2:   ["{L}, iki kutu ver, ja?", "Kardeşim {l}, iki tane olsun."],
+    sym:    ["Kardeşim, {l}. İyi bir ilaç ver.", "{L} ya, Almanya'da bu ilaç pahalı!", "Ja… {l}. Bir şey ver kardeşim.", "Selam kardeşim, {l}.",
+             "{L}; Almanya'da doktora sıra yok kardeşim."],
+    sym2:   ["{L}, iki kutu ver, ja?", "Kardeşim {l}, iki tane olsun.", "{L}; iki kutu, biri Almanya'ya."],
     open:   ["Kardeşim,", "Ja, kardeşim,", "Almanya'dan geldim,"],
     rx:     ["Kardeşim, reçete bu.", "Burada doktor yazdı, bak.", "Ja, reçetem var kardeşim."],
     medula: ["E-reçete var, kodu bu kardeşim.", "Kod verdiler, ja. Bu."],
-    thanks: ["Danke kardeşim, sağ ol!", "Eyvallah kardeşim!", "Almanya'da böyle hizmet yok!"],
+    thanks: ["Danke kardeşim, sağ ol!", "Eyvallah kardeşim!", "Almanya'da böyle hizmet yok!", "Euro da alır mısın? Şaka şaka!"],
     wrong:  ["Kardeşim bu yanlış!", "Ne bu? İstemedim ki!"],
     caught: ["Tamam, tamam… anladım.", "Ja… peki kardeşim."],
     sly:    ["Sağ ol kardeşim, hehe.", "Danke, danke…"],
@@ -2021,30 +2027,61 @@ const VOICES = {
   }
 };
 
-// Profile has sözler: kendi girişi (open) ve kendi sabırsızlığı (imp). Varsa ağzın genelinin
-// yerine bazen bunlar söylenir.
+// Profile has sözler. Varsa ağzın genelinin yerine bazen bunlar söylenir:
+//   open (giriş) · sym (şikâyet kalıbı, {l}/{L} = semptom) · imp (sabırsızlık) · thanks · angry
 const AVATAR_EXTRA = {
-  patient_taxi:     { open: ["Taksi kapıda bekliyor,"],       imp: ["Taksimetre işliyor!"] },
-  patient_courier:  { open: ["Motor kapıda,", "Paket bekliyor,"], imp: ["Sipariş soğuyor!"] },
-  patient_nurse:    { open: ["Nöbetten çıktım,"],             imp: ["Uykusuzum, n'olur…"] },
-  patient_fan:      { open: ["Maçtan geliyorum,"],            imp: ["Maç başlayacak ya!"] },
-  patient_baker:    { open: ["Fırından geldim,"],             imp: ["Ekmekler yanacak!"] },
-  patient_runner:   { open: ["Koşudan geliyorum,"],           imp: ["Soğudum, hadi!"] },
-  patient_barber:   { open: ["Dükkânı çırağa bıraktım,"],     imp: ["Müşteri bekliyor!"] },
-  patient_student:  { open: ["Sınav haftası,"],               imp: ["Derse geç kalıyorum!"] },
-  patient_business: { open: ["Toplantıya yetişmem lazım,"],   imp: ["Toplantım başlıyor!"] },
-  patient_worker:   { open: ["Şantiyeden geliyorum,"],        imp: ["Mola bitiyor usta!"] },
-  patient_teacher:  { open: ["Hayırlı günler evladım,"],      imp: ["Sabırlıyımdır ama…"] },
-  patient_grandpa:  { open: ["Torunlar bekliyor evladım,"],   imp: ["Ben de gençken…"] },
-  patient_tourist:  { open: ["Otelden geldim,"],              imp: ["Tur kaçıyor, lütfen!"] },
-  patient_tourist2: { open: ["Gemiden indim,"],               imp: ["Gemi kalkacak, lütfen!"] },
-  patient_gurbetci: { open: ["İzne geldim kardeşim,"],        imp: ["Araba yanlış park etti!"] },
-  patient_bekci:    { open: ["Devriyedeyim,"],                imp: ["Mahalle boş kaldı!"] },
-  patient_fisher:   { open: ["İskeleden geldim evladım,"],    imp: ["Balıklar bayatlayacak!"] },
-  patient_mechanic: { open: ["Sanayiden geldim usta,"],       imp: ["Araba lifte kaldı usta!"] },
-  patient_mom:      { open: ["Bebek uyurken geldim,"],        imp: ["Bebek uyanacak, n'olur!"] },
-  patient_musician: { open: ["Provadan çıktım,"],             imp: ["Sahneye çıkacağım ya!"] },
-  patient_emekli:   { open: ["Maaş yattı evladım,", "Kahveden geldim evladım,"], imp: ["Tavla masası bekliyor!"] }
+  patient_granny:   { open: ["Gelinim gönderdi,", "Pazardan döndüm,"], sym: ["Evladım {l}, gelinim ilaç al dedi."],
+                      imp: ["Fasulye ocakta kaldı!", "Torun okuldan çıkacak!"], thanks: ["Gel sana bir kazak öreyim!"] },
+  patient_man:      { open: ["Mesaiden çıktım,"], sym: ["Hocam {l}; hanım zorla yolladı."],
+                      imp: ["Hanım bekliyor, hadi!"], thanks: ["Hanıma da selam söylerim!"] },
+  patient_youth:    { open: ["Antrenmandan geldim,"], sym: ["{L}, oyun bile oynayamıyorum."],
+                      imp: ["Maç başlıyor kanka!"], thanks: ["Eyvallah, sen bir efsanesin!"] },
+  patient_woman:    { open: ["Bebek tekmeliyor,"], sym: ["{L}; hamileyim, dikkatli olalım."],
+                      imp: ["Bebek de sıkıldı galiba!"], thanks: ["Bebeğim de teşekkür ediyor!"] },
+  patient_taxi:     { open: ["Taksi kapıda bekliyor,", "Müşteri indirdim geldim,"], sym: ["{L}, direksiyon başında zor."],
+                      imp: ["Taksimetre işliyor!", "Arkadan korna çalıyorlar!"], thanks: ["Seni bir gün bedava götürürüm!"] },
+  patient_courier:  { open: ["Motor kapıda,", "Paket bekliyor,"], sym: ["{L}; motoru kenara çektim."],
+                      imp: ["Sipariş soğuyor!", "Teslimat gecikiyor!"], thanks: ["Beş yıldız senin!"] },
+  patient_nurse:    { open: ["Nöbetten çıktım,", "Serviste koşturduk,"], sym: ["{L}; meslektaş sayılırız."],
+                      imp: ["Uykusuzum, n'olur…", "Ayaklarım iflas etti!"], thanks: ["Meslektaşım, çok sağ ol!"] },
+  patient_fan:      { open: ["Maçtan geliyorum,", "Tribünden geldim,"], sym: ["{L}; derbi stresi işte."],
+                      imp: ["Maç başlayacak ya!", "Devre arası bitiyor!"], thanks: ["Gol gibi ilaç verdin!"] },
+  patient_baker:    { open: ["Fırından geldim,", "Simitler tezgâhta,"], sym: ["{L}; fırın da beni bekler mi?"],
+                      imp: ["Ekmekler yanacak!", "Hamur kabarıyor!"], thanks: ["Yarın simit benden!"] },
+  patient_runner:   { open: ["Koşudan geliyorum,", "On kilometre koştum,"], sym: ["{L}, tempomu bozdu."],
+                      imp: ["Soğudum, hadi!", "Nabzım düşüyor!"], thanks: ["Rekor kıracağım şimdi!"] },
+  patient_barber:   { open: ["Dükkânı çırağa bıraktım,", "Makası bıraktım geldim,"], sym: ["{L}, makas elimde titriyor."],
+                      imp: ["Müşteri bekliyor!", "Adam yarım tıraşta!"], thanks: ["Tıraş benden, gel!"] },
+  patient_student:  { open: ["Sınav haftası,", "Kütüphaneden geldim,"], sym: ["{L}, finaller beni bitirdi."],
+                      imp: ["Derse geç kalıyorum!", "Vizeye on dakika var!"], thanks: ["Dönem kurtuldu, sağ ol!"] },
+  patient_business: { open: ["Toplantıya yetişmem lazım,", "Kartvizitimi bırakayım,"], sym: ["{L}, sunumdan önce lazım."],
+                      imp: ["Toplantım başlıyor!", "Uçağa yetişmem lazım!"], thanks: ["Size bir kahve borçluyum!"] },
+  patient_worker:   { open: ["Şantiyeden geliyorum,", "Öğle arasındayım,"], sym: ["Usta {l}, beton bekliyor."],
+                      imp: ["Mola bitiyor usta!", "Usta beni arar şimdi!"], thanks: ["Sağ ol usta, eline sağlık!"] },
+  patient_lady:     { open: ["Kuaförden çıktım,", "Kızımın düğünü var,"], sym: ["{L}; düğün yaklaşıyor da."],
+                      imp: ["Fönüm bozulacak!"], thanks: ["Çok tatlısınız, öperim!"] },
+  patient_teacher:  { open: ["Hayırlı günler evladım,"], sym: ["{L}; teşhisini koy bakalım evladım."],
+                      imp: ["Sabırlıyımdır ama…", "Sırayla lütfen, sırayla!"], thanks: ["Aferin evladım, beş aldın!"] },
+  patient_grandpa:  { open: ["Torunlar bekliyor evladım,", "Kahvehaneden geldim,"], sym: ["{L}; kırk yıl memurluk yaptım evladım."],
+                      imp: ["Ben de gençken…", "Bizim zamanda sıra yoktu!"], thanks: ["Mevlam ömür versin!"] },
+  patient_tourist:  { open: ["Otelden geldim,", "Boğaz turundan geldim,"],
+                      imp: ["Tur kaçıyor, lütfen!"], thanks: ["Türkiye'yi çok sevdim!"] },
+  patient_tourist2: { open: ["Gemiden indim,", "Kapalıçarşı'dan geldim,"],
+                      imp: ["Gemi kalkacak, lütfen!", "Rehber bağırıyor!"], thanks: ["Çok güzel! Fotoğraf çekelim!"] },
+  patient_gurbetci: { open: ["İzne geldim kardeşim,", "Sıla yolundan geldim,"],
+                      imp: ["Araba yanlış park etti!", "Araba dörtlüde bekliyor!"] },
+  patient_bekci:    { open: ["Devriyedeyim,", "Düdüğü astım geldim,"], sym: ["{L}, devriye de zor."],
+                      imp: ["Mahalle boş kaldı!", "Hırsız fırsat bilir!"], thanks: ["Mahalle emin ellerde, sağ ol!"] },
+  patient_fisher:   { open: ["İskeleden geldim evladım,", "Lodos vurdu, geldim,"], sym: ["{L}; denize çıkamadım evladım."],
+                      imp: ["Balıklar bayatlayacak!", "Ağlar kurumadı evladım!"], thanks: ["Yarın sana lüfer getiririm!"] },
+  patient_mechanic: { open: ["Sanayiden geldim usta,", "Yağlı elimle kusura bakma,"], sym: ["Usta {l}, motor gibi tekliyorum."],
+                      imp: ["Araba lifte kaldı usta!", "Müşteri arabayı soruyor!"], thanks: ["Araban bozulursa bana gel!"] },
+  patient_mom:      { open: ["Bebek uyurken geldim,", "Bebek mama saatinde,"], sym: ["{L}; ama sessiz konuşalım."],
+                      imp: ["Bebek uyanacak, n'olur!", "Bebek ağlamasın n'olur!"], thanks: ["Bebeğim de selam söylüyor!"] },
+  patient_musician: { open: ["Provadan çıktım,", "Gitar sırtımda geldim,"], sym: ["{L}, sahneden önce bir çare!"],
+                      imp: ["Sahneye çıkacağım ya!", "Akort bozulacak ya!"], thanks: ["Sana bir şarkı borçluyum!"] },
+  patient_emekli:   { open: ["Maaş yattı evladım,", "Kahveden geldim evladım,"], sym: ["{L}, emekli maaşına uygun olsun."],
+                      imp: ["Tavla masası bekliyor!"], thanks: ["Gel bir çayımı iç evladım!"] }
 };
 
 function voiceOf(p) { return VOICES[AVATAR_VOICE[p.avatarKey]] || VOICES.kibar; }
@@ -2079,7 +2116,7 @@ function assignDialog(p) {
     if (items.length === 1) {
       const lab = items[0].symptom.label, two = items[0].qty > 1;
       if (opener) line = opener + " " + trLower1(lab) + (two ? ". İki kutu lütfen." : ".");
-      else line = fillSym(cpick(two ? v.sym2 : v.sym), lab);
+      else line = fillSym(cpick(two ? v.sym2 : (ex && ex.sym && crng() < 0.45 ? ex.sym : v.sym)), lab);
     } else if (AVATAR_VOICE[p.avatarKey] === "turist") {
       const ls = items.map(it => trLower1(it.symptom.label) + (it.qty > 1 ? " — iki kutu" : ""));
       line = cpick(["Pardon… ", "Merhaba arkadaş… "]) + ls.join(", ") + ". İlaç lütfen!";
@@ -2102,8 +2139,9 @@ function assignDialog(p) {
 //   wrongReject (gerçek reçete reddedildi) · angry (beklemekten küstü)
 function patientReact(p, kind) {
   if (!p || !p.request || isBeggarType(p.request.type)) return;
-  const v = voiceOf(p);
-  if (v[kind]) p.reaction = cpick(v[kind]);
+  const v = voiceOf(p), ex = AVATAR_EXTRA[p.avatarKey];
+  const pool = ex && ex[kind] && crng() < 0.5 ? ex[kind] : v[kind];
+  if (pool) p.reaction = cpick(pool);
 }
 // Sabırsızlık sözü: sabır %35'in altında (hasta zaten titremeye başlıyor), %15'te sertleşir.
 function impatienceLine(p) {
@@ -2127,6 +2165,9 @@ function verifyDialog() {
   for (const [ak, e] of Object.entries(AVATAR_EXTRA)) {
     if (!AVATAR_VOICE[ak]) warn.push(ak + " için ağız tanımlı değil");
     for (const s of e.imp) if (s.length > DIALOG_MAX.imp) warn.push(ak + ".imp uzun: " + s);
+    for (const s of e.open || []) if (s.length > 30) warn.push(ak + ".open uzun: " + s);
+    for (const s of e.sym || []) if (s.length > 60 || s.indexOf("{") < 0) warn.push(ak + ".sym bozuk: " + s);
+    for (const k of ["thanks", "angry", "wrong"]) for (const s of e[k] || []) if (s.length > DIALOG_MAX.react) warn.push(ak + "." + k + " uzun: " + s);
   }
   for (const a of PATIENT_AVATARS) if (!AVATAR_VOICE[a.assetKey]) warn.push(a.assetKey + " için ağız tanımlı değil");
   // kurma denemesi (gün listesi etkilenmez: tohumlu rng kullanılmıyor)
