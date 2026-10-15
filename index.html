@@ -1863,7 +1863,16 @@ const PATIENT_AVATARS = [
   { emoji: "🧑", assetKey: "patient_courier",    optional: true },  // motor kuryesi
   { emoji: "👩‍⚕️", assetKey: "patient_nurse",     optional: true },  // mesai çıkışı hemşire
   { emoji: "👨", assetKey: "patient_barber",     optional: true },  // mahalle berberi
-  { emoji: "🏃‍♀️", assetKey: "patient_runner",    optional: true }   // sabah koşusundan gelen genç kadın
+  { emoji: "🏃‍♀️", assetKey: "patient_runner",    optional: true },  // sabah koşusundan gelen genç kadın
+  // --- 3. PARTİ (Ekim 2026) ---
+  { emoji: "🎒", assetKey: "patient_tourist",    optional: true },  // sırt çantalı genç turist
+  { emoji: "📷", assetKey: "patient_tourist2",   optional: true },  // fotoğraf makineli yaşlı turist
+  { emoji: "🚗", assetKey: "patient_gurbetci",   optional: true },  // izne gelmiş gurbetçi amca
+  { emoji: "👮", assetKey: "patient_bekci",      optional: true },  // mahalle bekçisi
+  { emoji: "🎣", assetKey: "patient_fisher",     optional: true },  // balıkçı amca
+  { emoji: "🔧", assetKey: "patient_mechanic",   optional: true },  // sanayi ustası
+  { emoji: "👩‍🍼", assetKey: "patient_mom",        optional: true },  // kanguruda bebekli genç anne
+  { emoji: "🎸", assetKey: "patient_musician",   optional: true }   // sokak müzisyeni
 ];
 // Seçilebilir avatarlar: zorunlu olanlar + PNG'si yüklenmiş yeni profiller.
 // pick() her durumda TEK rng çekişi yapar → avatar havuzu büyüse de oyun tohumu/dengesi değişmez.
@@ -1887,7 +1896,13 @@ const AVATAR_VOICE = {
   patient_granny: "yasli", patient_grandpa: "yasli", patient_teacher: "yasli", patient_housewife: "yasli",
   patient_man: "esnaf", patient_worker: "esnaf", patient_taxi: "esnaf", patient_baker: "esnaf", patient_barber: "esnaf",
   patient_youth: "genc", patient_student: "genc", patient_fan: "genc", patient_courier: "genc", patient_runner: "genc",
-  patient_woman: "kibar", patient_lady: "kibar", patient_business: "kibar", patient_nurse: "kibar"
+  patient_woman: "kibar", patient_lady: "kibar", patient_business: "kibar", patient_nurse: "kibar",
+  patient_fisher: "yasli",
+  patient_bekci: "esnaf", patient_mechanic: "esnaf",
+  patient_musician: "genc",
+  patient_mom: "kibar",
+  patient_tourist: "turist", patient_tourist2: "turist",
+  patient_gurbetci: "gurbetci"
 };
 
 // {L} = semptom (büyük harfle), {l} = semptom (küçük harfle)
@@ -1963,6 +1978,45 @@ const VOICES = {
     night:  ["Bu saatte açık olmanız ne iyi,", "Geç saatte rahatsız ettim,"],
     morning:["Günaydın,", "Günaydın, kolay gelsin,"],
     price:  ["Fiyatlar yine artmış,", "Her şeye zam gelmiş,"]
+  },
+  // Turist: Türkçeyi kursta/rehberden öğrenmiş; kısa, hafif bozuk cümleler, bol "lütfen" ve
+  // "arkadaş". İngilizce kelime yok denecek kadar az — turist olduğu söyleyişinden belli olur.
+  turist: {
+    sym:    ["Merhaba! {L}… ilaç var mı?", "Pardon, Türkçe az biliyorum. {L}.", "{L}. Yardım lütfen, arkadaş.", "Merhaba arkadaş, {l}. Ne almak?"],
+    sym2:   ["{L}. İki kutu lütfen!", "Pardon… {l}. İki tane, tamam mı?"],
+    open:   ["Merhaba arkadaş,", "Pardon, pardon,", "Türkiye çok güzel ama,"],
+    rx:     ["Doktor yazdı. Bu… tamam mı?", "Reçete bu. Bakmak lütfen.", "Merhaba! Kâğıt, doktor verdi."],
+    medula: ["Otel doktoru kod verdi. Bu.", "Kod var, telefonda. Lütfen."],
+    thanks: ["Teşekkürler! Çok güzel!", "Sağ ol arkadaş, süper!", "Çok teşekkür, iyi günler!"],
+    wrong:  ["Hmm… bu değil, sanırım?", "Pardon, yanlış ilaç bu?"],
+    caught: ["Ah… anlamadım, pardon.", "Tamam, tamam… gidiyorum."],
+    sly:    ["Teşekkür, teşekkür! Hehe.", "Çok iyi, sağ ol arkadaş!"],
+    wrongReject: ["Ama doktor yazdı, gerçek!", "Neden hayır? Anlamadım…"],
+    angry:  ["Çok bekledim… başka eczane.", "Tur otobüsü gitti, off!"],
+    imp1:   ["Uzun mu? Otobüs bekliyor…", "Pardon, çabuk lütfen?"],
+    imp2:   ["Otobüs gidiyor, lütfen!", "Çok geç oldu, çok geç!"],
+    night:  ["Pardon, gece geldim,", "Gece açıksınız, süper,"],
+    morning:["Günaydın arkadaş,", "Sabah, günaydın,"],
+    price:  ["Fiyat çok değişmiş,", "Lira bilmiyorum ama,"]
+  },
+  // Gurbetçi: izne gelmiş Almancı; "kardeşim", "ja", her şeyi Almanya'yla kıyaslar.
+  gurbetci: {
+    sym:    ["Kardeşim, {l}. İyi bir ilaç ver.", "{L} ya, Almanya'da bu ilaç pahalı!", "Ja… {l}. Bir şey ver kardeşim.", "Selam kardeşim, {l}."],
+    sym2:   ["{L}, iki kutu ver, ja?", "Kardeşim {l}, iki tane olsun."],
+    open:   ["Kardeşim,", "Ja, kardeşim,", "Almanya'dan geldim,"],
+    rx:     ["Kardeşim, reçete bu.", "Burada doktor yazdı, bak.", "Ja, reçetem var kardeşim."],
+    medula: ["E-reçete var, kodu bu kardeşim.", "Kod verdiler, ja. Bu."],
+    thanks: ["Danke kardeşim, sağ ol!", "Eyvallah kardeşim!", "Almanya'da böyle hizmet yok!"],
+    wrong:  ["Kardeşim bu yanlış!", "Ne bu? İstemedim ki!"],
+    caught: ["Tamam, tamam… anladım.", "Ja… peki kardeşim."],
+    sly:    ["Sağ ol kardeşim, hehe.", "Danke, danke…"],
+    wrongReject: ["Reçete gerçek kardeşim!", "Almanya'da böyle olmaz!"],
+    angry:  ["Almanya'da böyle bekletmezler!", "Yeter, gidiyorum kardeşim."],
+    imp1:   ["Kardeşim biraz hızlı?", "Almanya'da sıra hızlı…"],
+    imp2:   ["Hadi kardeşim, hadi!", "Uçağım kaçacak!"],
+    night:  ["Gece kusura bakma kardeşim,", "Nöbetçi var, çok iyi,"],
+    morning:["Sabah sabah selam kardeşim,", "Günaydın kardeşim,"],
+    price:  ["Euro ile ucuz kardeşim,", "Her şey değişmiş burada,"]
   }
 };
 
@@ -1980,7 +2034,15 @@ const AVATAR_EXTRA = {
   patient_business: { open: ["Toplantıya yetişmem lazım,"],   imp: ["Toplantım başlıyor!"] },
   patient_worker:   { open: ["Şantiyeden geliyorum,"],        imp: ["Mola bitiyor usta!"] },
   patient_teacher:  { open: ["Hayırlı günler evladım,"],      imp: ["Sabırlıyımdır ama…"] },
-  patient_grandpa:  { open: ["Torunlar bekliyor evladım,"],   imp: ["Ben de gençken…"] }
+  patient_grandpa:  { open: ["Torunlar bekliyor evladım,"],   imp: ["Ben de gençken…"] },
+  patient_tourist:  { open: ["Otelden geldim,"],              imp: ["Tur kaçıyor, lütfen!"] },
+  patient_tourist2: { open: ["Gemiden indim,"],               imp: ["Gemi kalkacak, lütfen!"] },
+  patient_gurbetci: { open: ["İzne geldim kardeşim,"],        imp: ["Araba yanlış park etti!"] },
+  patient_bekci:    { open: ["Devriyedeyim,"],                imp: ["Mahalle boş kaldı!"] },
+  patient_fisher:   { open: ["İskeleden geldim evladım,"],    imp: ["Balıklar bayatlayacak!"] },
+  patient_mechanic: { open: ["Sanayiden geldim usta,"],       imp: ["Araba lifte kaldı usta!"] },
+  patient_mom:      { open: ["Bebek uyurken geldim,"],        imp: ["Bebek uyanacak, n'olur!"] },
+  patient_musician: { open: ["Provadan çıktım,"],             imp: ["Sahneye çıkacağım ya!"] }
 };
 
 function voiceOf(p) { return VOICES[AVATAR_VOICE[p.avatarKey]] || VOICES.kibar; }
@@ -2016,6 +2078,10 @@ function assignDialog(p) {
       const lab = items[0].symptom.label, two = items[0].qty > 1;
       if (opener) line = opener + " " + trLower1(lab) + (two ? ". İki kutu lütfen." : ".");
       else line = fillSym(cpick(two ? v.sym2 : v.sym), lab);
+    } else if (AVATAR_VOICE[p.avatarKey] === "turist") {
+      const ls = items.map(it => trLower1(it.symptom.label) + (it.qty > 1 ? " — iki kutu" : ""));
+      line = cpick(["Pardon… ", "Merhaba arkadaş… "]) + ls.join(", ") + ". İlaç lütfen!";
+      if (line.length > DIALOG_MAX.sym) line = "Pardon… " + ls.join(", ") + ".";
     } else {
       const core = p.request.line || "";
       const op = opener || (crng() < 0.5 ? cpick(v.open) : null);
@@ -2458,7 +2524,11 @@ function computeLayout() {
   const zoneTop = counterLine + bandH * 0.73;
   const tabH = sh * 0.056;
   layout.tabsArea = { x: left, y: zoneTop, w: colW, h: tabH };
-  const gridTop = zoneTop + tabH + sh * 0.006;
+  // Sekmelerin altında yatay kaydırma çubuğu: sekmeler ekrana sığmayınca devamı olduğunu
+  // gösterir (oyuncular sağda başka kategori olduğunu fark etmiyordu). Sürüklenebilir.
+  const barH = Math.max(5, sh * 0.008);
+  layout.tabsBar = { x: left, y: zoneTop + tabH + sh * 0.006, w: colW, h: barH };
+  const gridTop = zoneTop + tabH + sh * 0.006 + barH + sh * 0.006;
   const gridBottom = btnY - sh * 0.008;
   layout.gridArea = { x: left, y: gridTop, w: colW, h: gridBottom - gridTop };
 
@@ -6569,6 +6639,7 @@ function drawTabs() {
     cabinetButton({ x: sx, y: ta.y, w: bw, h: ta.h }, t.group.label, active ? "brass" : "wood", { size: active ? 0.40 : 0.37 });
   }
   ctx.restore();
+  drawTabsBar();
   // kaydırılabilir olduğunu belli eden kenar gölgeleri
   if ((layout.tabsTotal || 0) > ta.w) {
     const fadeW = ta.w * 0.06;
@@ -6583,6 +6654,28 @@ function drawTabs() {
       ctx.fillStyle = gr; ctx.fillRect(ta.x + ta.w - fadeW, ta.y, fadeW, ta.h);
     }
   }
+}
+
+// Sekme kaydırma çubuğu: koyu oluk + pirinç tutamak. Tutamak boyu görünen oran, yeri kaydırma
+// oranı. Sekmeler sığıyorsa çizilmez.
+function tabsBarThumb() {
+  const ta = layout.tabsArea, b = layout.tabsBar, total = layout.tabsTotal || 0;
+  if (!ta || !b || total <= ta.w + 1) return null;
+  const tw = Math.max(b.h * 4, b.w * (ta.w / total));
+  const maxS = total - ta.w;
+  const t = maxS > 0 ? clamp((layout.tabScroll || 0) / maxS, 0, 1) : 0;
+  return { x: b.x + (b.w - tw) * t, y: b.y, w: tw, h: b.h, maxS };
+}
+function drawTabsBar() {
+  const b = layout.tabsBar, th = tabsBarThumb();
+  if (!b || !th) return;
+  const r = b.h / 2;
+  fillRoundRect(b.x, b.y, b.w, b.h, r, "rgba(20,12,6,0.55)");
+  strokeRoundRect(b.x, b.y, b.w, b.h, r, "rgba(201,162,90,0.35)", 1);
+  const g = ctx.createLinearGradient(0, th.y, 0, th.y + th.h);
+  g.addColorStop(0, "#f0d08a"); g.addColorStop(1, "#b8893e");
+  fillRoundRect(th.x, th.y, th.w, th.h, r, g);
+  strokeRoundRect(th.x, th.y, th.w, th.h, r, "rgba(90,60,20,0.8)", 1);
 }
 
 // Büyük ilaç kartları (Büfeci kalıbı): krem opak kart + üstte büyük görsel (contain,
@@ -11256,13 +11349,23 @@ function onDown(x, y) {
   pointer.dragging = false;
   const interactive = game.bookState === "closed" && !game.depotOpen && game.state === STATE.PLAYING;
   pointer.inTabs = interactive && layout.tabsArea && pointInRect(x, y, layout.tabsArea);
+  // kaydırma çubuğu (biraz geniş dokunma alanı): tutamak parmakla aynı yöne gider
+  const tb = layout.tabsBar;
+  pointer.inTabBar = interactive && !pointer.inTabs && !!tb && !!tabsBarThumb() &&
+    x >= tb.x && x <= tb.x + tb.w && y >= tb.y - 10 && y <= tb.y + tb.h + 10;
   pointer.inGrid = interactive && !pointer.inTabs && layout.gridArea && pointInRect(x, y, layout.gridArea);
   pointer.scrollStart = layout.tabScroll || 0;
   pointer.scrollStartY = layout.shelfScroll || 0;
 }
 function onMove(x, y) {
   if (!pointer.down) return;
-  if (pointer.inTabs) {
+  if (pointer.inTabBar) {
+    const dx = x - pointer.startX;
+    if (Math.abs(dx) > 3) pointer.dragging = true;
+    const th = tabsBarThumb(), b = layout.tabsBar;
+    if (pointer.dragging && th && b.w > th.w)
+      layout.tabScroll = clamp(pointer.scrollStart + dx * th.maxS / (b.w - th.w), 0, th.maxS);
+  } else if (pointer.inTabs) {
     const dx = x - pointer.startX;
     if (Math.abs(dx) > 6) pointer.dragging = true;
     if (pointer.dragging) {
@@ -11281,6 +11384,11 @@ function onMove(x, y) {
 function onUp(x, y) {
   if (!pointer.down) return;
   pointer.down = false;
+  if (!pointer.dragging && pointer.inTabBar) {
+    const th = tabsBarThumb(), b = layout.tabsBar;
+    if (th && b.w > th.w) layout.tabScroll = clamp((x - b.x - th.w / 2) / (b.w - th.w), 0, 1) * th.maxS;
+    return;
+  }
   if (!pointer.dragging) { handleTap(x, y); noteState(); }  // kaydırma değilse tap
 }
 
