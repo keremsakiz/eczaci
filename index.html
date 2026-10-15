@@ -1872,7 +1872,8 @@ const PATIENT_AVATARS = [
   { emoji: "🎣", assetKey: "patient_fisher",     optional: true },  // balıkçı amca
   { emoji: "🔧", assetKey: "patient_mechanic",   optional: true },  // sanayi ustası
   { emoji: "👩‍🍼", assetKey: "patient_mom",        optional: true },  // kanguruda bebekli genç anne
-  { emoji: "🎸", assetKey: "patient_musician",   optional: true }   // sokak müzisyeni
+  { emoji: "🎸", assetKey: "patient_musician",   optional: true },  // sokak müzisyeni
+  { emoji: "👴", assetKey: "patient_emekli",     optional: true }   // kasketli emekli amca (para kesesi)
 ];
 // Seçilebilir avatarlar: zorunlu olanlar + PNG'si yüklenmiş yeni profiller.
 // pick() her durumda TEK rng çekişi yapar → avatar havuzu büyüse de oyun tohumu/dengesi değişmez.
@@ -1897,7 +1898,7 @@ const AVATAR_VOICE = {
   patient_man: "esnaf", patient_worker: "esnaf", patient_taxi: "esnaf", patient_baker: "esnaf", patient_barber: "esnaf",
   patient_youth: "genc", patient_student: "genc", patient_fan: "genc", patient_courier: "genc", patient_runner: "genc",
   patient_woman: "kibar", patient_lady: "kibar", patient_business: "kibar", patient_nurse: "kibar",
-  patient_fisher: "yasli",
+  patient_fisher: "yasli", patient_emekli: "yasli",
   patient_bekci: "esnaf", patient_mechanic: "esnaf",
   patient_musician: "genc",
   patient_mom: "kibar",
@@ -2042,7 +2043,8 @@ const AVATAR_EXTRA = {
   patient_fisher:   { open: ["İskeleden geldim evladım,"],    imp: ["Balıklar bayatlayacak!"] },
   patient_mechanic: { open: ["Sanayiden geldim usta,"],       imp: ["Araba lifte kaldı usta!"] },
   patient_mom:      { open: ["Bebek uyurken geldim,"],        imp: ["Bebek uyanacak, n'olur!"] },
-  patient_musician: { open: ["Provadan çıktım,"],             imp: ["Sahneye çıkacağım ya!"] }
+  patient_musician: { open: ["Provadan çıktım,"],             imp: ["Sahneye çıkacağım ya!"] },
+  patient_emekli:   { open: ["Maaş yattı evladım,", "Kahveden geldim evladım,"], imp: ["Tavla masası bekliyor!"] }
 };
 
 function voiceOf(p) { return VOICES[AVATAR_VOICE[p.avatarKey]] || VOICES.kibar; }
