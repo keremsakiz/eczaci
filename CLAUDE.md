@@ -11,4 +11,4 @@ Kerem (2026-11-23): "Kesinlikle ceza yemek istemeyiz." Her mağaza sürümünden
 5. **Sunucu/bulut kaydı eklenirse (Supabase vb.):** RLS açık, gizli anahtar istemcide yok, `get_advisors` temiz; gizlilik metnine ne saklandığı yazılır.
 6. **Pazarlama yok:** e-posta/bildirim izinsiz gönderilmez. Bildirim eklenirse izin istenir.
 7. **Satış:** Ücretli/IAP satışı Apple yapar (ön bilgilendirme Apple'da). Mağaza açıklaması ve fiyat doğru olmalı; oyun içi satın alma eklenirse fiyat ve içerik satın almadan önce açıkça gösterilir.
-- **Eczacı durumu (2026-11-23):** ✅ dışarıya istek yok, fontlar gömülü, kayıt yalnız cihazda, Game Center yalnız Apple'da. Gizlilik sayfası `privacy.html` repoda var; ⚠️ herkese açık bir URL'de yayında olduğunu ve App Store Connect'e girildiğini yayından önce doğrula.
+- **Eczacı durumu (2026-11-23):** ✅ tümü. Ücretli (₺9,99), App Store'da yayında (id6816291964). Dışarıya istek yok, fontlar gömülü, kayıt yalnız cihazda, Game Center yalnız Apple'da. Gizlilik politikası yayında ve App Store sayfasına bağlı: https://keremsakiz.github.io/eczaci/privacy.html
